@@ -1,0 +1,311 @@
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
+from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount
+from app.models.organization import TeamMember
+from app.models.project import Project
+from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
+
+MANAGE_ROLES = {ProjectRole.project_owner.value, ProjectRole.project_manager.value}
+SYSTEM_USER_EMAILS = {"project-bot@local", "project-bot@agenticpm.local"}
+
+
+class AuthService:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def register(self, email: str, password: str, display_name: str) -> UserAccount:
+        normalized = email.strip().lower()
+        if not normalized:
+            raise ValidationError("Email is required.")
+        if len(password) < 8:
+            raise ValidationError("Password must be at least 8 characters.")
+
+        user = UserAccount(
+            email=normalized,
+            password_hash=hash_password(password),
+            display_name=display_name.strip(),
+            platform_role=PlatformRole.user.value,
+            is_active=True,
+        )
+        self.db.add(user)
+        try:
+            self.db.flush()
+            self._sync_project_access_for_user(user)
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ConflictError("User with this email already exists.") from exc
+        self.db.refresh(user)
+        return user
+
+    def admin_create_user(
+        self,
+        actor_user_id: uuid.UUID,
+        *,
+        email: str,
+        display_name: str,
+        password: str | None = None,
+        platform_role: str = PlatformRole.user.value,
+        is_active: bool = True,
+    ) -> tuple[UserAccount, str]:
+        self._assert_super_admin(actor_user_id)
+        normalized_email = email.strip().lower()
+        if not normalized_email:
+            raise ValidationError("Email is required.")
+        cleaned_name = display_name.strip()
+        if not cleaned_name:
+            raise ValidationError("Display name is required.")
+        normalized_role = platform_role.strip().lower()
+        allowed_roles = {item.value for item in PlatformRole}
+        if normalized_role not in allowed_roles:
+            raise ValidationError(f"Invalid platform role. Allowed: {', '.join(sorted(allowed_roles))}.")
+
+        generated_password = password.strip() if password else ""
+        if not generated_password:
+            generated_password = uuid.uuid4().hex[:12]
+        if len(generated_password) < 8:
+            raise ValidationError("Password must be at least 8 characters.")
+
+        user = UserAccount(
+            email=normalized_email,
+            password_hash=hash_password(generated_password),
+            display_name=cleaned_name,
+            platform_role=normalized_role,
+            is_active=is_active,
+        )
+        self.db.add(user)
+        try:
+            self.db.flush()
+            self._sync_project_access_for_user(user)
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ConflictError("User with this email already exists.") from exc
+        self.db.refresh(user)
+        return user, generated_password
+
+    def login(self, email: str, password: str) -> tuple[UserAccount, str, str]:
+        normalized = email.strip().lower()
+        user = self.db.scalar(select(UserAccount).where(UserAccount.email == normalized))
+        if not user or not user.is_active:
+            raise ValidationError("Invalid credentials.")
+        if not verify_password(password, user.password_hash):
+            raise ValidationError("Invalid credentials.")
+
+        user.last_login_at = datetime.now(timezone.utc)
+        self._sync_project_access_for_user(user)
+        access_token = create_access_token(user.id)
+        refresh_token = create_refresh_token(user.id)
+        self.db.commit()
+        self.db.refresh(user)
+        return user, access_token, refresh_token
+
+    def get_user_by_id(self, user_id: uuid.UUID) -> UserAccount:
+        user = self.db.get(UserAccount, user_id)
+        if not user:
+            raise NotFoundError("User not found.")
+        return user
+
+    def sync_user_project_access(self, user_id: uuid.UUID) -> UserAccount:
+        user = self.get_user_by_id(user_id)
+        self._sync_project_access_for_user(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def list_memberships_for_user(self, user_id: uuid.UUID) -> list[ProjectMembership]:
+        rows = self.db.scalars(
+            select(ProjectMembership).where(ProjectMembership.user_id == user_id).order_by(ProjectMembership.created_at.asc())
+        ).all()
+        return list(rows)
+
+    def list_project_memberships(self, project_id: uuid.UUID) -> list[ProjectMembership]:
+        self._get_project(project_id)
+        rows = self.db.scalars(
+            select(ProjectMembership)
+            .where(ProjectMembership.project_id == project_id)
+            .order_by(ProjectMembership.created_at.asc())
+        ).all()
+        return list(rows)
+
+    def list_project_memberships_for_actor(self, project_id: uuid.UUID, actor_user_id: uuid.UUID) -> list[ProjectMembership]:
+        self._get_project(project_id)
+        actor = self.db.get(UserAccount, actor_user_id)
+        if not actor:
+            raise NotFoundError("Actor user not found.")
+        if actor.platform_role != PlatformRole.super_admin.value:
+            self._get_project_role(project_id, actor_user_id)
+        return self.list_project_memberships(project_id)
+
+    def list_project_memberships_with_users_for_actor(
+        self, project_id: uuid.UUID, actor_user_id: uuid.UUID
+    ) -> list[tuple[ProjectMembership, UserAccount]]:
+        memberships = self.list_project_memberships_for_actor(project_id, actor_user_id)
+        if not memberships:
+            return []
+        user_ids = [item.user_id for item in memberships]
+        users = self.db.scalars(select(UserAccount).where(UserAccount.id.in_(user_ids))).all()
+        by_id = {item.id: item for item in users}
+        items: list[tuple[ProjectMembership, UserAccount]] = []
+        for membership in memberships:
+            user = by_id.get(membership.user_id)
+            if user:
+                items.append((membership, user))
+        return items
+
+    def upsert_membership(
+        self, project_id: uuid.UUID, actor_user_id: uuid.UUID, user_id: uuid.UUID, role: str
+    ) -> ProjectMembership:
+        self._get_project(project_id)
+        self._assert_manage_memberships(project_id, actor_user_id)
+        normalized_role = self._normalize_project_role(role)
+        self.get_user_by_id(user_id)
+
+        membership = self.db.scalar(
+            select(ProjectMembership).where(ProjectMembership.project_id == project_id, ProjectMembership.user_id == user_id)
+        )
+        if membership:
+            membership.role = normalized_role
+            self.db.commit()
+            self.db.refresh(membership)
+            return membership
+
+        membership = ProjectMembership(project_id=project_id, user_id=user_id, role=normalized_role)
+        self.db.add(membership)
+        self.db.commit()
+        self.db.refresh(membership)
+        return membership
+
+    def list_users(
+        self, actor_user_id: uuid.UUID, page: int, page_size: int, search: str | None = None
+    ) -> tuple[list[UserAccount], int]:
+        self._assert_super_admin(actor_user_id)
+        stmt = select(UserAccount).where(UserAccount.email.notin_(SYSTEM_USER_EMAILS))
+        if search:
+            like = f"%{search.strip()}%"
+            stmt = stmt.where(
+                func.lower(UserAccount.email).like(func.lower(like))
+                | func.lower(UserAccount.display_name).like(func.lower(like))
+            )
+        stmt = stmt.order_by(UserAccount.created_at.desc())
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        rows = self.db.scalars(stmt.offset((page - 1) * page_size).limit(page_size)).all()
+        return list(rows), total
+
+    def discover_users(
+        self, actor_user_id: uuid.UUID, page: int, page_size: int, search: str | None = None
+    ) -> tuple[list[UserAccount], int]:
+        actor = self.db.get(UserAccount, actor_user_id)
+        if not actor or not actor.is_active:
+            raise NotFoundError("Actor user not found.")
+
+        stmt = select(UserAccount).where(UserAccount.is_active.is_(True), UserAccount.email.notin_(SYSTEM_USER_EMAILS))
+        if search:
+            like = f"%{search.strip()}%"
+            stmt = stmt.where(
+                func.lower(UserAccount.email).like(func.lower(like))
+                | func.lower(UserAccount.display_name).like(func.lower(like))
+            )
+        stmt = stmt.order_by(UserAccount.display_name.asc(), UserAccount.email.asc())
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        rows = self.db.scalars(stmt.offset((page - 1) * page_size).limit(page_size)).all()
+        return list(rows), total
+
+    def update_user(
+        self,
+        actor_user_id: uuid.UUID,
+        target_user_id: uuid.UUID,
+        *,
+        display_name: str | None = None,
+        platform_role: str | None = None,
+        is_active: bool | None = None,
+    ) -> UserAccount:
+        self._assert_super_admin(actor_user_id)
+        user = self.db.get(UserAccount, target_user_id)
+        if not user:
+            raise NotFoundError("User not found.")
+
+        if display_name is not None:
+            cleaned = display_name.strip()
+            if not cleaned:
+                raise ValidationError("display_name cannot be empty.")
+            user.display_name = cleaned
+        if platform_role is not None:
+            normalized = platform_role.strip().lower()
+            allowed = {item.value for item in PlatformRole}
+            if normalized not in allowed:
+                raise ValidationError(f"Invalid platform role. Allowed: {', '.join(sorted(allowed))}.")
+            user.platform_role = normalized
+        if is_active is not None:
+            user.is_active = is_active
+
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def _assert_manage_memberships(self, project_id: uuid.UUID, actor_user_id: uuid.UUID) -> None:
+        actor = self.db.get(UserAccount, actor_user_id)
+        if actor and actor.platform_role == PlatformRole.super_admin.value:
+            return
+        role = self._get_project_role(project_id, actor_user_id)
+        if role not in MANAGE_ROLES:
+            raise ValidationError("Insufficient role to manage project memberships.")
+
+    def _get_project_role(self, project_id: uuid.UUID, user_id: uuid.UUID) -> str:
+        membership = self.db.scalar(
+            select(ProjectMembership.role).where(
+                ProjectMembership.project_id == project_id,
+                ProjectMembership.user_id == user_id,
+            )
+        )
+        if not membership:
+            raise NotFoundError("User is not a member of this project.")
+        return membership
+
+    def _normalize_project_role(self, role: str) -> str:
+        normalized = role.strip().lower()
+        allowed = {item.value for item in ProjectRole}
+        if normalized not in allowed:
+            raise ValidationError(f"Invalid project role. Allowed: {', '.join(sorted(allowed))}.")
+        return normalized
+
+    def _assert_super_admin(self, actor_user_id: uuid.UUID) -> None:
+        actor = self.db.get(UserAccount, actor_user_id)
+        if not actor:
+            raise NotFoundError("Actor user not found.")
+        if actor.platform_role != PlatformRole.super_admin.value:
+            raise ValidationError("Super admin role is required.")
+
+    def _get_project(self, project_id: uuid.UUID) -> Project:
+        project = self.db.get(Project, project_id)
+        if not project:
+            raise NotFoundError("Project not found.")
+        return project
+
+    def _sync_project_access_for_user(self, user: UserAccount) -> None:
+        members = self.db.scalars(
+            select(TeamMember).where(func.lower(TeamMember.email) == func.lower(user.email), TeamMember.is_active.is_(True))
+        ).all()
+        for member in members:
+            if member.user_account_id != user.id:
+                member.user_account_id = user.id
+            membership = self.db.scalar(
+                select(ProjectMembership).where(
+                    ProjectMembership.project_id == member.project_id,
+                    ProjectMembership.user_id == user.id,
+                )
+            )
+            if not membership:
+                self.db.add(
+                    ProjectMembership(
+                        project_id=member.project_id,
+                        user_id=user.id,
+                        role=ProjectRole.partner_member.value,
+                    )
+                )

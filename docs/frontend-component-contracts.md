@@ -4,7 +4,7 @@
 Core components:
 - `ProjectBasicsForm`
 - `PartnersTableEditor`
-- `TeamsMembersEditor`
+- `PartnerMembersEditor`
 - `StructureBuilder`
 - `WizardFooterActions`
 

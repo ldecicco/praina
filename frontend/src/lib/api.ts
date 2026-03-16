@@ -1,0 +1,1630 @@
+import type {
+  AssignmentMatrixRow,
+  AuditEvent,
+  AuthTokens,
+  CalendarImportBatch,
+  CalendarIntegration,
+  AuthUser,
+  ChatConversation,
+  ChatMessage,
+  ChatMessageExchange,
+  CoherenceReport,
+  DocumentListItem,
+  DocumentVersion,
+  DocumentVersionList,
+  MeResponse,
+  MeetingActionItem,
+  MeetingRecord,
+  Member,
+  MembershipWithUser,
+  MyWorkResponse,
+  Paginated,
+  Partner,
+  ProjectChatMessage,
+  ProjectChatRoom,
+  ProjectActivationResult,
+  ProjectProposalSection,
+  ProjectRisk,
+  ProjectValidationResult,
+  ProjectMembership,
+  Project,
+  ProjectInboxItem,
+  ProposalImage,
+  ProposalCallAnswer,
+  ProposalCallBrief,
+  ProposalCallDocumentReindexResult,
+  ProposalCallIngestJob,
+  ProposalCallLibraryDocument,
+  ProposalCallLibraryEntry,
+  ProposalSubmissionItem,
+  ProposalSubmissionRequirement,
+  ProposalReviewFinding,
+  ProjectTodo,
+  ProposalTemplate,
+  ReindexResult,
+  ReviewFinding,
+  TrashedWorkEntity,
+  WorkEntity,
+  AppNotification,
+  DashboardHealth,
+  DashboardHealthIssue,
+  DashboardRecurringIssue,
+  DashboardHealthSnapshot,
+  DashboardScopeOptions,
+  SearchResponse,
+  ResearchCollection,
+  ResearchCollectionDetail,
+  ResearchCollectionMember,
+  ResearchReference,
+  ResearchNote,
+} from "../types";
+
+const API_BASE = import.meta.env.VITE_API_BASE;
+if (!API_BASE) {
+  throw new Error("VITE_API_BASE must be set in frontend .env.");
+}
+
+let authToken: string | null = null;
+export const PROJECT_DATA_CHANGED_EVENT = "project-data-changed";
+
+function emitProjectChanged(projectId: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(PROJECT_DATA_CHANGED_EVENT, { detail: { projectId } }));
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasFormDataBody = init?.body instanceof FormData;
+  const headers = new Headers(init?.headers ?? undefined);
+  if (authToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+  if (!hasFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers,
+    ...init,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    try {
+      const parsed = JSON.parse(errorBody) as { detail?: unknown };
+      throw new Error(formatApiErrorDetail(parsed.detail) || errorBody || `API request failed: ${response.status}`);
+    } catch {
+      throw new Error(errorBody || `API request failed: ${response.status}`);
+    }
+  }
+
+  const method = (init?.method || "GET").toUpperCase();
+  const match = path.match(/^\/projects\/([^/?]+)/);
+  if (method !== "GET" && match?.[1]) {
+    emitProjectChanged(match[1]);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return response.json() as Promise<T>;
+}
+
+function formatApiErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => (item && typeof item === "object" && "msg" in item ? String((item as { msg?: unknown }).msg || "") : ""))
+      .filter((item) => item.length > 0);
+    if (messages.length > 0) return messages.join(" | ");
+  }
+  return "";
+}
+
+export const api = {
+  setAuthToken(token: string | null) {
+    authToken = token;
+  },
+
+  getAuthToken() {
+    return authToken;
+  },
+
+  register(payload: { email: string; password: string; display_name: string }): Promise<AuthUser> {
+    return request("/auth/register", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  login(payload: { email: string; password: string }): Promise<AuthTokens> {
+    return request("/auth/login", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  refresh(payload: { refresh_token: string }): Promise<AuthTokens> {
+    return request("/auth/refresh", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  me(): Promise<MeResponse> {
+    return request("/auth/me");
+  },
+
+  updateMyProfile(payload: {
+    display_name?: string;
+    job_title?: string | null;
+    organization?: string | null;
+    phone?: string | null;
+  }): Promise<AuthUser> {
+    return request("/auth/me", { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  uploadMyAvatar(file: File): Promise<{ avatar_url: string }> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request("/auth/me/avatar", { method: "POST", body: formData });
+  },
+
+  listUserDiscovery(page = 1, pageSize = 100, search = ""): Promise<Paginated<AuthUser>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (search.trim()) query.set("search", search.trim());
+    return request(`/auth/users/discovery?${query.toString()}`);
+  },
+
+  listUsers(page = 1, pageSize = 100, search = ""): Promise<Paginated<AuthUser>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (search.trim()) query.set("search", search.trim());
+    return request(`/auth/users?${query.toString()}`);
+  },
+
+  updateUser(
+    userId: string,
+    payload: { display_name?: string; platform_role?: string; is_active?: boolean }
+  ): Promise<AuthUser> {
+    return request(`/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  createUser(
+    payload: {
+      email: string;
+      display_name: string;
+      password?: string;
+      platform_role?: string;
+      is_active?: boolean;
+    }
+  ): Promise<AuthUser> {
+    return request("/auth/users", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  listProjectMembershipsWithUsers(projectId: string): Promise<Paginated<MembershipWithUser>> {
+    return request(`/auth/projects/${projectId}/memberships?page=1&page_size=200`);
+  },
+
+  listProjects(page = 1, pageSize = 100): Promise<Paginated<Project>> {
+    return request(`/projects?page=${page}&page_size=${pageSize}`);
+  },
+
+  createProject(payload: {
+    code: string;
+    title: string;
+    description?: string;
+    start_date?: string;
+    duration_months?: number;
+    reporting_dates?: string[];
+    language?: string;
+    project_mode?: string;
+    coordinator_partner_id?: string | null;
+    principal_investigator_id?: string | null;
+    proposal_template_id?: string | null;
+  }): Promise<Project> {
+    return request("/projects", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  markAsFunded(projectId: string, payload: {
+    start_date: string;
+    duration_months: number;
+    reporting_dates?: string[];
+  }): Promise<ProjectActivationResult> {
+    return request(`/projects/${projectId}/mark-as-funded`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateProject(
+    projectId: string,
+    payload: {
+      code?: string;
+      title?: string;
+      description?: string | null;
+      start_date?: string;
+      duration_months?: number;
+      reporting_dates?: string[];
+      language?: string;
+      coordinator_partner_id?: string | null;
+      principal_investigator_id?: string | null;
+      proposal_template_id?: string | null;
+    }
+  ): Promise<Project> {
+    return request(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  archiveProject(projectId: string): Promise<Project> {
+    return request(`/projects/${projectId}/archive`, { method: "POST" });
+  },
+
+  deleteProject(projectId: string): Promise<void> {
+    return request(`/projects/${projectId}`, { method: "DELETE" });
+  },
+
+  createPartner(projectId: string, payload: { short_name: string; legal_name: string; partner_type?: string; country?: string; expertise?: string }): Promise<Partner> {
+    return request(`/projects/${projectId}/partners`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updatePartner(projectId: string, partnerId: string, payload: { short_name: string; legal_name: string; partner_type?: string; country?: string; expertise?: string }): Promise<Partner> {
+    return request(`/projects/${projectId}/partners/${partnerId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deletePartner(projectId: string, partnerId: string): Promise<void> {
+    return request(`/projects/${projectId}/partners/${partnerId}`, { method: "DELETE" });
+  },
+
+  listPartners(projectId: string): Promise<Paginated<Partner>> {
+    return request(`/projects/${projectId}/partners?page=1&page_size=100`);
+  },
+
+  createMember(
+    projectId: string,
+    payload: {
+      partner_id: string;
+      role: string;
+      user_id?: string;
+      full_name?: string;
+      email?: string;
+      create_user_if_missing?: boolean;
+      temporary_password?: string;
+    }
+  ): Promise<Member> {
+    return request(`/projects/${projectId}/members`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateMember(
+    projectId: string,
+    memberId: string,
+    payload: {
+      partner_id: string;
+      role: string;
+      user_id?: string;
+      full_name?: string;
+      email?: string;
+      create_user_if_missing?: boolean;
+      temporary_password?: string;
+      is_active?: boolean;
+    }
+  ): Promise<Member> {
+    return request(`/projects/${projectId}/members/${memberId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteMember(projectId: string, memberId: string): Promise<void> {
+    return request(`/projects/${projectId}/members/${memberId}`, { method: "DELETE" });
+  },
+
+  listMembers(projectId: string): Promise<Paginated<Member>> {
+    return request(`/projects/${projectId}/members?page=1&page_size=100`);
+  },
+
+  createWorkPackage(
+    projectId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      start_month: number;
+      end_month: number;
+      execution_status?: string;
+      completed_by_member_id?: string | null;
+      completion_note?: string;
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/work-packages`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateWorkPackage(
+    projectId: string,
+    entityId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      start_month: number;
+      end_month: number;
+      execution_status?: string;
+      completed_by_member_id?: string | null;
+      completion_note?: string;
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/work-packages/${entityId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  createTask(
+    projectId: string,
+    payload: {
+      wp_id: string;
+      code: string;
+      title: string;
+      description?: string;
+      start_month: number;
+      end_month: number;
+      execution_status?: string;
+      completed_by_member_id?: string | null;
+      completion_note?: string;
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/tasks`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTask(
+    projectId: string,
+    entityId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      start_month: number;
+      end_month: number;
+      execution_status?: string;
+      completed_by_member_id?: string | null;
+      completion_note?: string;
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/tasks/${entityId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  createMilestone(
+    projectId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      due_month: number;
+      wp_ids?: string[];
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/milestones`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateMilestone(
+    projectId: string,
+    entityId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      due_month: number;
+      wp_ids: string[];
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/milestones/${entityId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  createDeliverable(
+    projectId: string,
+    payload: {
+      wp_ids: string[];
+      code: string;
+      title: string;
+      description?: string;
+      due_month: number;
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/deliverables`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateDeliverable(
+    projectId: string,
+    entityId: string,
+    payload: {
+      wp_ids: string[];
+      code: string;
+      title: string;
+      description?: string;
+      due_month: number;
+      workflow_status?: string;
+      review_due_month?: number;
+      review_owner_member_id?: string;
+      assignment: {
+        leader_organization_id: string;
+        responsible_person_id: string;
+        collaborating_partner_ids: string[];
+      };
+    }
+  ): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/deliverables/${entityId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  listAssignmentMatrix(projectId: string, entityType?: string): Promise<Paginated<AssignmentMatrixRow>> {
+    const query = entityType ? `?entity_type=${entityType}&page=1&page_size=100` : "?page=1&page_size=100";
+    return request(`/projects/${projectId}/assignment-matrix${query}`);
+  },
+
+  updateAssignment(
+    projectId: string,
+    row: AssignmentMatrixRow,
+    payload: {
+      leader_organization_id: string;
+      responsible_person_id: string;
+      collaborating_partner_ids: string[];
+    }
+  ): Promise<WorkEntity> {
+    const endpointByType: Record<AssignmentMatrixRow["entity_type"], string> = {
+      work_package: "work-packages",
+      task: "tasks",
+      milestone: "milestones",
+      deliverable: "deliverables",
+    };
+    const endpoint = endpointByType[row.entity_type];
+    return request(`/projects/${projectId}/${endpoint}/${row.entity_id}/assignment`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  listWorkPackages(projectId: string): Promise<Paginated<WorkEntity>> {
+    return request(`/projects/${projectId}/work-packages?page=1&page_size=100`);
+  },
+
+  listTasks(projectId: string): Promise<Paginated<WorkEntity>> {
+    return request(`/projects/${projectId}/tasks?page=1&page_size=100`);
+  },
+
+  listMilestones(projectId: string): Promise<Paginated<WorkEntity>> {
+    return request(`/projects/${projectId}/milestones?page=1&page_size=100`);
+  },
+
+  listDeliverables(projectId: string): Promise<Paginated<WorkEntity>> {
+    return request(`/projects/${projectId}/deliverables?page=1&page_size=100`);
+  },
+
+  listTrashedWorkEntities(projectId: string, page = 1, pageSize = 200): Promise<Paginated<TrashedWorkEntity>> {
+    return request(`/projects/${projectId}/trash?page=${page}&page_size=${pageSize}`);
+  },
+
+  trashWorkPackage(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/work-packages/${entityId}/trash`, { method: "POST" });
+  },
+
+  restoreWorkPackage(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/work-packages/${entityId}/restore`, { method: "POST" });
+  },
+
+  trashTask(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/tasks/${entityId}/trash`, { method: "POST" });
+  },
+
+  restoreTask(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/tasks/${entityId}/restore`, { method: "POST" });
+  },
+
+  trashMilestone(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/milestones/${entityId}/trash`, { method: "POST" });
+  },
+
+  restoreMilestone(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/milestones/${entityId}/restore`, { method: "POST" });
+  },
+
+  trashDeliverable(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/deliverables/${entityId}/trash`, { method: "POST" });
+  },
+
+  restoreDeliverable(projectId: string, entityId: string): Promise<WorkEntity> {
+    return request(`/projects/${projectId}/deliverables/${entityId}/restore`, { method: "POST" });
+  },
+
+  validateProject(projectId: string): Promise<ProjectValidationResult> {
+    return request(`/projects/${projectId}/validate`, { method: "POST" });
+  },
+
+  activateProject(projectId: string): Promise<ProjectActivationResult> {
+    return request(`/projects/${projectId}/activate`, { method: "POST" });
+  },
+
+  runCoherenceCheck(projectId: string): Promise<CoherenceReport> {
+    return request(`/projects/${projectId}/coherence-check`, { method: "POST" });
+  },
+
+  listActivity(projectId: string, page = 1, pageSize = 20, eventType = ""): Promise<Paginated<AuditEvent>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (eventType.trim()) query.set("event_type", eventType.trim());
+    return request(`/projects/${projectId}/activity?${query.toString()}`);
+  },
+
+  listRisks(
+    projectId: string,
+    params?: { status?: string; owner_partner_id?: string; search?: string },
+  ): Promise<Paginated<ProjectRisk>> {
+    const query = new URLSearchParams({ page: "1", page_size: "100" });
+    if (params?.status) query.set("status", params.status);
+    if (params?.owner_partner_id) query.set("owner_partner_id", params.owner_partner_id);
+    if (params?.search) query.set("search", params.search);
+    return request(`/projects/${projectId}/risks?${query.toString()}`);
+  },
+
+  createRisk(
+    projectId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      mitigation_plan?: string;
+      status: string;
+      probability: string;
+      impact: string;
+      due_month?: number;
+      owner_partner_id: string;
+      owner_member_id: string;
+    }
+  ): Promise<ProjectRisk> {
+    return request(`/projects/${projectId}/risks`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateRisk(
+    projectId: string,
+    riskId: string,
+    payload: {
+      code: string;
+      title: string;
+      description?: string;
+      mitigation_plan?: string;
+      status: string;
+      probability: string;
+      impact: string;
+      due_month?: number;
+      owner_partner_id: string;
+      owner_member_id: string;
+    }
+  ): Promise<ProjectRisk> {
+    return request(`/projects/${projectId}/risks/${riskId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  uploadDocument(projectId: string, payload: {
+    file: File;
+    scope: "project" | "wp" | "task" | "deliverable" | "milestone";
+    title: string;
+    metadata_json?: string;
+    wp_id?: string;
+    task_id?: string;
+    deliverable_id?: string;
+    milestone_id?: string;
+    uploaded_by_member_id?: string;
+    proposal_section_id?: string;
+  }): Promise<DocumentVersion> {
+    const form = new FormData();
+    form.append("file", payload.file);
+    form.append("scope", payload.scope);
+    form.append("title", payload.title);
+    if (payload.metadata_json) form.append("metadata_json", payload.metadata_json);
+    if (payload.wp_id) form.append("wp_id", payload.wp_id);
+    if (payload.task_id) form.append("task_id", payload.task_id);
+    if (payload.deliverable_id) form.append("deliverable_id", payload.deliverable_id);
+    if (payload.milestone_id) form.append("milestone_id", payload.milestone_id);
+    if (payload.uploaded_by_member_id) form.append("uploaded_by_member_id", payload.uploaded_by_member_id);
+    if (payload.proposal_section_id) form.append("proposal_section_id", payload.proposal_section_id);
+    return request(`/projects/${projectId}/documents/upload`, { method: "POST", body: form });
+  },
+
+  uploadDocumentVersion(projectId: string, documentKey: string, payload: {
+    file: File;
+    title?: string;
+    metadata_json?: string;
+    uploaded_by_member_id?: string;
+    proposal_section_id?: string;
+  }): Promise<DocumentVersion> {
+    const form = new FormData();
+    form.append("file", payload.file);
+    if (payload.title) form.append("title", payload.title);
+    if (payload.metadata_json) form.append("metadata_json", payload.metadata_json);
+    if (payload.uploaded_by_member_id) form.append("uploaded_by_member_id", payload.uploaded_by_member_id);
+    if (payload.proposal_section_id) form.append("proposal_section_id", payload.proposal_section_id);
+    return request(`/projects/${projectId}/documents/${documentKey}/versions/upload`, { method: "POST", body: form });
+  },
+
+
+
+  listReviewFindings(projectId: string, deliverableId: string): Promise<Paginated<ReviewFinding>> {
+    return request(`/projects/${projectId}/deliverables/${deliverableId}/review-findings?page=1&page_size=100`);
+  },
+
+  createReviewFinding(
+    projectId: string,
+    deliverableId: string,
+    payload: {
+      document_id?: string | null;
+      finding_type: string;
+      status: string;
+      source?: string;
+      section_ref?: string;
+      summary: string;
+      details?: string;
+      created_by_member_id?: string | null;
+    }
+  ): Promise<ReviewFinding> {
+    return request(`/projects/${projectId}/deliverables/${deliverableId}/review-findings`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateReviewFinding(
+    projectId: string,
+    deliverableId: string,
+    findingId: string,
+    payload: {
+      document_id?: string | null;
+      finding_type: string;
+      status: string;
+      source?: string;
+      section_ref?: string;
+      summary: string;
+      details?: string;
+    }
+  ): Promise<ReviewFinding> {
+    return request(`/projects/${projectId}/deliverables/${deliverableId}/review-findings/${findingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  listDocuments(projectId: string, params?: {
+    scope?: string;
+    status?: string;
+    search?: string;
+  }): Promise<Paginated<DocumentListItem>> {
+    const query = new URLSearchParams({ page: "1", page_size: "100" });
+    if (params?.scope) query.set("scope", params.scope);
+    if (params?.status) query.set("status", params.status);
+    if (params?.search) query.set("search", params.search);
+    return request(`/projects/${projectId}/documents?${query.toString()}`);
+  },
+
+  getDocumentVersion(projectId: string, documentId: string): Promise<DocumentVersion> {
+    return request(`/projects/${projectId}/documents/${documentId}`);
+  },
+
+  listDocumentVersions(projectId: string, documentKey: string): Promise<DocumentVersionList> {
+    return request(`/projects/${projectId}/documents/by-key/${documentKey}/versions`);
+  },
+
+  reindexDocument(projectId: string, documentId: string, asyncJob = true): Promise<ReindexResult> {
+    return request(`/projects/${projectId}/documents/${documentId}/reindex?async_job=${asyncJob ? "true" : "false"}`, {
+      method: "POST",
+    });
+  },
+
+  linkDocument(projectId: string, payload: {
+    url: string;
+    scope: string;
+    title: string;
+    metadata_json?: Record<string, unknown>;
+    wp_id?: string;
+    task_id?: string;
+    deliverable_id?: string;
+    milestone_id?: string;
+    uploaded_by_member_id?: string;
+    proposal_section_id?: string;
+  }): Promise<DocumentVersion> {
+    return request(`/projects/${projectId}/documents/link`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  refreshDocument(projectId: string, documentId: string): Promise<DocumentVersion> {
+    return request(`/projects/${projectId}/documents/${documentId}/refresh`, { method: "POST" });
+  },
+
+  listProposalTemplates(search = "", activeOnly = false, callLibraryEntryId?: string): Promise<Paginated<ProposalTemplate>> {
+    const query = new URLSearchParams({ page: "1", page_size: "200" });
+    if (search) query.set("search", search);
+    if (activeOnly) query.set("active_only", "true");
+    if (callLibraryEntryId) query.set("call_library_entry_id", callLibraryEntryId);
+    return request(`/proposal-templates?${query.toString()}`);
+  },
+
+  getProposalTemplate(templateId: string): Promise<ProposalTemplate> {
+    return request(`/proposal-templates/${templateId}`);
+  },
+
+  createProposalTemplate(payload: {
+    call_library_entry_id?: string | null;
+    name: string;
+    funding_program: string;
+    description?: string | null;
+    is_active?: boolean;
+    sections?: Array<{
+      key: string;
+      title: string;
+      guidance?: string | null;
+      position?: number;
+      required?: boolean;
+      scope_hint?: string;
+    }>;
+  }): Promise<ProposalTemplate> {
+    return request("/proposal-templates", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateProposalTemplate(templateId: string, payload: {
+    call_library_entry_id?: string | null;
+    name?: string;
+    funding_program?: string;
+    description?: string | null;
+    is_active?: boolean;
+  }): Promise<ProposalTemplate> {
+    return request(`/proposal-templates/${templateId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteProposalTemplate(templateId: string): Promise<void> {
+    return request(`/proposal-templates/${templateId}`, { method: "DELETE" });
+  },
+
+  createProposalTemplateSection(templateId: string, payload: {
+    key: string;
+    title: string;
+    guidance?: string | null;
+    position?: number;
+    required?: boolean;
+    scope_hint?: string;
+  }): Promise<ProposalTemplate> {
+    return request(`/proposal-templates/${templateId}/sections`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateProposalTemplateSection(templateId: string, sectionId: string, payload: {
+    key?: string;
+    title?: string;
+    guidance?: string | null;
+    position?: number;
+    required?: boolean;
+    scope_hint?: string;
+  }): Promise<ProposalTemplate> {
+    return request(`/proposal-templates/${templateId}/sections/${sectionId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteProposalTemplateSection(templateId: string, sectionId: string): Promise<ProposalTemplate> {
+    return request(`/proposal-templates/${templateId}/sections/${sectionId}`, { method: "DELETE" });
+  },
+
+  listProjectProposalSections(projectId: string): Promise<{ items: ProjectProposalSection[] }> {
+    return request(`/projects/${projectId}/proposal-sections`);
+  },
+
+  getProposalCallBrief(projectId: string): Promise<ProposalCallBrief> {
+    return request(`/projects/${projectId}/proposal-call-brief`);
+  },
+
+  listProposalCallLibrary(search = "", activeOnly = true): Promise<{ items: ProposalCallLibraryEntry[]; page: number; page_size: number; total: number }> {
+    const query = new URLSearchParams({ page: "1", page_size: "50", active_only: String(activeOnly) });
+    if (search.trim()) query.set("search", search.trim());
+    return request(`/proposal-call-library?${query.toString()}`);
+  },
+
+  createProposalCallLibraryEntry(payload: {
+    call_title: string;
+    funder_name?: string | null;
+    programme_name?: string | null;
+    reference_code?: string | null;
+    submission_deadline?: string | null;
+    source_url?: string | null;
+    summary?: string | null;
+    eligibility_notes?: string | null;
+    budget_notes?: string | null;
+    scoring_notes?: string | null;
+    requirements_text?: string | null;
+    is_active?: boolean;
+  }): Promise<ProposalCallLibraryEntry> {
+    return request(`/proposal-call-library`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  deleteProposalCallLibraryEntry(libraryEntryId: string): Promise<void> {
+    return request(`/proposal-call-library/${libraryEntryId}`, { method: "DELETE" });
+  },
+
+  ingestProposalCallLibraryPdf(file: File, payload?: { library_entry_id?: string; source_url?: string | null; category?: string | null }): Promise<{ entry: ProposalCallLibraryEntry; document: ProposalCallLibraryDocument }> {
+    const form = new FormData();
+    form.append("file", file);
+    if (payload?.library_entry_id) form.append("library_entry_id", payload.library_entry_id);
+    if (payload?.source_url) form.append("source_url", payload.source_url);
+    if (payload?.category) form.append("category", payload.category);
+    return request(`/proposal-call-library/ingest-pdf`, { method: "POST", body: form });
+  },
+
+  startProposalCallLibraryIngestJob(file: File, payload?: { library_entry_id?: string; source_url?: string | null; category?: string | null }): Promise<ProposalCallIngestJob> {
+    const form = new FormData();
+    form.append("file", file);
+    if (payload?.library_entry_id) form.append("library_entry_id", payload.library_entry_id);
+    if (payload?.source_url) form.append("source_url", payload.source_url);
+    if (payload?.category) form.append("category", payload.category);
+    return request(`/proposal-call-library/ingest-pdf-jobs`, { method: "POST", body: form });
+  },
+
+  getProposalCallLibraryIngestJob(jobId: string): Promise<ProposalCallIngestJob> {
+    return request(`/proposal-call-library/ingest-pdf-jobs/${jobId}`);
+  },
+
+  listProposalCallLibraryDocuments(libraryEntryId: string, includeSuperseded = true): Promise<{ items: ProposalCallLibraryDocument[] }> {
+    const query = new URLSearchParams({ include_superseded: String(includeSuperseded) });
+    return request(`/proposal-call-library/${libraryEntryId}/documents?${query.toString()}`);
+  },
+
+  updateProposalCallLibraryDocument(
+    libraryEntryId: string,
+    documentId: string,
+    payload: { category?: string; status?: string },
+  ): Promise<ProposalCallLibraryDocument> {
+    return request(`/proposal-call-library/${libraryEntryId}/documents/${documentId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteProposalCallLibraryDocument(libraryEntryId: string, documentId: string): Promise<void> {
+    return request(`/proposal-call-library/${libraryEntryId}/documents/${documentId}`, { method: "DELETE" });
+  },
+
+  reindexProposalCallLibraryDocument(libraryEntryId: string, documentId: string): Promise<ProposalCallDocumentReindexResult> {
+    return request(`/proposal-call-library/${libraryEntryId}/documents/${documentId}/reindex`, { method: "POST" });
+  },
+
+  upsertProposalCallBrief(projectId: string, payload: {
+    call_title?: string | null;
+    funder_name?: string | null;
+    programme_name?: string | null;
+    reference_code?: string | null;
+    submission_deadline?: string | null;
+    source_url?: string | null;
+    summary?: string | null;
+    eligibility_notes?: string | null;
+    budget_notes?: string | null;
+    scoring_notes?: string | null;
+    requirements_text?: string | null;
+  }): Promise<ProposalCallBrief> {
+    return request(`/projects/${projectId}/proposal-call-brief`, { method: "PUT", body: JSON.stringify(payload) });
+  },
+
+  importProposalCallBrief(projectId: string, libraryEntryId: string): Promise<ProposalCallBrief> {
+    return request(`/projects/${projectId}/proposal-call-brief/import`, {
+      method: "POST",
+      body: JSON.stringify({ library_entry_id: libraryEntryId }),
+    });
+  },
+
+  askProposalCallQuestion(projectId: string, question: string): Promise<ProposalCallAnswer> {
+    return request(`/projects/${projectId}/proposal-call/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    });
+  },
+
+  updateProjectProposalSection(projectId: string, sectionId: string, payload: {
+    title?: string;
+    guidance?: string | null;
+    position?: number;
+    required?: boolean;
+    scope_hint?: string;
+    status?: string;
+    owner_member_id?: string | null;
+    reviewer_member_id?: string | null;
+    due_date?: string | null;
+    notes?: string | null;
+    content?: string | null;
+    preserve_yjs_state?: boolean;
+  }): Promise<ProjectProposalSection> {
+    return request(`/projects/${projectId}/proposal-sections/${sectionId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  listProposalSubmissionRequirements(projectId: string): Promise<{ items: ProposalSubmissionRequirement[] }> {
+    return request(`/projects/${projectId}/proposal-submission-requirements`);
+  },
+
+  createProposalSubmissionRequirement(projectId: string, payload: {
+    title: string;
+    description?: string | null;
+    document_type: string;
+    format_hint: string;
+    required?: boolean;
+    position?: number;
+    template_id?: string | null;
+  }): Promise<ProposalSubmissionRequirement> {
+    return request(`/projects/${projectId}/proposal-submission-requirements`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateProposalSubmissionRequirement(projectId: string, requirementId: string, payload: {
+    title?: string;
+    description?: string | null;
+    document_type?: string;
+    format_hint?: string;
+    required?: boolean;
+    position?: number;
+    template_id?: string | null;
+  }): Promise<ProposalSubmissionRequirement> {
+    return request(`/projects/${projectId}/proposal-submission-requirements/${requirementId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  updateProposalSubmissionItem(projectId: string, itemId: string, payload: {
+    assignee_member_id?: string | null;
+    status?: string;
+    notes?: string | null;
+    latest_uploaded_document_id?: string | null;
+  }): Promise<ProposalSubmissionItem> {
+    return request(`/projects/${projectId}/proposal-submission-items/${itemId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  listProposalReviewFindings(projectId: string, proposalSectionId?: string, reviewKind = "general"): Promise<{ items: ProposalReviewFinding[]; page: number; page_size: number; total: number }> {
+    const query = new URLSearchParams();
+    if (proposalSectionId) query.set("proposal_section_id", proposalSectionId);
+    query.set("review_kind", reviewKind);
+    query.set("page", "1");
+    query.set("page_size", "200");
+    return request(`/projects/${projectId}/proposal-review-findings?${query}`);
+  },
+  createProposalReviewFinding(projectId: string, payload: Record<string, unknown>): Promise<ProposalReviewFinding> {
+    return request(`/projects/${projectId}/proposal-review-findings`, { method: "POST", body: JSON.stringify(payload) });
+  },
+  updateProposalReviewFinding(projectId: string, findingId: string, payload: Record<string, unknown>): Promise<ProposalReviewFinding> {
+    return request(`/projects/${projectId}/proposal-review-findings/${findingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+  deleteProposalReviewFinding(projectId: string, findingId: string): Promise<void> {
+    return request(`/projects/${projectId}/proposal-review-findings/${findingId}`, { method: "DELETE" });
+  },
+  async uploadProposalImage(projectId: string, file: File): Promise<ProposalImage> {
+    const form = new FormData();
+    form.append("file", file);
+    const result = await request<ProposalImage>(`/projects/${projectId}/proposal-images/upload`, {
+      method: "POST",
+      body: form,
+    });
+    // The backend returns a relative path like /api/v1/projects/…/content.
+    // Resolve it against the API base so the <img> src works from the browser.
+    if (result.url && result.url.startsWith("/")) {
+      const origin = new URL(API_BASE).origin;
+      result.url = `${origin}${result.url}`;
+    }
+    return result;
+  },
+
+  runProposalReview(projectId: string, proposalSectionId?: string | null): Promise<{ created: ProposalReviewFinding[] }> {
+    return request(`/projects/${projectId}/proposal-review/run`, {
+      method: "POST",
+      body: JSON.stringify({ proposal_section_id: proposalSectionId || null }),
+    });
+  },
+
+  runProposalCallCompliance(projectId: string, proposalSectionId?: string | null): Promise<{ created: ProposalReviewFinding[] }> {
+    return request(`/projects/${projectId}/proposal-call-compliance/run`, {
+      method: "POST",
+      body: JSON.stringify({ proposal_section_id: proposalSectionId || null }),
+    });
+  },
+
+  async exportProposalPdf(projectId: string): Promise<Blob> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/proposal/export-pdf`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    });
+    if (!res.ok) throw new Error(`Failed to export proposal PDF: ${res.status}`);
+    return res.blob();
+  },
+
+  listProjectMemberships(projectId: string): Promise<Paginated<ProjectMembership>> {
+    return request(`/projects/${projectId}/memberships?page=1&page_size=200`);
+  },
+
+  upsertProjectMembership(
+    projectId: string,
+    payload: { user_id: string; role: string }
+  ): Promise<ProjectMembership> {
+    return request(`/projects/${projectId}/memberships`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  listProjectRooms(projectId: string): Promise<Paginated<ProjectChatRoom>> {
+    return request(`/projects/${projectId}/rooms?page=1&page_size=200`);
+  },
+
+  createProjectRoom(
+    projectId: string,
+    payload: { name: string; description?: string; scope_type?: string; scope_ref_id?: string | null }
+  ): Promise<ProjectChatRoom> {
+    return request(`/projects/${projectId}/rooms`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  addRoomMember(projectId: string, roomId: string, payload: { user_id: string }): Promise<ProjectChatRoom> {
+    return request(`/projects/${projectId}/rooms/${roomId}/members`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  removeRoomMember(projectId: string, roomId: string, userId: string): Promise<ProjectChatRoom> {
+    return request(`/projects/${projectId}/rooms/${roomId}/members/${userId}`, { method: "DELETE" });
+  },
+
+  listRoomMessages(projectId: string, roomId: string): Promise<Paginated<ProjectChatMessage>> {
+    return request(`/projects/${projectId}/rooms/${roomId}/messages?page=1&page_size=500`);
+  },
+
+  createRoomMessage(
+    projectId: string,
+    roomId: string,
+    payload: { content: string; reply_to_message_id?: string | null }
+  ): Promise<ProjectChatMessage> {
+    return request(`/projects/${projectId}/rooms/${roomId}/messages`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  toggleRoomMessageReaction(
+    projectId: string,
+    roomId: string,
+    messageId: string,
+    payload: { emoji: string }
+  ): Promise<ProjectChatMessage> {
+    return request(`/projects/${projectId}/rooms/${roomId}/messages/${messageId}/reactions`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+
+
+  listMeetings(projectId: string, params?: { search?: string; source_type?: string }): Promise<Paginated<MeetingRecord>> {
+    const query = new URLSearchParams({ page: "1", page_size: "100" });
+    if (params?.search) query.set("search", params.search);
+    if (params?.source_type) query.set("source_type", params.source_type);
+    return request(`/projects/${projectId}/meetings?${query.toString()}`);
+  },
+
+  createMeeting(
+    projectId: string,
+    payload: {
+      title: string;
+      starts_at: string;
+      source_type: string;
+      source_url?: string;
+      participants: string[];
+      content_text: string;
+      linked_document_id?: string | null;
+      created_by_member_id?: string | null;
+    }
+  ): Promise<MeetingRecord> {
+    return request(`/projects/${projectId}/meetings`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateMeeting(
+    projectId: string,
+    meetingId: string,
+    payload: {
+      title: string;
+      starts_at: string;
+      source_type: string;
+      source_url?: string;
+      participants: string[];
+      content_text: string;
+      linked_document_id?: string | null;
+    }
+  ): Promise<MeetingRecord> {
+    return request(`/projects/${projectId}/meetings/${meetingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  uploadMeetingTranscript(projectId: string, formData: FormData): Promise<MeetingRecord> {
+    return request(`/projects/${projectId}/meetings/upload`, { method: "POST", body: formData });
+  },
+
+  deleteMeeting(projectId: string, meetingId: string): Promise<void> {
+    return request(`/projects/${projectId}/meetings/${meetingId}`, { method: "DELETE" });
+  },
+
+  listActionItems(projectId: string, meetingId: string, status?: string): Promise<Paginated<MeetingActionItem>> {
+    const query = new URLSearchParams({ page: "1", page_size: "100" });
+    if (status) query.set("status", status);
+    return request(`/projects/${projectId}/meetings/${meetingId}/action-items?${query.toString()}`);
+  },
+
+  createActionItem(
+    projectId: string,
+    meetingId: string,
+    payload: {
+      description: string;
+      assignee_name?: string | null;
+      assignee_member_id?: string | null;
+      due_date?: string | null;
+      priority?: string;
+      source?: string;
+    }
+  ): Promise<MeetingActionItem> {
+    return request(`/projects/${projectId}/meetings/${meetingId}/action-items`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateActionItem(
+    projectId: string,
+    meetingId: string,
+    itemId: string,
+    payload: {
+      description?: string;
+      assignee_name?: string | null;
+      assignee_member_id?: string | null;
+      due_date?: string | null;
+      priority?: string;
+      status?: string;
+    }
+  ): Promise<MeetingActionItem> {
+    return request(`/projects/${projectId}/meetings/${meetingId}/action-items/${itemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  promoteActionItem(projectId: string, meetingId: string, itemId: string, wpId: string): Promise<MeetingActionItem> {
+    return request(`/projects/${projectId}/meetings/${meetingId}/action-items/${itemId}/promote`, {
+      method: "POST",
+      body: JSON.stringify({ wp_id: wpId }),
+    });
+  },
+
+  extractMeetingActions(
+    projectId: string,
+    meetingId: string
+  ): Promise<{ summary: string | null; items: MeetingActionItem[] }> {
+    return request(`/projects/${projectId}/meetings/${meetingId}/extract-actions`, { method: "POST" });
+  },
+
+  listCalendarIntegrations(projectId: string): Promise<Paginated<CalendarIntegration>> {
+    return request(`/projects/${projectId}/calendar-integrations`);
+  },
+
+  listCalendarImports(projectId: string): Promise<Paginated<CalendarImportBatch>> {
+    return request(`/projects/${projectId}/calendar-imports`);
+  },
+
+  connectMicrosoft365Calendar(projectId: string): Promise<{ auth_url: string }> {
+    return request(`/projects/${projectId}/calendar-integrations/microsoft365/connect`, { method: "POST" });
+  },
+
+  syncMicrosoft365Calendar(
+    projectId: string
+  ): Promise<{ integration: CalendarIntegration; imported: number; updated: number }> {
+    return request(`/projects/${projectId}/calendar-integrations/microsoft365/sync`, { method: "POST" });
+  },
+
+  importIcsCalendar(projectId: string, formData: FormData): Promise<{ imported: number; updated: number }> {
+    return request(`/projects/${projectId}/calendar-integrations/ics/import`, { method: "POST", body: formData });
+  },
+
+  deleteCalendarImport(projectId: string, batchId: string): Promise<void> {
+    return request(`/projects/${projectId}/calendar-imports/${batchId}`, { method: "DELETE" });
+  },
+
+  listChatConversations(projectId: string): Promise<Paginated<ChatConversation>> {
+    return request(`/projects/${projectId}/chat/conversations?page=1&page_size=100`);
+  },
+
+  createChatConversation(
+    projectId: string,
+    payload: { title?: string; created_by_member_id?: string }
+  ): Promise<ChatConversation> {
+    return request(`/projects/${projectId}/chat/conversations`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateConversation(
+    projectId: string,
+    conversationId: string,
+    payload: { title: string }
+  ): Promise<ChatConversation> {
+    return request(`/projects/${projectId}/chat/conversations/${conversationId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteConversation(projectId: string, conversationId: string): Promise<void> {
+    return request(`/projects/${projectId}/chat/conversations/${conversationId}`, { method: "DELETE" });
+  },
+
+  listChatMessages(projectId: string, conversationId: string): Promise<Paginated<ChatMessage>> {
+    return request(`/projects/${projectId}/chat/conversations/${conversationId}/messages?page=1&page_size=500`);
+  },
+
+  postChatMessage(
+    projectId: string,
+    conversationId: string,
+    payload: { content: string; created_by_member_id?: string }
+  ): Promise<ChatMessageExchange> {
+    return request(`/projects/${projectId}/chat/conversations/${conversationId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async postChatMessageStream(
+    projectId: string,
+    conversationId: string,
+    payload: { content: string; created_by_member_id?: string },
+    handlers: {
+      onStart?: () => void;
+      onToken?: (token: string) => void;
+      onDone?: (exchange: ChatMessageExchange) => void;
+      onError?: (detail: string) => void;
+    }
+  ): Promise<void> {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (authToken) {
+      headers.set("Authorization", `Bearer ${authToken}`);
+    }
+    const response = await fetch(`${API_BASE}/projects/${projectId}/chat/conversations/${conversationId}/messages/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok || !response.body) {
+      const body = await response.text();
+      try {
+        const parsed = JSON.parse(body) as { detail?: unknown };
+        throw new Error(formatApiErrorDetail(parsed.detail) || body || `API request failed: ${response.status}`);
+      } catch {
+        throw new Error(body || `API request failed: ${response.status}`);
+      }
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const dispatchEvent = (eventName: string, dataRaw: string) => {
+      let data: unknown = {};
+      try {
+        data = JSON.parse(dataRaw);
+      } catch {
+        data = {};
+      }
+      if (eventName === "start") {
+        handlers.onStart?.();
+        return;
+      }
+      if (eventName === "token") {
+        const token = (data as { token?: unknown }).token;
+        if (typeof token === "string") handlers.onToken?.(token);
+        return;
+      }
+      if (eventName === "done") {
+        handlers.onDone?.(data as ChatMessageExchange);
+        return;
+      }
+      if (eventName === "error") {
+        const detail = (data as { detail?: unknown }).detail;
+        handlers.onError?.(typeof detail === "string" ? detail : "Streaming failed.");
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep = buffer.indexOf("\n\n");
+      while (sep !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const lines = block.split("\n");
+        let eventName = "";
+        let dataRaw = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          if (line.startsWith("data:")) dataRaw = line.slice(5).trim();
+        }
+        if (eventName) dispatchEvent(eventName, dataRaw);
+        sep = buffer.indexOf("\n\n");
+      }
+    }
+  },
+
+  // --- My Work ---
+  getMyWork(includeClosed = false): Promise<MyWorkResponse> {
+    const query = new URLSearchParams();
+    if (includeClosed) query.set("include_closed", "true");
+    return request(`/my-work?${query.toString()}`);
+  },
+
+  // --- Dashboard ---
+  getDashboardHealth(projectId: string, scopeType = "project", scopeRefId?: string | null): Promise<DashboardHealth> {
+    const query = new URLSearchParams({ scope_type: scopeType });
+    if (scopeRefId) query.set("scope_ref_id", scopeRefId);
+    return request(`/projects/${projectId}/dashboard/health?${query.toString()}`);
+  },
+
+  getDashboardHealthLatest(projectId: string, scopeType = "project", scopeRefId?: string | null): Promise<DashboardHealth | null> {
+    const query = new URLSearchParams({ scope_type: scopeType });
+    if (scopeRefId) query.set("scope_ref_id", scopeRefId);
+    return request(`/projects/${projectId}/dashboard/health-latest?${query.toString()}`);
+  },
+
+  getDashboardHealthHistory(projectId: string): Promise<DashboardHealthSnapshot[]> {
+    return request(`/projects/${projectId}/dashboard/health-history`);
+  },
+
+  getDashboardHealthRecurring(projectId: string): Promise<DashboardRecurringIssue[]> {
+    return request(`/projects/${projectId}/dashboard/health-recurring`);
+  },
+
+  getDashboardHealthScopeOptions(projectId: string): Promise<DashboardScopeOptions> {
+    return request(`/projects/${projectId}/dashboard/health-scope-options`);
+  },
+
+  updateDashboardHealthIssueState(
+    projectId: string,
+    payload: {
+      issue_key: string;
+      source: string;
+      category: string;
+      entity_type?: string | null;
+      entity_id?: string | null;
+      status: string;
+      rationale?: string | null;
+      snooze_days?: number;
+    }
+  ): Promise<{ issue_key: string; status: string; rationale: string | null; snoozed_until: string | null }> {
+    return request(`/projects/${projectId}/dashboard/health/issues/state`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  createDashboardHealthIssueInbox(
+    projectId: string,
+    payload: DashboardHealthIssue
+  ): Promise<{ id: string; title: string; status: string }> {
+    return request(`/projects/${projectId}/dashboard/health/issues/inbox`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  listProjectInbox(projectId: string, status = "", page = 1, pageSize = 20): Promise<{ items: ProjectInboxItem[]; page: number; page_size: number; total: number }> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (status) query.set("status", status);
+    return request(`/projects/${projectId}/inbox?${query.toString()}`);
+  },
+
+  updateProjectInbox(projectId: string, itemId: string, payload: { status?: string }): Promise<ProjectInboxItem> {
+    return request(`/projects/${projectId}/inbox/${itemId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  // --- Todos ---
+  listTodos(
+    projectId: string,
+    params?: { status?: string; assignee_member_id?: string; wp_id?: string; task_id?: string; page?: number; page_size?: number }
+  ): Promise<Paginated<ProjectTodo>> {
+    const query = new URLSearchParams({ page: String(params?.page ?? 1), page_size: String(params?.page_size ?? 50) });
+    if (params?.status) query.set("status", params.status);
+    if (params?.assignee_member_id) query.set("assignee_member_id", params.assignee_member_id);
+    if (params?.wp_id) query.set("wp_id", params.wp_id);
+    if (params?.task_id) query.set("task_id", params.task_id);
+    return request(`/projects/${projectId}/todos?${query.toString()}`);
+  },
+
+  createTodo(
+    projectId: string,
+    payload: {
+      title: string;
+      description?: string | null;
+      priority?: string;
+      assignee_member_id?: string | null;
+      wp_id?: string | null;
+      task_id?: string | null;
+      due_date?: string | null;
+      sort_order?: number;
+    }
+  ): Promise<ProjectTodo> {
+    return request(`/projects/${projectId}/todos`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTodo(
+    projectId: string,
+    todoId: string,
+    payload: {
+      title?: string;
+      description?: string | null;
+      status?: string;
+      priority?: string;
+      assignee_member_id?: string | null;
+      wp_id?: string | null;
+      task_id?: string | null;
+      due_date?: string | null;
+      sort_order?: number;
+    }
+  ): Promise<ProjectTodo> {
+    return request(`/projects/${projectId}/todos/${todoId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTodo(projectId: string, todoId: string): Promise<void> {
+    return request(`/projects/${projectId}/todos/${todoId}`, { method: "DELETE" });
+  },
+
+  // --- Reports ---
+  async getStatusReport(projectId: string): Promise<string> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/reports/status`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    });
+    if (!res.ok) throw new Error(`Failed to fetch status report: ${res.status}`);
+    return res.text();
+  },
+  async getMeetingReport(projectId: string, meetingId: string): Promise<string> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/reports/meeting/${meetingId}`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    });
+    if (!res.ok) throw new Error(`Failed to fetch meeting report: ${res.status}`);
+    return res.text();
+  },
+  async getAuditLogCsv(projectId: string): Promise<Blob> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/reports/audit-log`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    });
+    if (!res.ok) throw new Error(`Failed to fetch audit log: ${res.status}`);
+    return res.blob();
+  },
+
+  // --- Notifications ---
+  listNotifications(projectId?: string, unreadOnly = false, page = 1, pageSize = 20): Promise<{ items: AppNotification[]; page: number; page_size: number; total: number }> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (projectId) query.set("project_id", projectId);
+    if (unreadOnly) query.set("unread_only", "true");
+    return request(`/notifications?${query}`);
+  },
+  notificationUnreadCount(projectId?: string): Promise<{ count: number }> {
+    const query = new URLSearchParams();
+    if (projectId) query.set("project_id", projectId);
+    return request(`/notifications/unread-count?${query}`);
+  },
+  markNotificationRead(notificationId: string): Promise<{ ok: boolean }> {
+    return request(`/notifications/${notificationId}/read`, { method: "POST" });
+  },
+  markAllNotificationsRead(projectId?: string): Promise<{ marked_read: number }> {
+    const query = new URLSearchParams();
+    if (projectId) query.set("project_id", projectId);
+    return request(`/notifications/read-all?${query}`, { method: "POST" });
+  },
+
+  // ── Search ──
+  searchProject(projectId: string, q: string, opts?: { scope?: string; top_k?: number }): Promise<SearchResponse> {
+    const query = new URLSearchParams({ q });
+    if (opts?.scope) query.set("scope", opts.scope);
+    if (opts?.top_k) query.set("top_k", String(opts.top_k));
+    return request(`/projects/${projectId}/search?${query}`);
+  },
+  embedBackfill(projectId: string): Promise<{ documents: number; meetings: number; research?: number }> {
+    return request(`/projects/${projectId}/search/embed-backfill`, { method: "POST" });
+  },
+
+  // ── Research Workspace ──
+
+  listResearchCollections(projectId: string, opts?: { status?: string; member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchCollection[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.status) q.set("status", opts.status);
+    if (opts?.member_id) q.set("member_id", opts.member_id);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/${projectId}/research/collections?${q}`);
+  },
+  createResearchCollection(projectId: string, data: {
+    title: string;
+    description?: string;
+    hypothesis?: string;
+    open_questions?: string[];
+    tags?: string[];
+    overleaf_url?: string;
+    target_output_title?: string;
+    output_status?: string;
+  }): Promise<ResearchCollection> {
+    return request(`/projects/${projectId}/research/collections`, { method: "POST", body: JSON.stringify(data) });
+  },
+  getResearchCollection(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}`);
+  },
+  updateResearchCollection(projectId: string, collectionId: string, data: Record<string, unknown>): Promise<ResearchCollection> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteResearchCollection(projectId: string, collectionId: string): Promise<void> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}`, { method: "DELETE" });
+  },
+
+  listCollectionMembers(projectId: string, collectionId: string): Promise<ResearchCollectionMember[]> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members`);
+  },
+  addCollectionMember(projectId: string, collectionId: string, data: { member_id: string; role?: string }): Promise<ResearchCollectionMember> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateCollectionMember(projectId: string, collectionId: string, memberRecordId: string, data: { role: string }): Promise<ResearchCollectionMember> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members/${memberRecordId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  removeCollectionMember(projectId: string, collectionId: string, memberRecordId: string): Promise<void> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members/${memberRecordId}`, { method: "DELETE" });
+  },
+
+  setCollectionWbsLinks(projectId: string, collectionId: string, data: { wp_ids: string[]; task_ids: string[]; deliverable_ids: string[] }): Promise<{ wp_ids: string[]; task_ids: string[]; deliverable_ids: string[] }> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/wbs-links`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  setCollectionMeetings(projectId: string, collectionId: string, data: { meeting_ids: string[] }): Promise<ResearchCollectionDetail["meetings"]> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/meetings`, { method: "PUT", body: JSON.stringify(data) });
+  },
+
+  listResearchReferences(projectId: string, opts?: { collection_id?: string; reading_status?: string; tag?: string; q?: string; page?: number; page_size?: number }): Promise<{ items: ResearchReference[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.collection_id) q.set("collection_id", opts.collection_id);
+    if (opts?.reading_status) q.set("reading_status", opts.reading_status);
+    if (opts?.tag) q.set("tag", opts.tag);
+    if (opts?.q) q.set("q", opts.q);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/${projectId}/research/references?${q}`);
+  },
+  createResearchReference(projectId: string, data: Record<string, unknown>): Promise<ResearchReference> {
+    return request(`/projects/${projectId}/research/references`, { method: "POST", body: JSON.stringify(data) });
+  },
+  importBibtexReferences(projectId: string, bibtex: string, collectionId?: string | null): Promise<{ created: ResearchReference[]; errors: string[] }> {
+    return request(`/projects/${projectId}/research/references/import-bibtex`, {
+      method: "POST",
+      body: JSON.stringify({ bibtex, collection_id: collectionId || null }),
+    });
+  },
+  getResearchReference(projectId: string, refId: string): Promise<ResearchReference> {
+    return request(`/projects/${projectId}/research/references/${refId}`);
+  },
+  updateResearchReference(projectId: string, refId: string, data: Record<string, unknown>): Promise<ResearchReference> {
+    return request(`/projects/${projectId}/research/references/${refId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteResearchReference(projectId: string, refId: string): Promise<void> {
+    return request(`/projects/${projectId}/research/references/${refId}`, { method: "DELETE" });
+  },
+  moveResearchReference(projectId: string, refId: string, collectionId: string | null): Promise<ResearchReference> {
+    return request(`/projects/${projectId}/research/references/${refId}/move`, { method: "PUT", body: JSON.stringify({ collection_id: collectionId }) });
+  },
+  updateReferenceStatus(projectId: string, refId: string, readingStatus: string): Promise<ResearchReference> {
+    return request(`/projects/${projectId}/research/references/${refId}/status`, { method: "PUT", body: JSON.stringify({ reading_status: readingStatus }) });
+  },
+
+  listResearchNotes(projectId: string, opts?: { collection_id?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.collection_id) q.set("collection_id", opts.collection_id);
+    if (opts?.note_type) q.set("note_type", opts.note_type);
+    if (opts?.author_member_id) q.set("author_member_id", opts.author_member_id);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/${projectId}/research/notes?${q}`);
+  },
+  createResearchNote(projectId: string, data: Record<string, unknown>): Promise<ResearchNote> {
+    return request(`/projects/${projectId}/research/notes`, { method: "POST", body: JSON.stringify(data) });
+  },
+  getResearchNote(projectId: string, noteId: string): Promise<ResearchNote> {
+    return request(`/projects/${projectId}/research/notes/${noteId}`);
+  },
+  updateResearchNote(projectId: string, noteId: string, data: Record<string, unknown>): Promise<ResearchNote> {
+    return request(`/projects/${projectId}/research/notes/${noteId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteResearchNote(projectId: string, noteId: string): Promise<void> {
+    return request(`/projects/${projectId}/research/notes/${noteId}`, { method: "DELETE" });
+  },
+  setNoteReferences(projectId: string, noteId: string, referenceIds: string[]): Promise<ResearchNote> {
+    return request(`/projects/${projectId}/research/notes/${noteId}/references`, { method: "PUT", body: JSON.stringify({ reference_ids: referenceIds }) });
+  },
+
+  summarizeReference(projectId: string, refId: string): Promise<{ ai_summary: string; ai_summary_at: string }> {
+    return request(`/projects/${projectId}/research/references/${refId}/summarize`, { method: "POST" });
+  },
+  extractPdfMetadata(projectId: string, documentKey: string): Promise<{ title: string | null; authors: string[]; year: number | null; venue: string | null; abstract: string | null }> {
+    return request(`/projects/${projectId}/research/references/extract-from-pdf?document_key=${documentKey}`, { method: "POST" });
+  },
+  synthesizeCollection(projectId: string, collectionId: string): Promise<{ ai_synthesis: string; ai_synthesis_at: string }> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/synthesize`, { method: "POST" });
+  },
+};

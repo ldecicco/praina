@@ -45,35 +45,13 @@ Response:
 }
 ```
 
-## Add Team
-`POST /api/v1/projects/{project_id}/teams`
-
-Request:
-```json
-{
-  "organization_id": "11111111-1111-1111-1111-111111111111",
-  "name": "WP1 Engineering Team"
-}
-```
-
-Response:
-```json
-{
-  "id": "22222222-2222-2222-2222-222222222222",
-  "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-  "organization_id": "11111111-1111-1111-1111-111111111111",
-  "name": "WP1 Engineering Team"
-}
-```
-
-## Add Team Member
+## Add Partner Member
 `POST /api/v1/projects/{project_id}/members`
 
 Request:
 ```json
 {
-  "organization_id": "11111111-1111-1111-1111-111111111111",
-  "team_id": "22222222-2222-2222-2222-222222222222",
+  "partner_id": "11111111-1111-1111-1111-111111111111",
   "full_name": "Giulia Rossi",
   "email": "giulia.rossi@example.org",
   "role": "WP Leader"
@@ -85,8 +63,7 @@ Response:
 {
   "id": "33333333-3333-3333-3333-333333333333",
   "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-  "organization_id": "11111111-1111-1111-1111-111111111111",
-  "team_id": "22222222-2222-2222-2222-222222222222",
+  "partner_id": "11111111-1111-1111-1111-111111111111",
   "full_name": "Giulia Rossi",
   "email": "giulia.rossi@example.org",
   "role": "WP Leader",
@@ -106,8 +83,8 @@ Request:
   "assignment": {
     "leader_organization_id": "11111111-1111-1111-1111-111111111111",
     "responsible_person_id": "33333333-3333-3333-3333-333333333333",
-    "collaborating_team_ids": [
-      "22222222-2222-2222-2222-222222222222"
+    "collaborating_partner_ids": [
+      "11111111-1111-1111-1111-111111111111"
     ]
   }
 }
@@ -123,8 +100,8 @@ Response:
   "description": "Core platform architecture and integration.",
   "leader_organization_id": "11111111-1111-1111-1111-111111111111",
   "responsible_person_id": "33333333-3333-3333-3333-333333333333",
-  "collaborating_team_ids": [
-    "22222222-2222-2222-2222-222222222222"
+  "collaborating_partner_ids": [
+    "11111111-1111-1111-1111-111111111111"
   ]
 }
 ```
@@ -158,5 +135,76 @@ Response:
   "status": "active",
   "baseline_version": 1,
   "audit_event_id": "66666666-6666-6666-6666-666666666666"
+}
+```
+
+## Upload Project Document (Multipart)
+`POST /api/v1/projects/{project_id}/documents/upload`
+
+Example `curl`:
+```bash
+curl -X POST "http://127.0.0.1:9999/api/v1/projects/{project_id}/documents/upload" \
+  -F "file=@./consortium-agreement.pdf;type=application/pdf" \
+  -F "scope=project" \
+  -F "title=Consortium Agreement" \
+  -F 'metadata_json={"category":"legal"}' \
+  -F "uploaded_by_member_id=33333333-3333-3333-3333-333333333333"
+```
+
+Response:
+```json
+{
+  "id": "77777777-7777-7777-7777-777777777777",
+  "document_key": "88888888-8888-8888-8888-888888888888",
+  "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "scope": "project",
+  "title": "Consortium Agreement",
+  "version": 1,
+  "status": "uploaded",
+  "storage_uri": "/abs/path/storage/documents/...",
+  "original_filename": "consortium-agreement.pdf",
+  "file_size_bytes": 124000,
+  "mime_type": "application/pdf",
+  "metadata_json": {
+    "category": "legal"
+  }
+}
+```
+
+## Upload New Version
+`POST /api/v1/projects/{project_id}/documents/{document_key}/versions/upload`
+
+Example `curl`:
+```bash
+curl -X POST "http://127.0.0.1:9999/api/v1/projects/{project_id}/documents/{document_key}/versions/upload" \
+  -F "file=@./consortium-agreement-v2.pdf;type=application/pdf" \
+  -F "title=Consortium Agreement (rev2)" \
+  -F 'metadata_json={"category":"legal","revision":"2"}'
+```
+
+Response:
+```json
+{
+  "id": "99999999-9999-9999-9999-999999999999",
+  "document_key": "88888888-8888-8888-8888-888888888888",
+  "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "scope": "project",
+  "title": "Consortium Agreement (rev2)",
+  "version": 2,
+  "status": "uploaded"
+}
+```
+
+## Reindex One Document Version
+`POST /api/v1/projects/{project_id}/documents/{document_id}/reindex?async_job=false`
+
+Response:
+```json
+{
+  "document_id": "99999999-9999-9999-9999-999999999999",
+  "status": "indexed",
+  "chunks_indexed": 14,
+  "queued": false,
+  "error": null
 }
 ```

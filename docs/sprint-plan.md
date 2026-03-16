@@ -17,3 +17,10 @@
 - Add cross-deliverable coherence checks.
 - Implement ChatOps propose-confirm-apply flow.
 - Implement append-only audit log APIs and timeline views.
+
+## Sprint 4: Collaboration and Meetings
+- Add user-to-user project chat (collaborative chat between project members).
+- Ingest user-to-user project chat exchanges into the project knowledge base.
+- Add meeting notes management with structured storage and retrieval.
+- Add meeting scheduling in project calendar.
+- Add invitation sending for meeting participants.

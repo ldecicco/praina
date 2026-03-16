@@ -21,6 +21,10 @@ backend/.venv/
 .env.*.local
 backend/.env
 
+# Local uploaded files
+backend/storage/
+storage/
+
 # Build artifacts
 build/
 dist/

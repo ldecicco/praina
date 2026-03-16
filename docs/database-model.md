@@ -3,7 +3,6 @@
 ## Core Entities
 - `projects`
 - `partner_organizations`
-- `teams`
 - `team_members`
 - `work_packages`
 - `tasks`
@@ -18,12 +17,17 @@ For each `work_package`, `task`, `milestone`, and `deliverable`:
 - `leader_organization_id` is required
 - `responsible_person_id` is required
 - `responsible_person_id` must be an active member of `leader_organization_id`
-- collaborating teams are optional via relation tables
+- collaborating partners are optional via relation tables
 
 ## Document Knowledge Base
-- `project_documents` stores metadata and scope
+- `project_documents` stores scoped document versions and metadata
+  - `document_key` groups versions of the same logical document
+  - `version` increments per `document_key`
+  - scope can be `project`, `wp`, `task`, `deliverable`, `milestone`
+  - optional link fields: `wp_id`, `task_id`, `deliverable_id`, `milestone_id`
+  - `status`: `uploaded`, `indexed`, `failed`
 - `document_chunks` stores chunk text and embeddings (`pgvector`)
-- document binaries live in object storage and are referenced by `storage_uri`
+- uploaded binaries are stored on disk (configured by `DOCUMENTS_STORAGE_PATH`) and referenced by `storage_uri`
 
 ## Governance and Audit
 - `audit_events` is append-only

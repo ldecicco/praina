@@ -75,25 +75,9 @@ def upgrade() -> None:
     op.create_index(op.f("ix_partner_organizations_project_id"), "partner_organizations", ["project_id"], unique=False)
 
     op.create_table(
-        "teams",
-        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("name", sa.String(length=120), nullable=False),
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.ForeignKeyConstraint(["organization_id"], ["partner_organizations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(op.f("ix_teams_organization_id"), "teams", ["organization_id"], unique=False)
-    op.create_index(op.f("ix_teams_project_id"), "teams", ["project_id"], unique=False)
-
-    op.create_table(
         "team_members",
         sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("full_name", sa.String(length=150), nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),
         sa.Column("role", sa.String(length=80), nullable=False),
@@ -103,14 +87,12 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.ForeignKeyConstraint(["organization_id"], ["partner_organizations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("email"),
     )
     op.create_index(op.f("ix_team_members_email"), "team_members", ["email"], unique=True)
     op.create_index(op.f("ix_team_members_organization_id"), "team_members", ["organization_id"], unique=False)
     op.create_index(op.f("ix_team_members_project_id"), "team_members", ["project_id"], unique=False)
-    op.create_index(op.f("ix_team_members_team_id"), "team_members", ["team_id"], unique=False)
 
     op.create_table(
         "work_packages",
@@ -204,37 +186,37 @@ def upgrade() -> None:
     op.create_table(
         "wp_collaborators",
         sa.Column("wp_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], ondelete="CASCADE"),
+        sa.Column("partner_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.ForeignKeyConstraint(["partner_id"], ["partner_organizations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["wp_id"], ["work_packages.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("wp_id", "team_id"),
+        sa.PrimaryKeyConstraint("wp_id", "partner_id"),
     )
 
     op.create_table(
         "task_collaborators",
         sa.Column("task_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("partner_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.ForeignKeyConstraint(["task_id"], ["tasks.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("task_id", "team_id"),
+        sa.ForeignKeyConstraint(["partner_id"], ["partner_organizations.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("task_id", "partner_id"),
     )
 
     op.create_table(
         "milestone_collaborators",
         sa.Column("milestone_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("partner_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.ForeignKeyConstraint(["milestone_id"], ["milestones.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("milestone_id", "team_id"),
+        sa.ForeignKeyConstraint(["partner_id"], ["partner_organizations.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("milestone_id", "partner_id"),
     )
 
     op.create_table(
         "deliverable_collaborators",
         sa.Column("deliverable_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("partner_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.ForeignKeyConstraint(["deliverable_id"], ["deliverables.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("deliverable_id", "team_id"),
+        sa.ForeignKeyConstraint(["partner_id"], ["partner_organizations.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("deliverable_id", "partner_id"),
     )
 
     op.create_table(
@@ -339,15 +321,10 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_work_packages_leader_organization_id"), table_name="work_packages")
     op.drop_table("work_packages")
 
-    op.drop_index(op.f("ix_team_members_team_id"), table_name="team_members")
     op.drop_index(op.f("ix_team_members_project_id"), table_name="team_members")
     op.drop_index(op.f("ix_team_members_organization_id"), table_name="team_members")
     op.drop_index(op.f("ix_team_members_email"), table_name="team_members")
     op.drop_table("team_members")
-
-    op.drop_index(op.f("ix_teams_project_id"), table_name="teams")
-    op.drop_index(op.f("ix_teams_organization_id"), table_name="teams")
-    op.drop_table("teams")
 
     op.drop_index(op.f("ix_partner_organizations_project_id"), table_name="partner_organizations")
     op.drop_table("partner_organizations")
@@ -358,3 +335,4 @@ def downgrade() -> None:
 
     op.execute("DROP TYPE IF EXISTS documentscope")
     op.execute("DROP TYPE IF EXISTS projectstatus")
+

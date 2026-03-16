@@ -6,7 +6,7 @@ Purpose: Create project and consortium baseline with guided steps.
 Sections:
 - Project basics
 - Partner organizations
-- Teams and members
+- Partner members
 - Structure setup (WP/task/milestone/deliverable)
 - Review and submit
 
@@ -21,7 +21,7 @@ Quality requirements:
 - Keyboard-friendly form navigation
 
 ## 2) Assignment Matrix
-Purpose: Assign leader organization, responsible person, and collaborator teams.
+Purpose: Assign leader partner, responsible person, and collaborator partners.
 
 Sections:
 - Filter bar (entity type, WP, partner, status)

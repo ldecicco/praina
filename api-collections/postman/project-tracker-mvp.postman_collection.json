@@ -1,0 +1,74 @@
+{
+  "info": {
+    "name": "Project Tracker MVP",
+    "_postman_id": "0f5a7cb7-0220-4f40-ad9f-6f810503f15d",
+    "description": "Core onboarding and assignment endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Create Project",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"code\": \"HEU-ALPHA\",\n  \"title\": \"Alpha Program\",\n  \"description\": \"Created from Postman collection\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/projects",
+          "host": ["{{baseUrl}}"],
+          "path": ["projects"]
+        }
+      }
+    },
+    {
+      "name": "List Projects",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/projects?page=1&page_size=50",
+          "host": ["{{baseUrl}}"],
+          "path": ["projects"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "page_size", "value": "50" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "List Assignment Matrix",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/projects/{{projectId}}/assignment-matrix?page=1&page_size=100",
+          "host": ["{{baseUrl}}"],
+          "path": ["projects", "{{projectId}}", "assignment-matrix"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "page_size", "value": "100" }
+          ]
+        }
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "" },
+    { "key": "projectId", "value": "" }
+  ]
+}

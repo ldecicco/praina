@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { api } from "../lib/api";
 import type { AuthTokens, MeResponse } from "../types";
+import prainaFullWhite from "../assets/praina-full-white.svg";
 
 type Props = {
   onAuthenticated: (tokens: AuthTokens, me: MeResponse) => void;
@@ -45,7 +46,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
   return (
     <div className="auth-screen">
       <section className="auth-card">
-        <h1>Agentic PM</h1>
+        <img src={prainaFullWhite} alt="Praina" style={{ height: 48, display: 'block', margin: '0 auto 16px' }} />
         <div className="auth-tabs">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
             Sign in

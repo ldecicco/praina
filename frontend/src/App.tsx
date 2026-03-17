@@ -48,6 +48,7 @@ import { ProjectSettingsModal } from "./components/ProjectSettingsModal";
 import { UserProfileModal } from "./components/UserProfileModal";
 import { api, PROJECT_DATA_CHANGED_EVENT } from "./lib/api";
 import { currentProjectMonth } from "./lib/utils";
+import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
 import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief } from "./types";
 
@@ -422,12 +423,16 @@ export default function App() {
       <aside className="app-sidebar">
         <div className="sidebar-header">
           <button type="button" className="icon-button" onClick={toggleSidebar} aria-label="Toggle sidebar">
-            <FontAwesomeIcon icon={sidebarCollapsed ? faBars : faChevronLeft} />
+            {sidebarCollapsed ? (
+              <img src={prainaLogoWhite} alt="Praina" style={{ height: 18, width: 'auto' }} />
+            ) : (
+              <FontAwesomeIcon icon={faChevronLeft} />
+            )}
           </button>
           {!sidebarCollapsed ? (
             <div className="brand-block">
-              <p className="eyebrow">Agentic PM</p>
-              <h1>Project Tracker</h1>
+              <img src={prainaLogoWhite} alt="Praina" className="brand-logo" />
+              <span className="brand-wordmark">Praina</span>
             </div>
           ) : null}
         </div>

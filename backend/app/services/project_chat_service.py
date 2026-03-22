@@ -16,6 +16,15 @@ from app.models.collaboration_chat import (
 )
 from app.models.organization import PartnerOrganization, TeamMember
 from app.models.project import Project
+from app.models.course import Course, CourseMaterial, CourseTeachingAssistant
+from app.models.teaching import (
+    TeachingProgressReport,
+    TeachingProjectArtifact,
+    TeachingProjectBlocker,
+    TeachingProjectMilestone,
+    TeachingProjectProfile,
+    TeachingProjectStudent,
+)
 from app.models.work import Deliverable, Milestone, Task, WorkPackage, deliverable_wps, milestone_wps
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 
@@ -311,6 +320,8 @@ class ProjectChatService:
 
     def project_context_for_agent(self, project_id: uuid.UUID) -> dict:
         project = self._get_project(project_id)
+        if (getattr(project, "project_kind", "funded") or "funded") == "teaching":
+            return self._teaching_context_for_agent(project)
         partners = self.db.scalars(
             select(PartnerOrganization).where(PartnerOrganization.project_id == project_id).order_by(PartnerOrganization.short_name.asc())
         ).all()
@@ -373,6 +384,7 @@ class ProjectChatService:
             "project_code": project.code,
             "project_title": project.title,
             "project_status": project.status.value if hasattr(project.status, "value") else str(project.status),
+            "project_kind": getattr(project, "project_kind", "funded") or "funded",
             "start_date": project.start_date.isoformat(),
             "duration_months": project.duration_months,
             "reporting_dates": list(project.reporting_dates or []),
@@ -417,6 +429,139 @@ class ProjectChatService:
             "rooms_count": rooms_count,
             "documents": self._document_summary(project_id),
             "proposal_sections": self._proposal_summary(project_id, partner_by_id, members),
+            "teaching_project": self._teaching_summary(project_id, members),
+        }
+
+    def _teaching_context_for_agent(self, project: Project) -> dict:
+        rooms_count = int(
+            self.db.scalar(
+                select(func.count()).select_from(ProjectChatRoom).where(
+                    ProjectChatRoom.project_id == project.id, ProjectChatRoom.is_archived.is_(False)
+                )
+            )
+            or 0
+        )
+        return {
+            "assistant_domain": "teaching",
+            "project_id": str(project.id),
+            "project_code": project.code,
+            "project_title": project.title,
+            "project_status": project.status.value if hasattr(project.status, "value") else str(project.status),
+            "project_kind": getattr(project, "project_kind", "teaching") or "teaching",
+            "language": project.language,
+            "rooms_count": rooms_count,
+            "documents": self._document_summary(project.id),
+            "teaching_project": self._teaching_summary(project.id, []),
+        }
+
+    def _teaching_summary(self, project_id: uuid.UUID, members: list[TeamMember]) -> dict[str, object] | None:
+        profile = self.db.scalar(
+            select(TeachingProjectProfile).where(TeachingProjectProfile.project_id == project_id)
+        )
+        if not profile:
+            return None
+        students = self.db.scalars(
+            select(TeachingProjectStudent).where(TeachingProjectStudent.project_id == project_id).order_by(TeachingProjectStudent.full_name.asc())
+        ).all()
+        artifacts = self.db.scalars(
+            select(TeachingProjectArtifact).where(TeachingProjectArtifact.project_id == project_id).order_by(TeachingProjectArtifact.required.desc(), TeachingProjectArtifact.label.asc())
+        ).all()
+        blockers = self.db.scalars(
+            select(TeachingProjectBlocker).where(TeachingProjectBlocker.project_id == project_id).order_by(TeachingProjectBlocker.created_at.desc())
+        ).all()
+        milestones = self.db.scalars(
+            select(TeachingProjectMilestone).where(TeachingProjectMilestone.project_id == project_id).order_by(TeachingProjectMilestone.due_at.asc().nullslast())
+        ).all()
+        reports = self.db.scalars(
+            select(TeachingProgressReport)
+            .where(TeachingProgressReport.project_id == project_id)
+            .order_by(TeachingProgressReport.report_date.desc().nullslast(), TeachingProgressReport.created_at.desc())
+            .limit(4)
+        ).all()
+        course = self.db.scalar(select(Course).where(Course.id == profile.course_id)) if profile.course_id else None
+        responsible_user = self.db.scalar(select(UserAccount).where(UserAccount.id == profile.responsible_user_id)) if profile.responsible_user_id else None
+        teaching_assistants: list[UserAccount] = []
+        course_materials: list[CourseMaterial] = []
+        if profile.course_id:
+            teaching_assistants = list(
+                self.db.scalars(
+                    select(UserAccount)
+                    .join(CourseTeachingAssistant, CourseTeachingAssistant.user_id == UserAccount.id)
+                    .where(CourseTeachingAssistant.course_id == profile.course_id)
+                    .order_by(UserAccount.display_name.asc(), UserAccount.email.asc())
+                ).all()
+            )
+            course_materials = list(
+                self.db.scalars(
+                    select(CourseMaterial)
+                    .where(CourseMaterial.course_id == profile.course_id)
+                    .order_by(CourseMaterial.sort_order.asc(), CourseMaterial.title.asc())
+                    .limit(8)
+                ).all()
+            )
+        return {
+            "course_id": str(profile.course_id) if profile.course_id else None,
+            "course_code": course.code if course else None,
+            "course_name": course.title if course else None,
+            "academic_year": profile.academic_year,
+            "term": profile.term,
+            "status": profile.status.value,
+            "health": profile.health.value,
+            "functional_objectives_markdown": (profile.functional_objectives_markdown or "")[:2000] or None,
+            "specifications_markdown": (profile.specifications_markdown or "")[:2000] or None,
+            "responsible_user_id": str(profile.responsible_user_id) if profile.responsible_user_id else None,
+            "responsible_user_name": responsible_user.display_name if responsible_user else None,
+            "teacher_name": course.teacher_user_id and (
+                self.db.scalar(select(UserAccount.display_name).where(UserAccount.id == course.teacher_user_id))
+            ) if course and course.teacher_user_id else None,
+            "teaching_assistants": [
+                {"user_id": str(item.id), "display_name": item.display_name, "email": item.email}
+                for item in teaching_assistants
+            ],
+            "reporting_cadence_days": profile.reporting_cadence_days,
+            "final_grade": profile.final_grade,
+            "counts": {
+                "students": len(students),
+                "artifacts": len(artifacts),
+                "open_blockers": len([item for item in blockers if item.status.value != "resolved"]),
+                "milestones": len(milestones),
+                "progress_reports": len(reports),
+                "course_materials": len(course_materials),
+            },
+            "students": [{"full_name": item.full_name, "email": item.email} for item in students],
+            "artifacts": [
+                {"label": item.label, "type": item.artifact_type.value, "required": item.required, "status": item.status.value}
+                for item in artifacts
+            ],
+            "blockers": [
+                {"title": item.title, "severity": item.severity.value, "status": item.status.value}
+                for item in blockers
+            ],
+            "milestones": [
+                {"kind": item.kind, "label": item.label, "status": item.status.value, "due_at": item.due_at.isoformat() if item.due_at else None}
+                for item in milestones
+            ],
+            "course_materials": [
+                {
+                    "type": item.material_type.value,
+                    "title": item.title,
+                    "content_markdown": (item.content_markdown or "")[:1200] or None,
+                    "external_url": item.external_url,
+                }
+                for item in course_materials
+            ],
+            "recent_progress_reports": [
+                {
+                    "report_date": item.report_date.isoformat() if item.report_date else None,
+                    "meeting_date": item.meeting_date.isoformat() if item.meeting_date else None,
+                    "work_done_markdown": (item.work_done_markdown or "")[:1200],
+                    "next_steps_markdown": (item.next_steps_markdown or "")[:1200],
+                    "supervisor_feedback_markdown": (item.supervisor_feedback_markdown or "")[:1200] or None,
+                    "attachments_count": len(item.attachment_document_keys or []),
+                    "transcripts_count": len(item.transcript_document_keys or []),
+                }
+                for item in reports
+            ],
         }
 
     def retrieve_citations(self, project_id: uuid.UUID, prompt: str) -> list[dict]:

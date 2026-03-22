@@ -4,6 +4,8 @@ import type {
   AuthTokens,
   CalendarImportBatch,
   CalendarIntegration,
+  Course,
+  CourseMaterial,
   AuthUser,
   ChatConversation,
   ChatMessage,
@@ -57,6 +59,14 @@ import type {
   ResearchCollectionMember,
   ResearchReference,
   ResearchNote,
+  TeachingProjectArtifact,
+  TeachingProjectAssessment,
+  TeachingProjectBlocker,
+  TeachingProjectMilestone,
+  TeachingProjectProfile,
+  TeachingProjectStudent,
+  TeachingProgressReport,
+  TeachingWorkspace,
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
@@ -175,7 +185,7 @@ export const api = {
 
   updateUser(
     userId: string,
-    payload: { display_name?: string; platform_role?: string; is_active?: boolean }
+    payload: { display_name?: string; platform_role?: string; is_active?: boolean; can_access_research?: boolean; can_access_teaching?: boolean }
   ): Promise<AuthUser> {
     return request(`/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(payload) });
   },
@@ -187,6 +197,8 @@ export const api = {
       password?: string;
       platform_role?: string;
       is_active?: boolean;
+      can_access_research?: boolean;
+      can_access_teaching?: boolean;
     }
   ): Promise<AuthUser> {
     return request("/auth/users", { method: "POST", body: JSON.stringify(payload) });
@@ -200,6 +212,57 @@ export const api = {
     return request(`/projects?page=${page}&page_size=${pageSize}`);
   },
 
+  listCourses(page = 1, pageSize = 200, search = "", activeOnly = false): Promise<Paginated<Course>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (search.trim()) query.set("search", search.trim());
+    if (activeOnly) query.set("active_only", "true");
+    return request(`/courses?${query.toString()}`);
+  },
+
+  createCourse(payload: { code: string; title: string; description?: string | null; is_active?: boolean; has_project_deadlines?: boolean; teacher_user_id?: string | null }): Promise<Course> {
+    return request("/courses", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateCourse(courseId: string, payload: { code?: string; title?: string; description?: string | null; is_active?: boolean; has_project_deadlines?: boolean; teacher_user_id?: string | null }): Promise<Course> {
+    return request(`/courses/${courseId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  addCourseTeachingAssistant(courseId: string, userId: string): Promise<Course> {
+    return request(`/courses/${courseId}/teaching-assistants`, { method: "POST", body: JSON.stringify({ user_id: userId }) });
+  },
+
+  removeCourseTeachingAssistant(courseId: string, userId: string): Promise<Course> {
+    return request(`/courses/${courseId}/teaching-assistants/${userId}`, { method: "DELETE" });
+  },
+
+  createCourseMaterial(courseId: string, payload: {
+    material_type?: string;
+    title: string;
+    content_markdown?: string | null;
+    external_url?: string | null;
+    sort_order?: number;
+  }): Promise<CourseMaterial> {
+    return request(`/courses/${courseId}/materials`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateCourseMaterial(courseId: string, materialId: string, payload: {
+    material_type?: string;
+    title?: string;
+    content_markdown?: string | null;
+    external_url?: string | null;
+    sort_order?: number;
+  }): Promise<CourseMaterial> {
+    return request(`/courses/${courseId}/materials/${materialId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteCourseMaterial(courseId: string, materialId: string): Promise<void> {
+    return request(`/courses/${courseId}/materials/${materialId}`, { method: "DELETE" });
+  },
+
+  deleteCourse(courseId: string): Promise<void> {
+    return request(`/courses/${courseId}`, { method: "DELETE" });
+  },
+
   createProject(payload: {
     code: string;
     title: string;
@@ -209,6 +272,10 @@ export const api = {
     reporting_dates?: string[];
     language?: string;
     project_mode?: string;
+    project_kind?: string;
+    teaching_course_id?: string | null;
+    teaching_academic_year?: string | null;
+    teaching_term?: string | null;
     coordinator_partner_id?: string | null;
     principal_investigator_id?: string | null;
     proposal_template_id?: string | null;
@@ -234,6 +301,10 @@ export const api = {
       duration_months?: number;
       reporting_dates?: string[];
       language?: string;
+      project_kind?: string;
+      teaching_course_id?: string | null;
+      teaching_academic_year?: string | null;
+      teaching_term?: string | null;
       coordinator_partner_id?: string | null;
       principal_investigator_id?: string | null;
       proposal_template_id?: string | null;
@@ -248,6 +319,162 @@ export const api = {
 
   deleteProject(projectId: string): Promise<void> {
     return request(`/projects/${projectId}`, { method: "DELETE" });
+  },
+
+  getTeachingWorkspace(projectId: string): Promise<TeachingWorkspace> {
+    return request(`/projects/${projectId}/teaching`);
+  },
+
+  updateTeachingProfile(projectId: string, payload: {
+    course_id?: string | null;
+    academic_year?: string | null;
+    term?: string | null;
+    functional_objectives_markdown?: string | null;
+    specifications_markdown?: string | null;
+    responsible_user_id?: string | null;
+    status?: string;
+    health?: string;
+    reporting_cadence_days?: number;
+    final_grade?: number | null;
+  }): Promise<TeachingProjectProfile> {
+    return request(`/projects/${projectId}/teaching/profile`, { method: "PUT", body: JSON.stringify(payload) });
+  },
+
+  createTeachingStudent(projectId: string, payload: { full_name: string; email?: string | null }): Promise<TeachingProjectStudent> {
+    return request(`/projects/${projectId}/teaching/students`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTeachingStudent(projectId: string, studentId: string, payload: { full_name?: string; email?: string | null }): Promise<TeachingProjectStudent> {
+    return request(`/projects/${projectId}/teaching/students/${studentId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTeachingStudent(projectId: string, studentId: string): Promise<void> {
+    return request(`/projects/${projectId}/teaching/students/${studentId}`, { method: "DELETE" });
+  },
+
+  createTeachingArtifact(projectId: string, payload: {
+    artifact_type: string;
+    label: string;
+    required?: boolean;
+    status?: string;
+    document_key?: string | null;
+    external_url?: string | null;
+    notes?: string | null;
+    submitted_at?: string | null;
+  }): Promise<TeachingProjectArtifact> {
+    return request(`/projects/${projectId}/teaching/artifacts`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTeachingArtifact(projectId: string, artifactId: string, payload: {
+    artifact_type?: string;
+    label?: string;
+    required?: boolean;
+    status?: string;
+    document_key?: string | null;
+    external_url?: string | null;
+    notes?: string | null;
+    submitted_at?: string | null;
+  }): Promise<TeachingProjectArtifact> {
+    return request(`/projects/${projectId}/teaching/artifacts/${artifactId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTeachingArtifact(projectId: string, artifactId: string): Promise<void> {
+    return request(`/projects/${projectId}/teaching/artifacts/${artifactId}`, { method: "DELETE" });
+  },
+
+  createTeachingProgressReport(projectId: string, payload: {
+    report_date?: string | null;
+    meeting_date?: string | null;
+    work_done_markdown?: string;
+    next_steps_markdown?: string;
+    blocker_updates?: Array<{ id?: string | null; title: string; description?: string | null; severity?: string; status?: string }>;
+    supervisor_feedback_markdown?: string | null;
+    attachment_document_keys?: string[];
+    transcript_document_keys?: string[];
+    submitted_at?: string | null;
+  }): Promise<TeachingProgressReport> {
+    return request(`/projects/${projectId}/teaching/progress-reports`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTeachingProgressReport(projectId: string, reportId: string, payload: {
+    report_date?: string | null;
+    meeting_date?: string | null;
+    work_done_markdown?: string;
+    next_steps_markdown?: string;
+    blocker_updates?: Array<{ id?: string | null; title: string; description?: string | null; severity?: string; status?: string }>;
+    supervisor_feedback_markdown?: string | null;
+    attachment_document_keys?: string[];
+    transcript_document_keys?: string[];
+    submitted_at?: string | null;
+  }): Promise<TeachingProgressReport> {
+    return request(`/projects/${projectId}/teaching/progress-reports/${reportId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTeachingProgressReport(projectId: string, reportId: string): Promise<void> {
+    return request(`/projects/${projectId}/teaching/progress-reports/${reportId}`, { method: "DELETE" });
+  },
+
+  createTeachingMilestone(projectId: string, payload: {
+    kind: string;
+    label: string;
+    due_at?: string | null;
+    completed_at?: string | null;
+    status?: string;
+  }): Promise<TeachingProjectMilestone> {
+    return request(`/projects/${projectId}/teaching/milestones`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTeachingMilestone(projectId: string, milestoneId: string, payload: {
+    kind?: string;
+    label?: string;
+    due_at?: string | null;
+    completed_at?: string | null;
+    status?: string;
+  }): Promise<TeachingProjectMilestone> {
+    return request(`/projects/${projectId}/teaching/milestones/${milestoneId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTeachingMilestone(projectId: string, milestoneId: string): Promise<void> {
+    return request(`/projects/${projectId}/teaching/milestones/${milestoneId}`, { method: "DELETE" });
+  },
+
+  createTeachingBlocker(projectId: string, payload: {
+    title: string;
+    description?: string | null;
+    severity?: string;
+    status?: string;
+    detected_from?: string | null;
+    opened_at?: string | null;
+    resolved_at?: string | null;
+  }): Promise<TeachingProjectBlocker> {
+    return request(`/projects/${projectId}/teaching/blockers`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTeachingBlocker(projectId: string, blockerId: string, payload: {
+    title?: string;
+    description?: string | null;
+    severity?: string;
+    status?: string;
+    detected_from?: string | null;
+    opened_at?: string | null;
+    resolved_at?: string | null;
+  }): Promise<TeachingProjectBlocker> {
+    return request(`/projects/${projectId}/teaching/blockers/${blockerId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTeachingBlocker(projectId: string, blockerId: string): Promise<void> {
+    return request(`/projects/${projectId}/teaching/blockers/${blockerId}`, { method: "DELETE" });
+  },
+
+  upsertTeachingAssessment(projectId: string, payload: {
+    grade?: number | null;
+    strengths_markdown?: string | null;
+    weaknesses_markdown?: string | null;
+    grading_rationale_markdown?: string | null;
+    grader_user_id?: string | null;
+    graded_at?: string | null;
+  }): Promise<TeachingProjectAssessment> {
+    return request(`/projects/${projectId}/teaching/assessment`, { method: "PUT", body: JSON.stringify(payload) });
   },
 
   createPartner(projectId: string, payload: { short_name: string; legal_name: string; partner_type?: string; country?: string; expertise?: string }): Promise<Partner> {

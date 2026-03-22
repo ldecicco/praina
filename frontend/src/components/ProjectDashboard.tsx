@@ -151,7 +151,7 @@ export function ProjectDashboard({ selectedProjectId, project, onNavigate, onPro
 
   useAutoRefresh(() => {
     if (selectedProjectId) {
-      void loadHealth(selectedProjectId, healthScopeType, healthScopeRefId);
+      void loadHealth(healthScopeType, healthScopeRefId);
     }
   });
 

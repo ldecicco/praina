@@ -10,9 +10,152 @@ export type Project = {
   status: string;
   language: string;
   project_mode: "proposal" | "execution";
+  project_kind: "funded" | "research" | "teaching" | string;
   coordinator_partner_id: string | null;
   principal_investigator_id: string | null;
   proposal_template_id: string | null;
+};
+
+export type Course = {
+  id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  is_active: boolean;
+  has_project_deadlines: boolean;
+  teacher: CourseStaffUser | null;
+  teaching_assistants: CourseStaffUser[];
+  materials: CourseMaterial[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type CourseStaffUser = {
+  user_id: string;
+  display_name: string;
+  email: string;
+};
+
+export type CourseMaterial = {
+  id: string;
+  course_id: string;
+  material_type: string;
+  title: string;
+  content_markdown: string | null;
+  external_url: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProjectProfile = {
+  id: string;
+  project_id: string;
+  course_id: string | null;
+  course_code: string | null;
+  course_title: string | null;
+  academic_year: string | null;
+  term: string | null;
+  functional_objectives_markdown: string | null;
+  specifications_markdown: string | null;
+  responsible_user_id: string | null;
+  responsible_user: CourseStaffUser | null;
+  status: string;
+  health: string;
+  reporting_cadence_days: number;
+  final_grade: number | null;
+  finalized_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProjectStudent = {
+  id: string;
+  project_id: string;
+  full_name: string;
+  email: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProjectArtifact = {
+  id: string;
+  project_id: string;
+  artifact_type: string;
+  label: string;
+  required: boolean;
+  status: string;
+  document_key: string | null;
+  external_url: string | null;
+  notes: string | null;
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProgressReport = {
+  id: string;
+  project_id: string;
+  report_date: string | null;
+  meeting_date: string | null;
+  work_done_markdown: string;
+  next_steps_markdown: string;
+  blockers: TeachingProjectBlocker[];
+  supervisor_feedback_markdown: string | null;
+  attachment_document_keys: string[];
+  transcript_document_keys: string[];
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProjectMilestone = {
+  id: string;
+  project_id: string;
+  kind: string;
+  label: string;
+  due_at: string | null;
+  completed_at: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProjectAssessment = {
+  id: string;
+  project_id: string;
+  grade: number | null;
+  strengths_markdown: string | null;
+  weaknesses_markdown: string | null;
+  grading_rationale_markdown: string | null;
+  grader_user_id: string | null;
+  graded_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingProjectBlocker = {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  severity: string;
+  status: string;
+  detected_from: string | null;
+  opened_at: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeachingWorkspace = {
+  profile: TeachingProjectProfile;
+  students: TeachingProjectStudent[];
+  artifacts: TeachingProjectArtifact[];
+  progress_reports: TeachingProgressReport[];
+  milestones: TeachingProjectMilestone[];
+  blockers: TeachingProjectBlocker[];
+  assessment: TeachingProjectAssessment | null;
 };
 
 export type Partner = {
@@ -418,6 +561,8 @@ export type AuthUser = {
   display_name: string;
   platform_role: "super_admin" | "user" | string;
   is_active: boolean;
+  can_access_research: boolean;
+  can_access_teaching: boolean;
   temporary_password?: string | null;
   job_title: string | null;
   organization: string | null;

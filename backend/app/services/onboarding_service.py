@@ -16,11 +16,13 @@ from app.core.config import settings
 from app.core.security import hash_password
 from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount
 from app.models.audit import AuditEvent
+from app.models.course import Course, CourseTeachingAssistant
 from app.models.organization import PartnerOrganization, TeamMember
 from app.models.document import ProjectDocument
-from app.models.project import Project, ProjectMode, ProjectStatus
+from app.models.project import Project, ProjectKind, ProjectMode, ProjectStatus
 from app.models.proposal import ProjectProposalSection
 from app.models.proposal_image import ProposalImage
+from app.models.teaching import TeachingProjectProfile
 from app.models.work import (
     Deliverable,
     DeliverableWorkflowStatus,
@@ -93,6 +95,7 @@ class OnboardingService:
             duration_months=effective_duration,
             reporting_dates=[item.isoformat() for item in reporting_dates],
             project_mode=payload.project_mode,
+            project_kind=payload.project_kind,
             language=payload.language,
             coordinator_partner_id=payload.coordinator_partner_id,
             principal_investigator_id=payload.principal_investigator_id,
@@ -100,6 +103,20 @@ class OnboardingService:
         )
         self.db.add(project)
         self._safe_flush("Project code must be unique in the platform.")
+        if payload.project_kind == ProjectKind.teaching.value:
+            if payload.teaching_course_id:
+                course = self.db.scalar(select(Course).where(Course.id == payload.teaching_course_id))
+                if not course:
+                    raise NotFoundError("Course not found.")
+            self.db.add(
+                TeachingProjectProfile(
+                    project_id=project.id,
+                    course_id=payload.teaching_course_id,
+                    academic_year=payload.teaching_academic_year,
+                    term=payload.teaching_term,
+                )
+            )
+            self._safe_flush("Teaching project profile creation failed.")
         if actor_user_id:
             membership = ProjectMembership(
                 project_id=project.id,
@@ -190,6 +207,33 @@ class OnboardingService:
             project.proposal_template_id = update_data["proposal_template_id"]
         if "project_mode" in update_data:
             project.project_mode = update_data["project_mode"]
+        if "project_kind" in update_data:
+            project.project_kind = update_data["project_kind"]
+            if update_data["project_kind"] == ProjectKind.teaching.value:
+                existing_profile = self.db.scalar(
+                    select(TeachingProjectProfile).where(TeachingProjectProfile.project_id == project.id)
+                )
+                if not existing_profile:
+                    self.db.add(TeachingProjectProfile(project_id=project.id))
+        teaching_profile = self.db.scalar(
+            select(TeachingProjectProfile).where(TeachingProjectProfile.project_id == project.id)
+        )
+        if "teaching_course_id" in update_data or "teaching_academic_year" in update_data or "teaching_term" in update_data:
+            if project.project_kind != ProjectKind.teaching.value:
+                raise ValidationError("Teaching course fields can only be set for teaching projects.")
+            if not teaching_profile:
+                teaching_profile = TeachingProjectProfile(project_id=project.id)
+                self.db.add(teaching_profile)
+            if "teaching_course_id" in update_data:
+                if update_data["teaching_course_id"]:
+                    course = self.db.scalar(select(Course).where(Course.id == update_data["teaching_course_id"]))
+                    if not course:
+                        raise NotFoundError("Course not found.")
+                teaching_profile.course_id = update_data["teaching_course_id"]
+            if "teaching_academic_year" in update_data:
+                teaching_profile.academic_year = update_data["teaching_academic_year"]
+            if "teaching_term" in update_data:
+                teaching_profile.term = update_data["teaching_term"]
 
         self._safe_flush("Project update failed due to a data conflict.")
         self._log_event(
@@ -1011,6 +1055,8 @@ class OnboardingService:
         self,
         user_id: uuid.UUID,
         platform_role: str,
+        can_access_research: bool,
+        can_access_teaching: bool,
         status: ProjectStatus | None,
         search: str | None,
         page: int,
@@ -1018,7 +1064,24 @@ class OnboardingService:
     ) -> tuple[list[Project], int]:
         stmt = select(Project)
         if platform_role != PlatformRole.super_admin.value:
-            stmt = stmt.join(ProjectMembership, ProjectMembership.project_id == Project.id).where(ProjectMembership.user_id == user_id)
+            stmt = (
+                stmt.outerjoin(ProjectMembership, ProjectMembership.project_id == Project.id)
+                .outerjoin(TeachingProjectProfile, TeachingProjectProfile.project_id == Project.id)
+                .outerjoin(Course, Course.id == TeachingProjectProfile.course_id)
+                .outerjoin(CourseTeachingAssistant, CourseTeachingAssistant.course_id == Course.id)
+                .where(
+                    (ProjectMembership.user_id == user_id)
+                    | (Course.teacher_user_id == user_id)
+                    | (CourseTeachingAssistant.user_id == user_id)
+                )
+                .distinct()
+            )
+        if not can_access_research and can_access_teaching:
+            stmt = stmt.where(Project.project_kind == ProjectKind.teaching.value)
+        elif can_access_research and not can_access_teaching:
+            stmt = stmt.where(Project.project_kind != ProjectKind.teaching.value)
+        elif not can_access_research and not can_access_teaching:
+            stmt = stmt.where(False)
         if status:
             stmt = stmt.where(Project.status == status)
         if search:
@@ -1925,6 +1988,7 @@ class OnboardingService:
             "baseline_version": project.baseline_version,
             "status": project.status.value if isinstance(project.status, ProjectStatus) else str(project.status),
             "project_mode": project.project_mode,
+            "project_kind": getattr(project, "project_kind", ProjectKind.funded.value),
             "coordinator_partner_id": str(project.coordinator_partner_id) if project.coordinator_partner_id else None,
             "principal_investigator_id": str(project.principal_investigator_id) if project.principal_investigator_id else None,
             "proposal_template_id": str(project.proposal_template_id) if project.proposal_template_id else None,

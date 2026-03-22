@@ -140,14 +140,14 @@ All modals use the same structure:
   <div className="modal-card settings-modal-card">
     <div className="modal-head">
       <h3>Title</h3>
-      <button className="ghost" onClick={onClose}>Close</button>
+      <div className="modal-head-actions">
+        <button>Save</button>
+        <button className="ghost docs-action-btn" onClick={onClose} title="Close">X</button>
+      </div>
     </div>
     <div className="form-grid">
       <label>Field <input /></label>
       <label className="full-span">Wide field <textarea /></label>
-    </div>
-    <div className="row-actions">
-      <button disabled={busy}>Save</button>
     </div>
   </div>
 </div>
@@ -157,6 +157,8 @@ All modals use the same structure:
 - `.settings-modal-card` for wider forms: `min(960px, 100%)`
 - `.form-grid` is a 2-column CSS grid; use `.full-span` or `.wide` for spanning both columns
 - Modal overlay: semi-transparent black backdrop with centered card
+- Use an icon-only `X` close button in the modal header, with `ghost docs-action-btn`
+- Put primary modal actions next to the close button in the header when the workflow benefits from immediate save/confirm actions
 
 ---
 

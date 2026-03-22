@@ -32,6 +32,8 @@ class AuthService:
             display_name=display_name.strip(),
             platform_role=PlatformRole.user.value,
             is_active=True,
+            can_access_research=True,
+            can_access_teaching=True,
         )
         self.db.add(user)
         try:
@@ -53,6 +55,8 @@ class AuthService:
         password: str | None = None,
         platform_role: str = PlatformRole.user.value,
         is_active: bool = True,
+        can_access_research: bool = True,
+        can_access_teaching: bool = True,
     ) -> tuple[UserAccount, str]:
         self._assert_super_admin(actor_user_id)
         normalized_email = email.strip().lower()
@@ -78,6 +82,8 @@ class AuthService:
             display_name=cleaned_name,
             platform_role=normalized_role,
             is_active=is_active,
+            can_access_research=can_access_research,
+            can_access_teaching=can_access_teaching,
         )
         self.db.add(user)
         try:
@@ -225,6 +231,8 @@ class AuthService:
         display_name: str | None = None,
         platform_role: str | None = None,
         is_active: bool | None = None,
+        can_access_research: bool | None = None,
+        can_access_teaching: bool | None = None,
     ) -> UserAccount:
         self._assert_super_admin(actor_user_id)
         user = self.db.get(UserAccount, target_user_id)
@@ -244,6 +252,10 @@ class AuthService:
             user.platform_role = normalized
         if is_active is not None:
             user.is_active = is_active
+        if can_access_research is not None:
+            user.can_access_research = can_access_research
+        if can_access_teaching is not None:
+            user.can_access_teaching = can_access_teaching
 
         self.db.commit()
         self.db.refresh(user)

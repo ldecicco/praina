@@ -1,5 +1,6 @@
 from app.models.calendar_integration import CalendarIntegration, CalendarProvider, CalendarSyncStatus
 from app.models.calendar_import import CalendarImportBatch
+from app.models.course import Course, CourseTeachingAssistant
 from app.models.health_issue_state import ProjectHealthIssueState
 from app.models.health_snapshot import ProjectHealthSnapshot
 from app.models.action_item import ActionItemPriority, ActionItemSource, ActionItemStatus, MeetingActionItem
@@ -11,7 +12,7 @@ from app.models.document import DocumentChunk, DocumentScope, DocumentStatus, Pr
 from app.models.meeting import MeetingChunk, MeetingRecord, MeetingSourceType
 from app.models.notification import Notification, NotificationChannel, NotificationStatus
 from app.models.organization import PartnerOrganization, TeamMember
-from app.models.project import Project, ProjectStatus
+from app.models.project import Project, ProjectKind, ProjectStatus
 from app.models.project_inbox import ProjectInboxItem, ProjectInboxPriority, ProjectInboxSource, ProjectInboxStatus
 from app.models.proposal import (
     ProposalCallLibraryEntry,
@@ -49,6 +50,23 @@ from app.models.research import (
     ResearchNote,
     ResearchReference,
 )
+from app.models.teaching import (
+    TeachingArtifactStatus,
+    TeachingArtifactType,
+    TeachingBlockerSeverity,
+    TeachingBlockerStatus,
+    TeachingChunk,
+    TeachingMilestoneStatus,
+    TeachingProgressReport,
+    TeachingProjectArtifact,
+    TeachingProjectAssessment,
+    TeachingProjectBlocker,
+    TeachingProjectHealth,
+    TeachingProjectMilestone,
+    TeachingProjectProfile,
+    TeachingProjectStatus,
+    TeachingProjectStudent,
+)
 from app.models.work import Deliverable, DeliverableWorkflowStatus, Milestone, ProjectRisk, RiskLevel, RiskStatus, Task, WorkExecutionStatus, WorkPackage
 
 __all__ = [
@@ -56,6 +74,8 @@ __all__ = [
     "CalendarImportBatch",
     "CalendarProvider",
     "CalendarSyncStatus",
+    "Course",
+    "CourseTeachingAssistant",
     "ActionItemPriority",
     "ActionItemSource",
     "ActionItemStatus",
@@ -90,6 +110,7 @@ __all__ = [
     "ProjectChatRoomMember",
     "PartnerOrganization",
     "Project",
+    "ProjectKind",
     "ProjectInboxItem",
     "ProjectInboxPriority",
     "ProjectInboxSource",
@@ -133,4 +154,19 @@ __all__ = [
     "ResearchCollectionMember",
     "ResearchNote",
     "ResearchReference",
+    "TeachingArtifactStatus",
+    "TeachingArtifactType",
+    "TeachingBlockerSeverity",
+    "TeachingBlockerStatus",
+    "TeachingChunk",
+    "TeachingMilestoneStatus",
+    "TeachingProgressReport",
+    "TeachingProjectArtifact",
+    "TeachingProjectAssessment",
+    "TeachingProjectBlocker",
+    "TeachingProjectHealth",
+    "TeachingProjectMilestone",
+    "TeachingProjectProfile",
+    "TeachingProjectStatus",
+    "TeachingProjectStudent",
 ]

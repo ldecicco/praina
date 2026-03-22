@@ -37,7 +37,7 @@ import { api } from "../lib/api";
 import { ProposalCollabProvider, collabFieldName, isCollabDocEmpty } from "../lib/collab";
 import type { AuthUser, ProposalReviewFinding } from "../types";
 
-type EditorMode = "write" | "markdown" | "preview";
+type EditorMode = "write" | "markdown";
 const PROPOSAL_COLLAB_ENABLED = import.meta.env.VITE_ENABLE_PROPOSAL_COLLAB !== "0";
 type CollabPresenceUser = {
   clientId: number;
@@ -51,6 +51,7 @@ type Props = {
   value: string;
   placeholder: string;
   onChange: (value: string, options?: { remote?: boolean }) => void;
+  toolbarLabel?: string;
   projectId?: string;
   sectionId?: string;
   hasCollabState?: boolean;
@@ -183,6 +184,7 @@ export function ProposalRichEditor({
   value,
   placeholder,
   onChange,
+  toolbarLabel,
   projectId,
   sectionId,
   hasCollabState = false,
@@ -494,20 +496,15 @@ export function ProposalRichEditor({
       >
         Markdown
       </button>
-      <button
-        type="button"
-        className={`delivery-tab ${mode === "preview" ? "active" : ""}`}
-        onClick={() => setMode("preview")}
-      >
-        Preview
-      </button>
     </div>
   );
 
   return (
     <div className="proposal-editor-shell">
       <div className="proposal-editor-toolbar meetings-toolbar">
-        <div className="meetings-filter-group">
+        <div className="proposal-editor-toolbar-main">
+          {toolbarLabel ? <strong className="proposal-editor-toolbar-label">{toolbarLabel}</strong> : null}
+          <div className="meetings-filter-group">
           {modeTabs}
           {mode === "write" ? (
             <>
@@ -708,6 +705,7 @@ export function ProposalRichEditor({
               ) : null}
             </>
           ) : null}
+          </div>
         </div>
       </div>
 
@@ -843,11 +841,6 @@ export function ProposalRichEditor({
         </div>
       ) : null}
 
-      {mode === "preview" ? (
-        <div className="proposal-editor-stage proposal-editor-preview chat-markdown">
-          {value.trim() ? renderMarkdown(value) : <p>No content</p>}
-        </div>
-      ) : null}
     </div>
   );
 }

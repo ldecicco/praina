@@ -21,6 +21,7 @@ import {
   faUserShield,
   faFileLines,
   faFlask,
+  faGraduationCap,
   faUsers,
   faWrench,
 } from "@fortawesome/free-solid-svg-icons";
@@ -43,6 +44,8 @@ import { ProjectSearch } from "./components/ProjectSearch";
 import { ProposalSubmissionWorkspace } from "./components/ProposalSubmissionWorkspace";
 import { ProjectTodos } from "./components/ProjectTodos";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
+import { TeachingCoursesWorkspace } from "./components/TeachingCoursesWorkspace";
+import { TeachingWorkspace } from "./components/TeachingWorkspace";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { ProjectSettingsModal } from "./components/ProjectSettingsModal";
 import { UserProfileModal } from "./components/UserProfileModal";
@@ -52,7 +55,7 @@ import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
 import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief } from "./types";
 
-type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research";
+type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses";
 const ASSISTANT_PENDING_PROMPT_KEY = "assistant_pending_prompt";
 const ACTIVE_PROJECT_KEY = "active_project_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
@@ -77,6 +80,7 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
 };
 
 export default function App() {
+  const [platformSection, setPlatformSection] = useState<"research" | "teaching">("research");
   const [view, setView] = useState<View>("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
   const [authTokens, setAuthTokens] = useState<AuthTokens | null>(null);
@@ -219,7 +223,11 @@ export default function App() {
 
   function handleProjectCreated(project: Project) {
     setSelectedProjectId(project.id);
-    if (project.project_mode === "proposal") {
+    if (project.project_kind === "teaching") {
+      setPlatformSection("teaching");
+      setView("teaching");
+    } else if (project.project_mode === "proposal") {
+      setPlatformSection("research");
       setView("call");
     }
     if (typeof window !== "undefined") {
@@ -230,6 +238,7 @@ export default function App() {
 
   function handleProjectUpdated(project: Project) {
     setSelectedProjectId(project.id);
+    setPlatformSection(project.project_kind === "teaching" ? "teaching" : "research");
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
     }
@@ -250,6 +259,10 @@ export default function App() {
 
   function handleSelectProject(projectId: string) {
     setSelectedProjectId(projectId);
+    const selected = projects.find((project) => project.id === projectId);
+    if (selected) {
+      setPlatformSection(selected.project_kind === "teaching" ? "teaching" : "research");
+    }
     if (typeof window !== "undefined") {
       if (projectId) window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
       else window.sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
@@ -311,6 +324,20 @@ export default function App() {
   const activeProject = projects.find((project) => project.id === selectedProjectId) ?? null;
 
   useEffect(() => {
+    if (view === "courses" || view === "teaching") {
+      setPlatformSection("teaching");
+      return;
+    }
+    if (view === "research" || view === "call" || view === "proposal" || view === "submission") {
+      setPlatformSection("research");
+      return;
+    }
+    if (activeProject) {
+      setPlatformSection(activeProject.project_kind === "teaching" ? "teaching" : "research");
+    }
+  }, [activeProject?.id, activeProject?.project_kind, view]);
+
+  useEffect(() => {
     function handleProjectDataChanged(event: Event) {
       const detail = (event as CustomEvent<{ projectId?: string }>).detail;
       if (!detail?.projectId || detail.projectId !== selectedProjectId) return;
@@ -338,12 +365,21 @@ export default function App() {
   // Redirect to dashboard if on an execution-only view while in proposal mode
   useEffect(() => {
     if (activeProject?.project_mode === "proposal") {
-      const proposalViews = new Set<View>(["my-work", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "admin"]);
+      const proposalViews = new Set<View>(["my-work", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "admin"]);
       if (!proposalViews.has(view)) {
         setView("dashboard");
       }
     }
   }, [activeProject?.project_mode, view]);
+
+  useEffect(() => {
+    if (activeProject?.project_kind === "teaching") {
+      const teachingViews = new Set<View>(["my-work", "courses", "dashboard", "teaching", "project-chat", "assistant", "todos", "search", "admin"]);
+      if (!teachingViews.has(view)) {
+        setView("teaching");
+      }
+    }
+  }, [activeProject?.project_kind, view]);
 
   const viewTitle: Record<View, string> = {
     "my-work": "My Work",
@@ -363,14 +399,16 @@ export default function App() {
     todos: "Todos",
     search: "Search",
     research: "Research",
+    teaching: "Teaching",
+    courses: "Courses",
     admin: "Admin",
   };
 
   const ALWAYS_VISIBLE_VIEWS = new Set<View>(["my-work"]);
   const PROPOSAL_MODE_VIEWS = new Set<View>(["dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "search", "admin"]);
+  const TEACHING_MODE_VIEWS = new Set<View>(["courses", "teaching", "project-chat", "assistant", "todos", "search", "admin"]);
   const EXECUTION_MODE_HIDDEN = new Set<View>(["proposal"]);
-
-  const allNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
+  const researchNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
     { id: "dashboard", label: "Dashboard", icon: faChartLine },
     { id: "call", label: "Call", icon: faLayerGroup },
     { id: "proposal", label: "Proposal", icon: faFileLines },
@@ -388,15 +426,66 @@ export default function App() {
     { id: "research", label: "Research", icon: faFlask },
     { id: "search", label: "Search", icon: faSearch },
   ];
+  const teachingNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
+    { id: "courses", label: "Courses", icon: faBook },
+    { id: "teaching", label: "Projects", icon: faGraduationCap },
+    { id: "project-chat", label: "Chat", icon: faUsers },
+    { id: "assistant", label: "Assistant", icon: faComments },
+    { id: "todos", label: "Todos", icon: faSquareCheck },
+    { id: "search", label: "Search", icon: faSearch },
+  ];
 
   const isProposalMode = activeProject?.project_mode === "proposal";
+  const isTeachingProject = activeProject?.project_kind === "teaching";
+  const visibleProjects = projects.filter((project) =>
+    platformSection === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
+  );
   const currentUser = me?.user ?? null;
+  const canAccessResearch = currentUser?.can_access_research ?? false;
+  const canAccessTeaching = currentUser?.can_access_teaching ?? false;
+  const availableSections = [
+    ...(canAccessResearch ? (["research"] as const) : []),
+    ...(canAccessTeaching ? (["teaching"] as const) : []),
+  ];
   const isSuperAdmin = currentUser?.platform_role === "super_admin";
   const proposalCallReady = Boolean(proposalCallBrief?.source_call_id || proposalCallBrief?.call_title?.trim());
-  const navItems = (isProposalMode
-    ? allNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || PROPOSAL_MODE_VIEWS.has(item.id))
-    : allNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || !EXECUTION_MODE_HIDDEN.has(item.id))
-  );
+  const navSections =
+    platformSection === "teaching"
+      ? canAccessTeaching
+        ? [
+            {
+              label: "Teaching",
+              items: teachingNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || TEACHING_MODE_VIEWS.has(item.id)),
+            },
+          ]
+        : []
+      : canAccessResearch
+        ? [
+            {
+              label: "Research",
+              items: researchNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
+            },
+          ]
+        : [];
+
+  function switchPlatformSection(nextSection: "research" | "teaching") {
+    if ((nextSection === "research" && !canAccessResearch) || (nextSection === "teaching" && !canAccessTeaching)) {
+      return;
+    }
+    setPlatformSection(nextSection);
+    if (nextSection === "teaching") {
+      setView("courses");
+      return;
+    }
+    const researchProject = projects.find((project) => project.project_kind !== "teaching");
+    if (activeProject?.project_kind === "teaching" && researchProject) {
+      setSelectedProjectId(researchProject.id);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, researchProject.id);
+      }
+    }
+    setView("research");
+  }
   function isNavItemDisabled(itemId: View): boolean {
     if (!isProposalMode) return false;
     if (!proposalCallReady) return itemId !== "call";
@@ -404,7 +493,8 @@ export default function App() {
   }
 
   const canCreateProjects = currentUser
-    ? currentUser.platform_role === "super_admin" || currentUser.platform_role === "project_creator"
+    ? (currentUser.platform_role === "super_admin" || currentUser.platform_role === "project_creator") &&
+      (platformSection === "teaching" ? canAccessTeaching : canAccessResearch)
     : false;
   const userInitials =
     currentUser?.display_name
@@ -413,6 +503,19 @@ export default function App() {
       .slice(0, 2)
       .join("") || "U";
   const activeProjectMonth = currentProjectMonth(activeProject?.start_date);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (platformSection === "research" && !canAccessResearch && canAccessTeaching) {
+      setPlatformSection("teaching");
+      setView("courses");
+      return;
+    }
+    if (platformSection === "teaching" && !canAccessTeaching && canAccessResearch) {
+      setPlatformSection("research");
+      setView("research");
+    }
+  }, [currentUser?.id, platformSection, canAccessResearch, canAccessTeaching]);
 
   if (!currentUser || !authTokens) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
@@ -438,25 +541,30 @@ export default function App() {
         </div>
 
         <nav className="app-nav">
-          {navItems.map((item) => {
-            const active = view === item.id;
-            const disabled = isNavItemDisabled(item.id);
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className={`app-nav-item ${active ? "active" : ""} ${disabled ? "disabled" : ""}`}
-                onClick={() => !disabled && setView(item.id)}
-                title={sidebarCollapsed ? item.label : undefined}
-                disabled={disabled}
-              >
-                <span className="app-nav-icon">
-                  <FontAwesomeIcon icon={item.icon} />
-                </span>
-                {!sidebarCollapsed ? <span className="app-nav-label">{item.label}</span> : null}
-              </button>
-            );
-          })}
+          {navSections.map((section) => (
+            <div key={section.label} className="app-nav-section">
+              {!sidebarCollapsed ? <div className="app-nav-section-label">{section.label}</div> : null}
+              {section.items.map((item) => {
+                const active = view === item.id;
+                const disabled = isNavItemDisabled(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`app-nav-item ${active ? "active" : ""} ${disabled ? "disabled" : ""}`}
+                    onClick={() => !disabled && setView(item.id)}
+                    title={sidebarCollapsed ? item.label : undefined}
+                    disabled={disabled}
+                  >
+                    <span className="app-nav-icon">
+                      <FontAwesomeIcon icon={item.icon} />
+                    </span>
+                    {!sidebarCollapsed ? <span className="app-nav-label">{item.label}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="sidebar-footer" />
@@ -466,6 +574,33 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-left">
             <h2>{viewTitle[view]}</h2>
+            {availableSections.length > 1 ? (
+              <div className="topbar-section-toggle" role="tablist" aria-label="Platform section">
+                {canAccessResearch ? (
+                  <button
+                    type="button"
+                    className={`topbar-section-btn ${platformSection === "research" ? "active" : ""}`}
+                    onClick={() => switchPlatformSection("research")}
+                    aria-pressed={platformSection === "research"}
+                  >
+                    <FontAwesomeIcon icon={faFlask} />
+                    <span>Research</span>
+                  </button>
+                ) : null}
+                {canAccessTeaching ? (
+                  <button
+                    type="button"
+                    className={`topbar-section-btn ${platformSection === "teaching" ? "active" : ""}`}
+                    onClick={() => switchPlatformSection("teaching")}
+                    aria-pressed={platformSection === "teaching"}
+                  >
+                    <FontAwesomeIcon icon={faGraduationCap} />
+                    <span>Teaching</span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {view !== "courses" ? (
             <div className="topbar-project-dropdown" ref={projectDropdownRef}>
               <button
                 type="button"
@@ -476,7 +611,7 @@ export default function App() {
                   <>
                     <strong>{activeProject.code}</strong>
                     <span>{activeProject.title}</span>
-                    <span className="topbar-project-status">{isProposalMode ? "Proposal" : activeProjectMonth ? `M${activeProjectMonth}` : "-"}</span>
+                    <span className="topbar-project-status">{isProposalMode ? "Proposal" : isTeachingProject ? "Teaching" : activeProjectMonth ? `M${activeProjectMonth}` : "-"}</span>
                   </>
                 ) : (
                   <span className="topbar-project-placeholder">Select project</span>
@@ -485,7 +620,7 @@ export default function App() {
               </button>
               {projectDropdownOpen ? (
                 <div className="topbar-project-menu">
-                  {projects.map((project) => (
+                  {visibleProjects.map((project) => (
                     <button
                       key={project.id}
                       type="button"
@@ -500,18 +635,19 @@ export default function App() {
                       <span className="topbar-option-status">{project.status}</span>
                     </button>
                   ))}
-                  {projects.length === 0 ? (
+                  {visibleProjects.length === 0 ? (
                     <div className="topbar-project-empty">No projects</div>
                   ) : null}
                 </div>
               ) : null}
             </div>
+            ) : null}
             <button
               type="button"
               className="ghost icon-only"
               title="Project settings"
               onClick={() => setProjectSettingsOpen(true)}
-              disabled={!activeProject}
+              disabled={!activeProject || view === "courses"}
             >
               <FontAwesomeIcon icon={faGear} />
             </button>
@@ -679,6 +815,15 @@ export default function App() {
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
           {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} /> : null}
+          {view === "courses" ? <TeachingCoursesWorkspace currentUser={currentUser} onOpenProject={(projectId) => { handleSelectProject(projectId); setView("teaching"); }} /> : null}
+          {view === "teaching" ? (
+            <TeachingWorkspace
+              selectedProjectId={selectedProjectId}
+              project={activeProject}
+              currentUser={currentUser}
+              onOpenAssistant={openAssistantWithPrompt}
+            />
+          ) : null}
           {view === "search" ? <ProjectSearch selectedProjectId={selectedProjectId} onNavigate={(v, id) => handleNavigate(v as View, id)} /> : null}
           {view === "admin" ? <AdminPanel selectedProjectId={selectedProjectId} currentUser={currentUser} /> : null}
         </main>
@@ -693,6 +838,7 @@ export default function App() {
       />
       <NewProjectModal
         open={newProjectOpen}
+        platformSection={platformSection}
         onClose={() => setNewProjectOpen(false)}
         onProjectCreated={handleProjectCreated}
       />

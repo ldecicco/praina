@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import FocusLock from "react-focus-lock";
 
 import { api } from "../lib/api";
-import type { AuthUser, Member, Partner, Project, ProjectValidationResult } from "../types";
+import type { AuthUser, Course, Member, Partner, Project, ProjectValidationResult } from "../types";
 import { MarkAsFundedModal } from "./MarkAsFundedModal";
 
 type Props = {
@@ -36,6 +36,10 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
   const [principalInvestigatorId, setPrincipalInvestigatorId] = useState("");
   const [partners, setPartners] = useState<Partner[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [teachingCourseId, setTeachingCourseId] = useState("");
+  const [teachingAcademicYear, setTeachingAcademicYear] = useState("");
+  const [teachingTerm, setTeachingTerm] = useState("");
   const [status, setStatus] = useState("");
   const [fundedModalOpen, setFundedModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"archive" | "delete" | null>(null);
@@ -53,6 +57,10 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
       setPrincipalInvestigatorId("");
       setPartners([]);
       setMembers([]);
+      setCourses([]);
+      setTeachingCourseId("");
+      setTeachingAcademicYear("");
+      setTeachingTerm("");
       setValidation(null);
       setError("");
       setStatus("");
@@ -73,10 +81,18 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
     Promise.all([
       api.listPartners(project.id),
       api.listMembers(project.id),
+      api.listCourses(1, 200, "", true),
+      project.project_kind === "teaching" ? api.getTeachingWorkspace(project.id) : Promise.resolve(null),
     ])
-      .then(([partnersRes, membersRes]) => {
+      .then(([partnersRes, membersRes, coursesRes, teachingWorkspace]) => {
         setPartners(partnersRes.items);
         setMembers(membersRes.items);
+        setCourses(coursesRes.items);
+        if (teachingWorkspace) {
+          setTeachingCourseId(teachingWorkspace.profile.course_id || "");
+          setTeachingAcademicYear(teachingWorkspace.profile.academic_year || "");
+          setTeachingTerm(teachingWorkspace.profile.term || "");
+        }
       })
       .catch(() => {});
   }, [project, open]);
@@ -105,9 +121,12 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
         title,
         description: description || null,
         start_date: startDate,
-        duration_months: durationMonths,
+        duration_months: project.project_kind === "teaching" ? undefined : durationMonths,
         reporting_dates: parseReportingDates(reportingDatesText),
         language,
+        teaching_course_id: project.project_kind === "teaching" ? teachingCourseId || null : undefined,
+        teaching_academic_year: project.project_kind === "teaching" ? teachingAcademicYear || null : undefined,
+        teaching_term: project.project_kind === "teaching" ? teachingTerm || null : undefined,
         coordinator_partner_id: coordinatorPartnerId || null,
         principal_investigator_id: principalInvestigatorId || null,
       });
@@ -212,16 +231,18 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
                   Start Date
                   <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
                 </label>
-                <label>
-                  Duration Months
-                  <input
-                    type="number"
-                    min={1}
-                    max={120}
-                    value={durationMonths}
-                    onChange={(event) => setDurationMonths(Number(event.target.value) || 1)}
-                  />
-                </label>
+                {project.project_kind !== "teaching" ? (
+                  <label>
+                    Duration Months
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={durationMonths}
+                      onChange={(event) => setDurationMonths(Number(event.target.value) || 1)}
+                    />
+                  </label>
+                ) : null}
                 <label className="full-span">
                   Reporting Dates
                   <input
@@ -246,6 +267,25 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
                     <option value="pt">Portuguese</option>
                   </select>
                 </label>
+                {project.project_kind === "teaching" ? (
+                  <>
+                    <label>
+                      Course
+                      <select value={teachingCourseId} onChange={(event) => setTeachingCourseId(event.target.value)}>
+                        <option value="">Select</option>
+                        {courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      Academic Year
+                      <input value={teachingAcademicYear} onChange={(event) => setTeachingAcademicYear(event.target.value)} placeholder="2025/2026" />
+                    </label>
+                    <label>
+                      Term
+                      <input value={teachingTerm} onChange={(event) => setTeachingTerm(event.target.value)} placeholder="spring" />
+                    </label>
+                  </>
+                ) : null}
                 {partners.length > 0 ? (
                   <>
                     <label>

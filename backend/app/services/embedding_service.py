@@ -14,6 +14,7 @@ from app.models.document import DocumentChunk, ProjectDocument
 from app.models.meeting import MeetingChunk, MeetingRecord
 from app.models.proposal import ProposalCallLibraryDocumentChunk
 from app.models.research import ResearchChunk
+from app.models.teaching import TeachingChunk
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,20 @@ class EmbeddingService:
             return 0
         return self._embed_chunk_batch(chunks)
 
+    def embed_teaching_chunks(self, project_id: uuid.UUID) -> int:
+        """Generate and store embeddings for all unembedded teaching chunks in a project."""
+        chunks = self.db.scalars(
+            select(TeachingChunk)
+            .where(
+                TeachingChunk.project_id == project_id,
+                TeachingChunk.embedding.is_(None),
+            )
+            .order_by(TeachingChunk.source_type, TeachingChunk.source_id, TeachingChunk.chunk_index)
+        ).all()
+        if not chunks:
+            return 0
+        return self._embed_chunk_batch(chunks)
+
     def embed_call_document_chunks(self, document_id: uuid.UUID) -> int:
         chunks = self.db.scalars(
             select(ProposalCallLibraryDocumentChunk)
@@ -98,7 +113,13 @@ class EmbeddingService:
         doc_count = self._embed_unembedded_document_chunks(project_id)
         meeting_count = self._embed_unembedded_meeting_chunks(project_id)
         research_count = self.embed_research_chunks(project_id)
-        return {"documents": doc_count, "meetings": meeting_count, "research": research_count}
+        teaching_count = self.embed_teaching_chunks(project_id)
+        return {
+            "documents": doc_count,
+            "meetings": meeting_count,
+            "research": research_count,
+            "teaching": teaching_count,
+        }
 
     def _embed_unembedded_document_chunks(self, project_id: uuid.UUID) -> int:
         chunks = self.db.scalars(

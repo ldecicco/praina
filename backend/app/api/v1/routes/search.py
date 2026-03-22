@@ -38,13 +38,14 @@ class EmbedBackfillResponse(BaseModel):
     documents: int
     meetings: int
     research: int = 0
+    teaching: int = 0
 
 
 @router.get("/{project_id}/search", response_model=SearchResponse)
 def search_project(
     project_id: uuid.UUID,
     q: str = Query(..., min_length=1, description="Search query"),
-    scope: str | None = Query(None, description="'documents', 'meetings', or None for both"),
+    scope: str | None = Query(None, description="'documents', 'meetings', 'research', 'teaching', or None for all"),
     top_k: int = Query(5, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),

@@ -202,6 +202,8 @@ def update_user(
             display_name=payload.display_name,
             platform_role=payload.platform_role,
             is_active=payload.is_active,
+            can_access_research=payload.can_access_research,
+            can_access_teaching=payload.can_access_teaching,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -225,6 +227,8 @@ def create_user(
             password=payload.password,
             platform_role=payload.platform_role,
             is_active=payload.is_active,
+            can_access_research=payload.can_access_research,
+            can_access_teaching=payload.can_access_teaching,
         )
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -260,6 +264,8 @@ def _user_read(user: UserAccount, temporary_password: str | None = None) -> User
         display_name=user.display_name,
         platform_role=user.platform_role,
         is_active=user.is_active,
+        can_access_research=user.can_access_research,
+        can_access_teaching=user.can_access_teaching,
         temporary_password=temporary_password,
         job_title=user.job_title,
         organization=user.organization,

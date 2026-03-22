@@ -26,6 +26,8 @@ class UserRead(BaseModel):
     display_name: str
     platform_role: str
     is_active: bool
+    can_access_research: bool
+    can_access_teaching: bool
     temporary_password: str | None = None
     job_title: str | None = None
     organization: str | None = None
@@ -89,6 +91,8 @@ class UserAdminUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
     platform_role: str | None = None
     is_active: bool | None = None
+    can_access_research: bool | None = None
+    can_access_teaching: bool | None = None
 
 
 class UserAdminCreateRequest(BaseModel):
@@ -97,3 +101,5 @@ class UserAdminCreateRequest(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=128)
     platform_role: str = Field(default="user")
     is_active: bool = True
+    can_access_research: bool = True
+    can_access_teaching: bool = True

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.auth import UserAccount
+from app.models.project import ProjectKind
 from app.models.organization import TeamMember
 from app.models.project import ProjectStatus
 from app.schemas.audit import AuditEventListRead, AuditEventRead
@@ -73,6 +74,11 @@ def create_project(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only super_admin or project_creator can create projects.",
         )
+    requested_kind = (payload.project_kind or ProjectKind.funded.value).strip().lower()
+    if requested_kind == ProjectKind.teaching.value and not current_user.can_access_teaching:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot access Teaching.")
+    if requested_kind != ProjectKind.teaching.value and not current_user.can_access_research:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot access Research.")
     service = OnboardingService(db)
     try:
         project = service.create_project(payload, actor_user_id=current_user.id)
@@ -105,6 +111,8 @@ def list_projects(
     items, total = service.list_projects_for_user(
         user_id=current_user.id,
         platform_role=current_user.platform_role,
+        can_access_research=current_user.can_access_research,
+        can_access_teaching=current_user.can_access_teaching,
         status=status_filter,
         search=search,
         page=page,
@@ -1070,6 +1078,7 @@ def _project_read(project) -> ProjectRead:
         status=project.status.value if isinstance(project.status, ProjectStatus) else str(project.status),
         language=getattr(project, "language", "en_GB") or "en_GB",
         project_mode=getattr(project, "project_mode", "execution") or "execution",
+        project_kind=getattr(project, "project_kind", "funded") or "funded",
         coordinator_partner_id=str(project.coordinator_partner_id) if project.coordinator_partner_id else None,
         principal_investigator_id=str(project.principal_investigator_id) if project.principal_investigator_id else None,
         proposal_template_id=str(project.proposal_template_id) if getattr(project, "proposal_template_id", None) else None,

@@ -15,12 +15,18 @@ class ProjectCreate(BaseModel):
     reporting_dates: list[date] = Field(default_factory=list)
     language: str = "en_GB"
     project_mode: str = "execution"
+    project_kind: str = "funded"
+    teaching_course_id: UUID | None = None
+    teaching_academic_year: str | None = Field(default=None, max_length=32)
+    teaching_term: str | None = Field(default=None, max_length=32)
     coordinator_partner_id: UUID | None = None
     principal_investigator_id: UUID | None = None
     proposal_template_id: UUID | None = None
 
     @model_validator(mode="after")
     def check_execution_fields(self):
+        if self.project_kind == "teaching" and self.project_mode != "execution":
+            raise ValueError("teaching projects currently support execution mode only")
         if self.project_mode == "execution":
             if self.start_date is None:
                 raise ValueError("start_date is required for execution mode projects")
@@ -38,6 +44,10 @@ class ProjectUpdate(BaseModel):
     reporting_dates: list[date] | None = None
     language: str | None = None
     project_mode: str | None = None
+    project_kind: str | None = None
+    teaching_course_id: UUID | None = None
+    teaching_academic_year: str | None = Field(default=None, max_length=32)
+    teaching_term: str | None = Field(default=None, max_length=32)
     coordinator_partner_id: UUID | None = None
     principal_investigator_id: UUID | None = None
     proposal_template_id: UUID | None = None
@@ -55,6 +65,7 @@ class ProjectRead(BaseModel):
     status: str
     language: str
     project_mode: str = "execution"
+    project_kind: str = "funded"
     coordinator_partner_id: str | None = None
     principal_investigator_id: str | None = None
     proposal_template_id: str | None = None

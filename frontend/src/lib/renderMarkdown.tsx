@@ -46,7 +46,11 @@ function renderInlineMarkdown(text: string): ReactNode[] {
 }
 
 export function renderMarkdown(content: string): ReactNode[] {
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const normalizedContent = content
+    .replace(/\r\n/g, "\n")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\u00a0/g, " ");
+  const lines = normalizedContent.split("\n");
   const output: ReactNode[] = [];
   let i = 0;
   let key = 0;
@@ -118,7 +122,11 @@ export function renderMarkdown(content: string): ReactNode[] {
       paragraphLines.push(lines[i]);
       i += 1;
     }
-    output.push(<p key={`markdown-block-${key++}`}>{renderInlineMarkdown(paragraphLines.join(" "))}</p>);
+    const paragraphText = paragraphLines.join(" ").trim();
+    if (!paragraphText) {
+      continue;
+    }
+    output.push(<p key={`markdown-block-${key++}`}>{renderInlineMarkdown(paragraphText)}</p>);
   }
 
   return output;

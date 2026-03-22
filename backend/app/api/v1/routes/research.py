@@ -45,7 +45,13 @@ from app.schemas.research import (
 from app.services.onboarding_service import NotFoundError, ValidationError
 from app.services.research_service import ResearchService
 
-router = APIRouter()
+
+def require_research_access(current_user: UserAccount = Depends(get_current_user)) -> None:
+    if not current_user.can_access_research:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot access Research.")
+
+
+router = APIRouter(dependencies=[Depends(require_research_access)])
 
 
 def _resolve_member_id(db: Session, user: UserAccount, project_id: uuid.UUID) -> uuid.UUID | None:

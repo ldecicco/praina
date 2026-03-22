@@ -4,7 +4,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBoxArchive, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
-import type { AuthUser, MembershipWithUser, Project, ProposalCallLibraryEntry } from "../types";
+import type { AuthUser, Course, MembershipWithUser, Project, ProposalCallLibraryEntry } from "../types";
 
 type Props = {
   selectedProjectId: string;
@@ -13,16 +13,18 @@ type Props = {
 
 const PLATFORM_ROLES = ["super_admin", "project_creator", "user"];
 const PROJECT_ROLES = ["project_owner", "project_manager", "partner_lead", "partner_member", "reviewer", "viewer"];
-type AdminTab = "projects" | "calls" | "users" | "memberships";
+type AdminTab = "projects" | "courses" | "calls" | "users" | "memberships";
 
 export function AdminPanel({ selectedProjectId, currentUser }: Props) {
   const [tab, setTab] = useState<AdminTab>("projects");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
   const [calls, setCalls] = useState<ProposalCallLibraryEntry[]>([]);
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [memberships, setMemberships] = useState<MembershipWithUser[]>([]);
   const [search, setSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
+  const [courseSearch, setCourseSearch] = useState("");
   const [callSearch, setCallSearch] = useState("");
   const [assignUserId, setAssignUserId] = useState("");
   const [assignRole, setAssignRole] = useState("viewer");
@@ -32,11 +34,22 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
   const [newPassword, setNewPassword] = useState("");
   const [newPlatformRole, setNewPlatformRole] = useState("user");
   const [newIsActive, setNewIsActive] = useState(true);
+  const [newCanAccessResearch, setNewCanAccessResearch] = useState(true);
+  const [newCanAccessTeaching, setNewCanAccessTeaching] = useState(true);
+  const [courseEditorOpen, setCourseEditorOpen] = useState(false);
+  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
+  const [courseCode, setCourseCode] = useState("");
+  const [courseTitle, setCourseTitle] = useState("");
+  const [courseDescription, setCourseDescription] = useState("");
+  const [courseIsActive, setCourseIsActive] = useState(true);
+  const [courseHasProjectDeadlines, setCourseHasProjectDeadlines] = useState(true);
+  const [courseTeacherUserId, setCourseTeacherUserId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [projectAction, setProjectAction] = useState<{ mode: "archive" | "delete"; project: Project } | null>(null);
   const [callAction, setCallAction] = useState<ProposalCallLibraryEntry | null>(null);
+  const [courseAction, setCourseAction] = useState<Course | null>(null);
 
   const isSuperAdmin = currentUser.platform_role === "super_admin";
   const usersById = useMemo(() => Object.fromEntries(users.map((user) => [user.id, user])), [users]);
@@ -44,10 +57,13 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
     () => projects.find((item) => item.id === selectedProjectId) || null,
     [projects, selectedProjectId]
   );
+  const activeCourses = useMemo(() => courses.filter((item) => item.is_active).length, [courses]);
+  const inactiveCourses = courses.length - activeCourses;
 
   useEffect(() => {
     if (!isSuperAdmin) return;
     void loadProjects();
+    void loadCourses();
     void loadCalls();
     void loadUsers();
   }, [isSuperAdmin]);
@@ -107,6 +123,19 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
     }
   }
 
+  async function loadCourses(currentSearch = "") {
+    try {
+      setBusy(true);
+      setError("");
+      const response = await api.listCourses(1, 200, currentSearch, false);
+      setCourses(response.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load courses.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function loadProjectMemberships(projectId: string) {
     try {
       setBusy(true);
@@ -122,7 +151,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
 
   async function handleUserPatch(
     userId: string,
-    payload: { display_name?: string; platform_role?: string; is_active?: boolean }
+    payload: { display_name?: string; platform_role?: string; is_active?: boolean; can_access_research?: boolean; can_access_teaching?: boolean }
   ) {
     try {
       setError("");
@@ -165,6 +194,8 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
         password: newPassword || undefined,
         platform_role: newPlatformRole,
         is_active: newIsActive,
+        can_access_research: newCanAccessResearch,
+        can_access_teaching: newCanAccessTeaching,
       });
       setUsers((prev) => [created, ...prev]);
       setCreateUserOpen(false);
@@ -173,6 +204,8 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
       setNewPassword("");
       setNewPlatformRole("user");
       setNewIsActive(true);
+      setNewCanAccessResearch(true);
+      setNewCanAccessTeaching(true);
       setAssignUserId(created.id);
       setStatus(
         created.temporary_password
@@ -232,6 +265,79 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
     }
   }
 
+  function openCreateCourse() {
+    setEditingCourseId(null);
+    setCourseCode("");
+    setCourseTitle("");
+    setCourseDescription("");
+    setCourseIsActive(true);
+    setCourseHasProjectDeadlines(true);
+    setCourseTeacherUserId("");
+    setCourseEditorOpen(true);
+  }
+
+  function openEditCourse(course: Course) {
+    setEditingCourseId(course.id);
+    setCourseCode(course.code);
+    setCourseTitle(course.title);
+    setCourseDescription(course.description || "");
+    setCourseIsActive(course.is_active);
+    setCourseHasProjectDeadlines(course.has_project_deadlines);
+    setCourseTeacherUserId(course.teacher?.user_id || "");
+    setCourseEditorOpen(true);
+  }
+
+  async function handleSaveCourse() {
+    try {
+      setBusy(true);
+      setError("");
+      if (editingCourseId) {
+        const updated = await api.updateCourse(editingCourseId, {
+          code: courseCode,
+          title: courseTitle,
+          description: courseDescription || null,
+          is_active: courseIsActive,
+          has_project_deadlines: courseHasProjectDeadlines,
+          teacher_user_id: courseTeacherUserId || null,
+        });
+        setCourses((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+        setStatus("Course saved.");
+      } else {
+        const created = await api.createCourse({
+          code: courseCode,
+          title: courseTitle,
+          description: courseDescription || null,
+          is_active: courseIsActive,
+          has_project_deadlines: courseHasProjectDeadlines,
+          teacher_user_id: courseTeacherUserId || null,
+        });
+        setCourses((prev) => [created, ...prev]);
+        setStatus("Course created.");
+      }
+      setCourseEditorOpen(false);
+      setEditingCourseId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save course.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteCourse(course: Course) {
+    try {
+      setBusy(true);
+      setError("");
+      await api.deleteCourse(course.id);
+      setCourses((prev) => prev.filter((item) => item.id !== course.id));
+      setCourseAction(null);
+      setStatus("Course deleted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete course.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!isSuperAdmin) {
     return (
       <section className="panel">
@@ -241,13 +347,15 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
   }
 
   return (
-    <section className="panel">
+    <section className="panel admin-panel-shell">
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="success">{status}</p> : null}
 
-      <div className="setup-summary-bar">
+      <div className="setup-summary-bar admin-summary-bar">
         <div className="setup-summary-stats">
           <span>{projects.length} projects</span>
+          <span className="setup-summary-sep" />
+          <span>{courses.length} courses</span>
           <span className="setup-summary-sep" />
           <span>{users.length} users</span>
           <span className="setup-summary-sep" />
@@ -259,6 +367,10 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
         <button type="button" className={`delivery-tab ${tab === "projects" ? "active" : ""}`} onClick={() => setTab("projects")}>
           Projects
           <span className="delivery-tab-count">{projects.length}</span>
+        </button>
+        <button type="button" className={`delivery-tab ${tab === "courses" ? "active" : ""}`} onClick={() => setTab("courses")}>
+          Courses
+          <span className="delivery-tab-count">{courses.length}</span>
         </button>
         <button type="button" className={`delivery-tab ${tab === "users" ? "active" : ""}`} onClick={() => setTab("users")}>
           Users
@@ -374,6 +486,82 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
           </div>
         ) : null}
 
+        {tab === "courses" ? (
+          <div className="admin-course-layout">
+            <div className="admin-course-metrics">
+              <div className="admin-metric-card">
+                <span className="admin-metric-label">Courses</span>
+                <strong>{courses.length}</strong>
+              </div>
+              <div className="admin-metric-card">
+                <span className="admin-metric-label">Active</span>
+                <strong>{activeCourses}</strong>
+              </div>
+              <div className="admin-metric-card">
+                <span className="admin-metric-label">Inactive</span>
+                <strong>{inactiveCourses}</strong>
+              </div>
+            </div>
+
+            <div className="card admin-course-card">
+              <div className="workpane-head">
+                <h3>Courses</h3>
+                <div className="workpane-actions">
+                  <div className="admin-search">
+                    <input value={courseSearch} onChange={(event) => setCourseSearch(event.target.value)} placeholder="Search course" />
+                    <button type="button" className="ghost" disabled={busy} onClick={() => void loadCourses(courseSearch)}>
+                      Search
+                    </button>
+                  </div>
+                  <button type="button" onClick={openCreateCourse}>
+                    <FontAwesomeIcon icon={faPlus} />
+                    <span>New Course</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="simple-table-wrap">
+                <table className="simple-table compact-table">
+                  <thead>
+                    <tr>
+                      <th>Code</th>
+                      <th>Title</th>
+                      <th>Teacher</th>
+                      <th>Deadlines</th>
+                      <th>Active</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {courses.map((course) => (
+                      <tr key={course.id}>
+                        <td><strong>{course.code}</strong></td>
+                        <td>{course.title}</td>
+                        <td>{course.teacher?.display_name || "-"}</td>
+                        <td><span className="chip small">{course.has_project_deadlines ? "enabled" : "disabled"}</span></td>
+                        <td><span className="chip small">{course.is_active ? "active" : "inactive"}</span></td>
+                        <td>
+                          <div className="table-row-actions">
+                            <button type="button" className="ghost small" onClick={() => openEditCourse(course)}>
+                              Edit
+                            </button>
+                            <button type="button" className="ghost small danger" onClick={() => setCourseAction(course)}>
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {courses.length === 0 ? (
+                      <tr><td colSpan={6}>No courses found.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {tab === "users" ? (
           <div className="card">
             <div className="workpane-head">
@@ -399,6 +587,8 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                     <th>Email</th>
                     <th>Name</th>
                     <th>Platform Role</th>
+                    <th>Research</th>
+                    <th>Teaching</th>
                     <th>Active</th>
                   </tr>
                 </thead>
@@ -432,6 +622,20 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                       <td>
                         <input
                           type="checkbox"
+                          checked={user.can_access_research}
+                          onChange={(event) => void handleUserPatch(user.id, { can_access_research: event.target.checked })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={user.can_access_teaching}
+                          onChange={(event) => void handleUserPatch(user.id, { can_access_teaching: event.target.checked })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
                           checked={user.is_active}
                           onChange={(event) => void handleUserPatch(user.id, { is_active: event.target.checked })}
                         />
@@ -440,7 +644,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                   ))}
                   {users.length === 0 ? (
                     <tr>
-                      <td colSpan={4}>No users found.</td>
+                      <td colSpan={6}>No users found.</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -564,6 +768,14 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                 <input type="checkbox" checked={newIsActive} onChange={(event) => setNewIsActive(event.target.checked)} />
                 <span>Active</span>
               </label>
+              <label className="checkbox-field">
+                <input type="checkbox" checked={newCanAccessResearch} onChange={(event) => setNewCanAccessResearch(event.target.checked)} />
+                <span>Research</span>
+              </label>
+              <label className="checkbox-field">
+                <input type="checkbox" checked={newCanAccessTeaching} onChange={(event) => setNewCanAccessTeaching(event.target.checked)} />
+                <span>Teaching</span>
+              </label>
             </div>
             <div className="row-actions">
               <button
@@ -575,6 +787,60 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
               </button>
             </div>
           </div>
+          </FocusLock>
+        </div>
+      ) : null}
+      {courseEditorOpen ? (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <FocusLock returnFocus>
+            <div className="modal-card admin-modal-card" onKeyDown={(e) => { if (e.key === "Enter" && !busy && courseCode.trim() && courseTitle.trim()) { e.preventDefault(); void handleSaveCourse(); } }}>
+              <div className="modal-head">
+                <h3>{editingCourseId ? "Edit Course" : "New Course"}</h3>
+                <button type="button" className="ghost" onClick={() => setCourseEditorOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Code
+                  <input value={courseCode} onChange={(event) => setCourseCode(event.target.value)} />
+                </label>
+                <label>
+                  Title
+                  <input value={courseTitle} onChange={(event) => setCourseTitle(event.target.value)} />
+                </label>
+                <label className="full-span">
+                  Teacher
+                  <select value={courseTeacherUserId} onChange={(event) => setCourseTeacherUserId(event.target.value)}>
+                    <option value="">Select</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>{user.display_name} · {user.email}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="full-span">
+                  Description
+                  <textarea rows={4} value={courseDescription} onChange={(event) => setCourseDescription(event.target.value)} />
+                </label>
+                <label className="checkbox-field">
+                  <input type="checkbox" checked={courseIsActive} onChange={(event) => setCourseIsActive(event.target.checked)} />
+                  <span>Active</span>
+                </label>
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={courseHasProjectDeadlines}
+                    onChange={(event) => setCourseHasProjectDeadlines(event.target.checked)}
+                  />
+                  <span>Projects Have Deadlines</span>
+                </label>
+              </div>
+              <div className="row-actions">
+                <button type="button" disabled={busy || !courseCode.trim() || !courseTitle.trim()} onClick={() => void handleSaveCourse()}>
+                  {editingCourseId ? "Save Course" : "Create Course"}
+                </button>
+              </div>
+            </div>
           </FocusLock>
         </div>
       ) : null}
@@ -605,6 +871,32 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                     : handleDeleteProject(projectAction.project))}
                 >
                   {projectAction.mode === "archive" ? "Archive" : "Delete"}
+                </button>
+              </div>
+            </div>
+          </FocusLock>
+        </div>
+      ) : null}
+      {courseAction ? (
+        <div className="modal-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setCourseAction(null); }}>
+          <FocusLock returnFocus>
+            <div className="modal-card project-confirm-card">
+              <div className="modal-head">
+                <h3>Delete Course</h3>
+                <button type="button" className="ghost" onClick={() => setCourseAction(null)}>
+                  Close
+                </button>
+              </div>
+              <div className="project-confirm-body">
+                <strong>{courseAction.code}</strong>
+                <span>{courseAction.title}</span>
+              </div>
+              <div className="row-actions">
+                <button type="button" className="ghost" onClick={() => setCourseAction(null)} disabled={busy}>
+                  Cancel
+                </button>
+                <button type="button" className="danger" disabled={busy} onClick={() => void handleDeleteCourse(courseAction)}>
+                  Delete
                 </button>
               </div>
             </div>

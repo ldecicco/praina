@@ -1,4 +1,4 @@
-"""Retrieval agent — hybrid TF-IDF + vector search over document and meeting chunks."""
+"""Retrieval agent — hybrid TF-IDF + vector search over project knowledge chunks."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.document import DocumentChunk, DocumentStatus, ProjectDocument
 from app.models.meeting import MeetingChunk, MeetingRecord
 from app.models.research import ResearchChunk, ResearchNote, ResearchReference
+from app.models.teaching import TeachingChunk
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ VECTOR_TOP_K_SCAN = 40
 
 @dataclass
 class RetrievalResult:
-    source_type: str  # "document", "meeting", "research_note", or "research_reference"
+    source_type: str
     source_id: str
     source_key: str
     title: str
@@ -69,33 +70,39 @@ class RetrievalAgent:
 
         # --- TF-IDF results ---
         tfidf_results: list[RetrievalResult] = []
-        if scope_filter != "meetings" and scope_filter != "research":
+        if scope_filter not in {"meetings", "research", "teaching"}:
             tfidf_results.extend(
                 self._search_documents(project_id, tokens, idf, entity_id, referenced_document_keys)
             )
-        if scope_filter != "documents" and scope_filter != "research":
+        if scope_filter not in {"documents", "research", "teaching"}:
             tfidf_results.extend(self._search_meeting_chunks(project_id, tokens, idf))
             tfidf_results.extend(self._search_raw_meetings(project_id, tokens, idf))
         if scope_filter is None or scope_filter == "research":
             tfidf_results.extend(self._search_research_chunks(project_id, tokens, idf))
+        if scope_filter is None or scope_filter == "teaching":
+            tfidf_results.extend(self._search_teaching_chunks(project_id, tokens, idf))
 
         # --- Vector results ---
         vector_results: list[RetrievalResult] = []
         query_embedding = self._get_query_embedding(query)
         if query_embedding is not None:
-            if scope_filter != "meetings" and scope_filter != "research":
+            if scope_filter not in {"meetings", "research", "teaching"}:
                 vector_results.extend(
                     self._vector_search_documents(
                         project_id, query_embedding, entity_id, referenced_document_keys
                     )
                 )
-            if scope_filter != "documents" and scope_filter != "research":
+            if scope_filter not in {"documents", "research", "teaching"}:
                 vector_results.extend(
                     self._vector_search_meetings(project_id, query_embedding)
                 )
             if scope_filter is None or scope_filter == "research":
                 vector_results.extend(
                     self._vector_search_research(project_id, query_embedding)
+                )
+            if scope_filter is None or scope_filter == "teaching":
+                vector_results.extend(
+                    self._vector_search_teaching(project_id, query_embedding)
                 )
 
         # --- Merge ---
@@ -377,6 +384,98 @@ class RetrievalAgent:
             )
         return results
 
+    def _search_teaching_chunks(
+        self,
+        project_id: uuid.UUID,
+        tokens: list[str],
+        idf: dict[str, float],
+    ) -> list[RetrievalResult]:
+        chunks = self.db.execute(
+            select(TeachingChunk)
+            .where(TeachingChunk.project_id == project_id)
+            .order_by(TeachingChunk.source_type.asc(), TeachingChunk.chunk_index.asc())
+            .limit(MAX_CHUNK_SCAN)
+        ).scalars().all()
+
+        results: list[RetrievalResult] = []
+        for chunk in chunks:
+            content = (chunk.content or "").lower()
+            if not content:
+                continue
+            score = self._tfidf_score(content, tokens, idf)
+            if score <= 0 and tokens:
+                continue
+
+            results.append(
+                RetrievalResult(
+                    source_type=self._teaching_result_type(chunk.source_type),
+                    source_id=str(chunk.source_id),
+                    source_key=f"teaching:{chunk.source_type}:{chunk.source_id}",
+                    title=self._teaching_chunk_title(chunk),
+                    version=1,
+                    chunk_index=chunk.chunk_index,
+                    content=chunk.content or "",
+                    score=score,
+                )
+            )
+        return results
+
+    def _vector_search_teaching(
+        self,
+        project_id: uuid.UUID,
+        query_embedding: list[float],
+    ) -> list[RetrievalResult]:
+        cosine_distance = TeachingChunk.embedding.cosine_distance(query_embedding)
+        rows = self.db.execute(
+            select(
+                TeachingChunk,
+                (1 - cosine_distance).label("similarity"),
+            )
+            .where(
+                TeachingChunk.project_id == project_id,
+                TeachingChunk.embedding.isnot(None),
+            )
+            .order_by(cosine_distance)
+            .limit(VECTOR_TOP_K_SCAN)
+        ).all()
+
+        results: list[RetrievalResult] = []
+        for chunk, similarity in rows:
+            results.append(
+                RetrievalResult(
+                    source_type=self._teaching_result_type(chunk.source_type),
+                    source_id=str(chunk.source_id),
+                    source_key=f"teaching:{chunk.source_type}:{chunk.source_id}",
+                    title=self._teaching_chunk_title(chunk),
+                    version=1,
+                    chunk_index=chunk.chunk_index,
+                    content=chunk.content or "",
+                    score=float(similarity),
+                )
+            )
+        return results
+
+    def _teaching_result_type(self, source_type: str) -> str:
+        normalized = (source_type or "").strip().lower()
+        if normalized == "profile":
+            return "teaching_profile"
+        if normalized == "artifact":
+            return "teaching_artifact"
+        if normalized == "blocker":
+            return "teaching_blocker"
+        if normalized == "progress_report":
+            return "teaching_progress"
+        if normalized == "course_material":
+            return "course_material"
+        return "teaching_record"
+
+    def _teaching_chunk_title(self, chunk: TeachingChunk) -> str:
+        source_type = (chunk.source_type or "").replace("_", " ").strip().title() or "Teaching"
+        first_line = (chunk.content or "").strip().splitlines()
+        if first_line:
+            return first_line[0][:160]
+        return source_type
+
     def _artifact_type_from_note_type(self, note_type: str) -> str:
         normalized = (note_type or "").strip().lower()
         if normalized == "discussion":
@@ -645,7 +744,7 @@ class RetrievalAgent:
         total_chunks = 0
         token_doc_freq: dict[str, int] = {t: 0 for t in tokens}
 
-        if scope_filter != "meetings":
+        if scope_filter not in {"meetings", "research", "teaching"}:
             doc_chunks = self.db.scalars(
                 select(DocumentChunk.content)
                 .join(ProjectDocument, DocumentChunk.document_id == ProjectDocument.id)
@@ -662,7 +761,7 @@ class RetrievalAgent:
                     if t in lower:
                         token_doc_freq[t] += 1
 
-        if scope_filter != "documents":
+        if scope_filter not in {"documents", "research", "teaching"}:
             meeting_chunks = self.db.scalars(
                 select(MeetingChunk.content)
                 .join(MeetingRecord, MeetingChunk.meeting_id == MeetingRecord.id)
@@ -670,6 +769,32 @@ class RetrievalAgent:
             ).all()
             total_chunks += len(meeting_chunks)
             for content in meeting_chunks:
+                lower = (content or "").lower()
+                for t in tokens:
+                    if t in lower:
+                        token_doc_freq[t] += 1
+
+        if scope_filter is None or scope_filter == "research":
+            research_chunks = self.db.scalars(
+                select(ResearchChunk.content)
+                .where(ResearchChunk.project_id == project_id)
+                .limit(MAX_CHUNK_SCAN)
+            ).all()
+            total_chunks += len(research_chunks)
+            for content in research_chunks:
+                lower = (content or "").lower()
+                for t in tokens:
+                    if t in lower:
+                        token_doc_freq[t] += 1
+
+        if scope_filter is None or scope_filter == "teaching":
+            teaching_chunks = self.db.scalars(
+                select(TeachingChunk.content)
+                .where(TeachingChunk.project_id == project_id)
+                .limit(MAX_CHUNK_SCAN)
+            ).all()
+            total_chunks += len(teaching_chunks)
+            for content in teaching_chunks:
                 lower = (content or "").lower()
                 for t in tokens:
                     if t in lower:

@@ -9,6 +9,7 @@
 - [Frontend IA (MVP)](/home/luca/dev/code/agentic-project-management/docs/frontend-ia-mvp.md)
 - [Frontend Component Contracts](/home/luca/dev/code/agentic-project-management/docs/frontend-component-contracts.md)
 - [MVP Sprint Plan](/home/luca/dev/code/agentic-project-management/docs/sprint-plan.md)
+- [Teaching Projects Plan](/home/luca/dev/code/praina/docs/teaching-projects-plan.md)
 
 Developer quick links:
 - [Root README](/home/luca/dev/code/agentic-project-management/README.md)

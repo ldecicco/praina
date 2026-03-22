@@ -32,6 +32,8 @@ class UserAccount(Base, IdMixin, TimestampMixin):
     display_name: Mapped[str] = mapped_column(String(120))
     platform_role: Mapped[str] = mapped_column(String(32), default=PlatformRole.user.value, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_access_research: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_access_teaching: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     job_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     organization: Mapped[str | None] = mapped_column(String(160), nullable=True)

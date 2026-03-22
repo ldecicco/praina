@@ -21,6 +21,12 @@ class ProjectMode(str, enum.Enum):
     execution = "execution"
 
 
+class ProjectKind(str, enum.Enum):
+    funded = "funded"
+    research = "research"
+    teaching = "teaching"
+
+
 class ProjectLanguage(str, enum.Enum):
     en_GB = "en_GB"
     en_US = "en_US"
@@ -43,6 +49,7 @@ class Project(Base, IdMixin, TimestampMixin):
     baseline_version: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[ProjectStatus] = mapped_column(Enum(ProjectStatus), default=ProjectStatus.draft, index=True)
     project_mode: Mapped[str] = mapped_column(String(16), default="execution")
+    project_kind: Mapped[str] = mapped_column(String(16), default=ProjectKind.funded.value, index=True)
     language: Mapped[str] = mapped_column(String(8), default="en_GB")
     coordinator_partner_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("partner_organizations.id", ondelete="SET NULL"), nullable=True

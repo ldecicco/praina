@@ -27,6 +27,7 @@ from app.models.teaching import (
 )
 from app.models.work import Deliverable, Milestone, Task, WorkPackage, deliverable_wps, milestone_wps
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
+from app.services.resources_service import ResourcesService
 
 MANAGE_ROOMS_ROLES = {ProjectRole.project_owner.value, ProjectRole.project_manager.value}
 READ_ROLES = {item.value for item in ProjectRole}
@@ -428,6 +429,7 @@ class ProjectChatService:
             ],
             "rooms_count": rooms_count,
             "documents": self._document_summary(project_id),
+            "resources": ResourcesService(self.db).project_resource_summary(project_id),
             "proposal_sections": self._proposal_summary(project_id, partner_by_id, members),
             "teaching_project": self._teaching_summary(project_id, members),
         }
@@ -451,6 +453,7 @@ class ProjectChatService:
             "language": project.language,
             "rooms_count": rooms_count,
             "documents": self._document_summary(project.id),
+            "resources": ResourcesService(self.db).project_resource_summary(project.id),
             "teaching_project": self._teaching_summary(project.id, []),
         }
 
@@ -565,56 +568,27 @@ class ProjectChatService:
         }
 
     def retrieve_citations(self, project_id: uuid.UUID, prompt: str) -> list[dict]:
+        from app.agents.retrieval_agent import RetrievalAgent
+
         doc_refs = self.extract_document_references(project_id, prompt)
-        tokens = self._query_tokens(doc_refs["cleaned_prompt"])
-        rows = self.db.execute(
-            select(DocumentChunk, ProjectDocument)
-            .join(ProjectDocument, DocumentChunk.document_id == ProjectDocument.id)
-            .where(
-                ProjectDocument.project_id == project_id,
-                ProjectDocument.status == DocumentStatus.indexed.value,
-            )
-            .order_by(ProjectDocument.updated_at.desc(), DocumentChunk.chunk_index.asc())
-            .limit(MAX_CHUNK_SCAN)
-        ).all()
-        if not rows:
-            return []
-
-        referenced_keys = {str(item) for item in doc_refs["document_keys"]}
-        if referenced_keys:
-            rows = [
-                (chunk, document)
-                for chunk, document in rows
-                if str(document.document_key) in referenced_keys
-            ]
-            if not rows:
-                return []
-
-        ranked: list[tuple[int, DocumentChunk, ProjectDocument]] = []
-        for chunk, document in rows:
-            chunk_text = (chunk.content or "").lower()
-            if not chunk_text:
-                continue
-            score = sum(chunk_text.count(token) for token in tokens)
-            if score <= 0 and tokens:
-                continue
-            ranked.append((score, chunk, document))
-
-        if not ranked:
-            ranked = [(0, chunk, document) for chunk, document in rows[:MAX_CITATIONS]]
-
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        top = ranked[:MAX_CITATIONS]
+        agent = RetrievalAgent(self.db)
+        results = agent.retrieve(
+            query=str(doc_refs["cleaned_prompt"]),
+            project_id=project_id,
+            top_k=MAX_CITATIONS,
+            referenced_document_keys=[str(item) for item in doc_refs["document_keys"]] or None,
+        )
         return [
             {
-                "document_id": str(document.id),
-                "document_key": str(document.document_key),
-                "title": document.title,
-                "version": document.version,
-                "chunk_index": chunk.chunk_index,
-                "snippet": self._snippet(chunk.content),
+                "document_id": item.source_id,
+                "document_key": item.source_key,
+                "title": item.title,
+                "version": item.version,
+                "chunk_index": item.chunk_index,
+                "snippet": self._snippet(item.content),
+                "source_type": item.source_type,
             }
-            for _, chunk, document in top
+            for item in results
         ]
 
     def compose_fallback_reply(self, project_id: uuid.UUID, prompt: str, context: dict, citations: list[dict]) -> str:
@@ -646,6 +620,13 @@ class ProjectChatService:
             lines.append("I found relevant evidence in indexed documents.")
         else:
             lines.append("No indexed document excerpt matched this question yet.")
+        resources = context.get("resources")
+        if isinstance(resources, dict):
+            counts = resources.get("counts", {})
+            if isinstance(counts, dict) and counts.get("requirements", 0):
+                lines.append(
+                    f"Resources: {counts.get('requirements', 0)} requirements, {counts.get('active_bookings', 0)} active bookings, {counts.get('open_blockers', 0)} open equipment blockers."
+                )
         return "\n".join(lines)
 
     @staticmethod

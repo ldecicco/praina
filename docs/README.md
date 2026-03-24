@@ -10,6 +10,7 @@
 - [Frontend Component Contracts](/home/luca/dev/code/agentic-project-management/docs/frontend-component-contracts.md)
 - [MVP Sprint Plan](/home/luca/dev/code/agentic-project-management/docs/sprint-plan.md)
 - [Teaching Projects Plan](/home/luca/dev/code/praina/docs/teaching-projects-plan.md)
+- [Resources And Equipment Plan](/home/luca/dev/code/praina/docs/resources-equipment-plan.md)
 
 Developer quick links:
 - [Root README](/home/luca/dev/code/agentic-project-management/README.md)

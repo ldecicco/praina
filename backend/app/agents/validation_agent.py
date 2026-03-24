@@ -85,7 +85,7 @@ class ValidationAgent:
         ]
 
         prompt = self._build_review_prompt(context, existing_issues)
-        raw = self._llm._generate_with_ollama_chat(prompt, allow_compaction=True)
+        raw = self._llm._generate_text(prompt)
         if not raw:
             return []
         payload = self._llm._parse_json(raw)

@@ -44,6 +44,7 @@ import { ProjectSearch } from "./components/ProjectSearch";
 import { ProposalSubmissionWorkspace } from "./components/ProposalSubmissionWorkspace";
 import { ProjectTodos } from "./components/ProjectTodos";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
+import { ResourcesWorkspace } from "./components/ResourcesWorkspace";
 import { TeachingCoursesWorkspace } from "./components/TeachingCoursesWorkspace";
 import { TeachingWorkspace } from "./components/TeachingWorkspace";
 import { NewProjectModal } from "./components/NewProjectModal";
@@ -55,7 +56,7 @@ import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
 import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief } from "./types";
 
-type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses";
+type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources";
 const ASSISTANT_PENDING_PROMPT_KEY = "assistant_pending_prompt";
 const ACTIVE_PROJECT_KEY = "active_project_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
@@ -77,6 +78,7 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   research_collection: "research",
   research_reference: "research",
   research_note: "research",
+  resource_booking: "resources",
 };
 
 export default function App() {
@@ -278,6 +280,18 @@ export default function App() {
     } else if (targetView === "meetings" && entityId) {
       setPendingMeetingId(entityId);
     }
+    if (targetView !== "courses" && targetView !== "resources") {
+      const sectionProjects = projects.filter((project) =>
+        platformSection === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
+      );
+      const selected = projects.find((project) => project.id === selectedProjectId) ?? null;
+      const selectedMatchesSection = selected
+        ? (platformSection === "teaching" ? selected.project_kind === "teaching" : selected.project_kind !== "teaching")
+        : false;
+      if (!selectedMatchesSection && sectionProjects.length > 0) {
+        handleSelectProject(sectionProjects[0].id);
+      }
+    }
     setView(targetView);
   }
 
@@ -285,7 +299,7 @@ export default function App() {
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem(ASSISTANT_PENDING_PROMPT_KEY, prompt);
     }
-    setView("assistant");
+    handleNavigate("assistant");
   }
 
   function toggleSidebar() {
@@ -365,7 +379,7 @@ export default function App() {
   // Redirect to dashboard if on an execution-only view while in proposal mode
   useEffect(() => {
     if (activeProject?.project_mode === "proposal") {
-      const proposalViews = new Set<View>(["my-work", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "admin"]);
+      const proposalViews = new Set<View>(["my-work", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "resources", "admin"]);
       if (!proposalViews.has(view)) {
         setView("dashboard");
       }
@@ -374,9 +388,9 @@ export default function App() {
 
   useEffect(() => {
     if (activeProject?.project_kind === "teaching") {
-      const teachingViews = new Set<View>(["my-work", "courses", "dashboard", "teaching", "project-chat", "assistant", "todos", "search", "admin"]);
+      const teachingViews = new Set<View>(["my-work", "courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "admin"]);
       if (!teachingViews.has(view)) {
-        setView("teaching");
+        setView("courses");
       }
     }
   }, [activeProject?.project_kind, view]);
@@ -401,12 +415,13 @@ export default function App() {
     research: "Research",
     teaching: "Teaching",
     courses: "Courses",
+    resources: "Resources",
     admin: "Admin",
   };
 
   const ALWAYS_VISIBLE_VIEWS = new Set<View>(["my-work"]);
-  const PROPOSAL_MODE_VIEWS = new Set<View>(["dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "search", "admin"]);
-  const TEACHING_MODE_VIEWS = new Set<View>(["courses", "teaching", "project-chat", "assistant", "todos", "search", "admin"]);
+  const PROPOSAL_MODE_VIEWS = new Set<View>(["dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "search", "resources", "admin"]);
+  const TEACHING_MODE_VIEWS = new Set<View>(["courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "admin"]);
   const EXECUTION_MODE_HIDDEN = new Set<View>(["proposal"]);
   const researchNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
     { id: "dashboard", label: "Dashboard", icon: faChartLine },
@@ -424,11 +439,13 @@ export default function App() {
     { id: "documents", label: "Documents", icon: faBook },
     { id: "todos", label: "Todos", icon: faSquareCheck },
     { id: "research", label: "Research", icon: faFlask },
+    { id: "resources", label: "Resources", icon: faWrench },
     { id: "search", label: "Search", icon: faSearch },
   ];
   const teachingNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
     { id: "courses", label: "Courses", icon: faBook },
     { id: "teaching", label: "Projects", icon: faGraduationCap },
+    { id: "resources", label: "Resources", icon: faWrench },
     { id: "project-chat", label: "Chat", icon: faUsers },
     { id: "assistant", label: "Assistant", icon: faComments },
     { id: "todos", label: "Todos", icon: faSquareCheck },
@@ -552,7 +569,7 @@ export default function App() {
                     key={item.id}
                     type="button"
                     className={`app-nav-item ${active ? "active" : ""} ${disabled ? "disabled" : ""}`}
-                    onClick={() => !disabled && setView(item.id)}
+                    onClick={() => !disabled && handleNavigate(item.id)}
                     title={sidebarCollapsed ? item.label : undefined}
                     disabled={disabled}
                   >
@@ -600,7 +617,7 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
-            {view !== "courses" ? (
+            {view !== "courses" && view !== "resources" ? (
             <div className="topbar-project-dropdown" ref={projectDropdownRef}>
               <button
                 type="button"
@@ -647,7 +664,7 @@ export default function App() {
               className="ghost icon-only"
               title="Project settings"
               onClick={() => setProjectSettingsOpen(true)}
-              disabled={!activeProject || view === "courses"}
+              disabled={!activeProject || view === "courses" || view === "resources"}
             >
               <FontAwesomeIcon icon={faGear} />
             </button>
@@ -712,15 +729,16 @@ export default function App() {
                 </div>
               ) : null}
             </div>
-            <button
-              type="button"
-              className="ghost icon-only"
-              title="Admin Tools"
-              onClick={() => setView("admin")}
-              disabled={!isSuperAdmin}
-            >
-              <FontAwesomeIcon icon={faUserShield} />
-            </button>
+            {isSuperAdmin ? (
+              <button
+                type="button"
+                className="ghost icon-only"
+                title="Admin Tools"
+                onClick={() => setView("admin")}
+              >
+                <FontAwesomeIcon icon={faUserShield} />
+              </button>
+            ) : null}
             <div className="user-menu-wrapper" ref={userMenuRef}>
               <button type="button" className="user-badge" title={currentUser.display_name} onClick={() => setUserMenuOpen((prev) => !prev)}>
                 {currentUser.avatar_url ? (
@@ -815,6 +833,17 @@ export default function App() {
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
           {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} /> : null}
+          {view === "resources" ? (
+            <ResourcesWorkspace
+              currentUser={currentUser}
+              onOpenProject={(projectId) => {
+                handleSelectProject(projectId);
+                const nextProject = projects.find((item) => item.id === projectId);
+                if (nextProject?.project_kind === "teaching") setView("teaching");
+                else setView("dashboard");
+              }}
+            />
+          ) : null}
           {view === "courses" ? <TeachingCoursesWorkspace currentUser={currentUser} onOpenProject={(projectId) => { handleSelectProject(projectId); setView("teaching"); }} /> : null}
           {view === "teaching" ? (
             <TeachingWorkspace

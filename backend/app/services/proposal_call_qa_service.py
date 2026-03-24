@@ -8,11 +8,12 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.llm.factory import get_text_provider
+from app.llm.json_utils import parse_json_object
 from app.models.proposal import ProposalCallBrief, ProposalCallLibraryDocument, ProposalCallLibraryDocumentChunk
 from app.services.embedding_service import EmbeddingService
 from app.services.onboarding_service import NotFoundError, ValidationError
@@ -61,8 +62,7 @@ class CallCitation:
 class ProposalCallQAService:
     def __init__(self, db: Session):
         self.db = db
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
+        self.provider = get_text_provider()
         self.embedding_service = EmbeddingService(db)
 
     def answer_question(self, project_id: uuid.UUID, question: str) -> tuple[dict[str, Any], list[CallCitation]]:
@@ -359,40 +359,19 @@ Rules:
 
     def _chat_json(self, system: str, user: str) -> dict[str, Any]:
         try:
-            with httpx.Client(timeout=settings.call_qa_http_timeout_seconds) as client:
-                resp = client.post(
-                    f"{self.base_url}/api/chat",
-                    json={
-                        "model": self.model,
-                        "stream": False,
-                        "chat_template_kwargs": {
-                            "enable_thinking": settings.ollama_enable_thinking,
-                        },
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.TimeoutException as exc:
+            raw = self.provider.generate(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                timeout=settings.call_qa_http_timeout_seconds,
+            )
+        except TimeoutError as exc:
             raise ValidationError("Call QA timed out while generating the answer.") from exc
-        except httpx.HTTPError as exc:
+        except Exception as exc:
             raise ValidationError("Call QA request failed.") from exc
-        raw = str(data.get("message", {}).get("content", "")).strip()
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
-        try:
-            parsed = json.loads(raw or "{}")
-        except json.JSONDecodeError as exc:
-            raise ValidationError("Call QA returned invalid JSON.") from exc
-        if not isinstance(parsed, dict):
+        parsed = parse_json_object(raw)
+        if parsed is None:
             raise ValidationError("Call QA returned an invalid payload.")
         return parsed
 

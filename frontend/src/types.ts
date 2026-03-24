@@ -158,6 +158,141 @@ export type TeachingWorkspace = {
   assessment: TeachingProjectAssessment | null;
 };
 
+export type ResourceOwner = {
+  user_id: string;
+  display_name: string;
+  email: string;
+};
+
+export type Lab = {
+  id: string;
+  name: string;
+  building: string | null;
+  room: string | null;
+  notes: string | null;
+  responsible_user_id: string | null;
+  responsible: ResourceOwner | null;
+  is_active: boolean;
+  equipment_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LabClosure = {
+  id: string;
+  lab_id: string;
+  start_at: string;
+  end_at: string;
+  reason: string;
+  notes: string | null;
+  created_by_user_id: string | null;
+  cancelled_booking_count: number;
+  lab: Lab;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Equipment = {
+  id: string;
+  name: string;
+  category: string | null;
+  model: string | null;
+  serial_number: string | null;
+  description: string | null;
+  location: string | null;
+  lab_id: string | null;
+  lab: Lab | null;
+  owner_user_id: string | null;
+  owner: ResourceOwner | null;
+  status: string;
+  usage_mode: string;
+  access_notes: string | null;
+  booking_notes: string | null;
+  maintenance_notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EquipmentRequirement = {
+  id: string;
+  project_id: string;
+  equipment_id: string;
+  priority: string;
+  purpose: string;
+  notes: string | null;
+  created_by_user_id: string | null;
+  equipment: Equipment;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EquipmentBooking = {
+  id: string;
+  equipment_id: string;
+  project_id: string;
+  requester_user_id: string | null;
+  approved_by_user_id: string | null;
+  start_at: string;
+  end_at: string;
+  status: string;
+  purpose: string;
+  notes: string | null;
+  equipment: Equipment;
+  requester: ResourceOwner | null;
+  approver: ResourceOwner | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EquipmentDowntime = {
+  id: string;
+  equipment_id: string;
+  start_at: string;
+  end_at: string;
+  reason: string;
+  notes: string | null;
+  created_by_user_id: string | null;
+  equipment: Equipment;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EquipmentBlocker = {
+  id: string;
+  project_id: string;
+  equipment_id: string;
+  booking_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  blocked_days: number;
+  reason: string;
+  status: string;
+  equipment: Equipment;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EquipmentConflict = {
+  equipment_id: string;
+  equipment_name: string;
+  conflict_type: string;
+  booking_id: string | null;
+  conflicting_booking_id: string | null;
+  downtime_id: string | null;
+  project_id: string | null;
+  conflicting_project_id: string | null;
+  start_at: string;
+  end_at: string;
+  detail: string;
+};
+
+export type ProjectResourcesWorkspace = {
+  requirements: EquipmentRequirement[];
+  bookings: EquipmentBooking[];
+  blockers: EquipmentBlocker[];
+};
+
 export type Partner = {
   id: string;
   project_id: string;

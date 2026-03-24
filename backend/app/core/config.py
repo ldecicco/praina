@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="qwen3.5:9b", validation_alias="OLLAMA_MODEL")
     ollama_enable_thinking: bool = Field(default=False, validation_alias="OLLAMA_ENABLE_THINKING")
     ollama_embedding_model: str = Field(default="nomic-embed-text-v2-moe", validation_alias="OLLAMA_EMBEDDING_MODEL")
+    text_inference_provider: str = Field(default="ollama", validation_alias="TEXT_INFERENCE_PROVIDER")
+    codex_model: str = Field(default="gpt-5.4", validation_alias="CODEX_MODEL")
+    codex_timeout_seconds: int = Field(default=120, validation_alias="CODEX_TIMEOUT_SECONDS")
     embedding_dimension: int = Field(default=768, validation_alias="EMBEDDING_DIMENSION")
     embedding_batch_size: int = Field(default=16, validation_alias="EMBEDDING_BATCH_SIZE")
     embedding_http_timeout_seconds: int = Field(default=300, validation_alias="EMBEDDING_HTTP_TIMEOUT_SECONDS")
@@ -51,6 +54,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def build_database_url(self) -> "Settings":
+        provider = (self.text_inference_provider or "").strip().lower()
+        if provider not in {"ollama", "codex"}:
+            raise ValueError("TEXT_INFERENCE_PROVIDER must be either 'ollama' or 'codex'.")
+        self.text_inference_provider = provider
         if not self.database_url:
             required = [
                 self.postgres_host,

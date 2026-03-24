@@ -45,7 +45,7 @@ class EmbedBackfillResponse(BaseModel):
 def search_project(
     project_id: uuid.UUID,
     q: str = Query(..., min_length=1, description="Search query"),
-    scope: str | None = Query(None, description="'documents', 'meetings', 'research', 'teaching', or None for all"),
+    scope: str | None = Query(None, description="'documents', 'meetings', 'research', 'teaching', 'resources', or None for all"),
     top_k: int = Query(5, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),

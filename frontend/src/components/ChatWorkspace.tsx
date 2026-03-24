@@ -11,6 +11,8 @@ import {
   faClockRotateLeft,
   faComments,
   faCopy,
+  faFlask,
+  faGraduationCap,
   faMagnifyingGlass,
   faPaperPlane,
   faPen,
@@ -31,6 +33,7 @@ import type {
   Project,
   ProjectRisk,
   ProjectValidationResult,
+  TeachingWorkspace,
   WorkEntity,
 } from "../types";
 
@@ -188,6 +191,7 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
   const [risks, setRisks] = useState<ProjectRisk[]>([]);
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [activity, setActivity] = useState<AuditEvent[]>([]);
+  const [teachingWorkspace, setTeachingWorkspace] = useState<TeachingWorkspace | null>(null);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -210,6 +214,7 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
     [conversations, selectedConversationId]
   );
   const projectMonth = useMemo(() => currentProjectMonth(project?.start_date), [project?.start_date]);
+  const isTeachingMode = project?.project_kind === "teaching";
   const indexedDocuments = useMemo(() => documents.filter((item) => item.status === "indexed").length, [documents]);
   const openRisks = useMemo(() => risks.filter((item) => item.status !== "closed"), [risks]);
   const highRisks = useMemo(
@@ -236,7 +241,53 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
     const next = dates.find((item) => item >= now) || dates[0];
     return next ? next.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" }) : "-";
   }, [project]);
+  const teachingOpenBlockers = useMemo(
+    () => (teachingWorkspace?.blockers || []).filter((item) => item.status !== "resolved"),
+    [teachingWorkspace]
+  );
+  const teachingMissingArtifacts = useMemo(
+    () => (teachingWorkspace?.artifacts || []).filter((item) => item.required && item.status !== "accepted"),
+    [teachingWorkspace]
+  );
+  const teachingLatestReport = useMemo(() => {
+    const reports = teachingWorkspace?.progress_reports || [];
+    if (!reports.length) return null;
+    return [...reports].sort((a, b) => {
+      const aKey = a.report_date || a.created_at;
+      const bKey = b.report_date || b.created_at;
+      return new Date(bKey).getTime() - new Date(aKey).getTime();
+    })[0] || null;
+  }, [teachingWorkspace]);
+  const teachingDaysSinceReport = useMemo(() => {
+    if (!teachingLatestReport) return null;
+    const raw = teachingLatestReport.report_date || teachingLatestReport.created_at;
+    const ts = new Date(raw).getTime();
+    if (Number.isNaN(ts)) return null;
+    return Math.floor((Date.now() - ts) / 86400000);
+  }, [teachingLatestReport]);
   const focusItems = useMemo<FocusItem[]>(() => {
+    if (isTeachingMode) {
+      const rows: FocusItem[] = [];
+      teachingOpenBlockers.slice(0, 3).forEach((item) => rows.push({ tone: "danger", label: item.title }));
+      teachingMissingArtifacts.slice(0, 2).forEach((item) => rows.push({ tone: "warning", label: `${item.label} missing` }));
+      if (!teachingWorkspace?.profile.responsible_user?.display_name) {
+        rows.push({ tone: "warning", label: "Responsible not assigned" });
+      }
+      if (!teachingLatestReport) {
+        rows.push({ tone: "warning", label: "No progress reports yet" });
+      } else if (
+        teachingDaysSinceReport !== null &&
+        teachingWorkspace?.profile.reporting_cadence_days &&
+        teachingDaysSinceReport > teachingWorkspace.profile.reporting_cadence_days
+      ) {
+        rows.push({ tone: "warning", label: `Latest report is ${teachingDaysSinceReport} days old` });
+      }
+      activity.slice(0, 2).forEach((item) => {
+        const code = String(item.after_json?.code || item.before_json?.code || item.entity_type);
+        rows.push({ tone: "neutral", label: `${item.actor_name || "System"} · ${code}` });
+      });
+      return rows.slice(0, 6);
+    }
     const rows: FocusItem[] = [];
     (validation?.errors || []).slice(0, 2).forEach((item) => rows.push({ tone: "danger", label: item.message }));
     reviewGaps.slice(0, 2).forEach((item) => rows.push({ tone: "warning", label: `${item.code} review gap` }));
@@ -249,45 +300,105 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
   }, [activity, highRisks, reviewGaps, validation]);
 
   const quickActions = useMemo(
-    () => [
-      {
-        label: "Brief",
-        description: "Project overview & status",
-        icon: faClipboardList,
-        prompt: "Prepare a project brief covering structure, open risks, review gaps, upcoming outputs, and the next reporting date.",
-      },
-      {
-        label: "Reporting",
-        description: "Reporting period snapshot",
-        icon: faChartPie,
-        prompt: "Prepare a reporting snapshot for the next reporting date using the current project structure, risks, activity, and indexed documents.",
-      },
-      {
-        label: "Delays",
-        description: "At-risk items & actions",
-        icon: faCalendarCheck,
-        prompt: "List delayed or at-risk deliverables, milestones, and reviews. Explain why and propose concrete actions.",
-      },
-      {
-        label: "Review",
-        description: "Review gaps & assignments",
-        icon: faMagnifyingGlass,
-        prompt: "Find deliverables with missing reviewers or weak review planning and propose assignments or due-month adjustments.",
-      },
-      {
-        label: "Changes",
-        description: "Recent activity impact",
-        icon: faClockRotateLeft,
-        prompt: "Summarize the most important recent project changes and explain their impact on delivery and reporting.",
-      },
-      {
-        label: "Meeting",
-        description: "Draft meeting agenda",
-        icon: faBookOpen,
-        prompt: "Draft a short project meeting agenda based on open risks, review gaps, upcoming outputs, and recent activity.",
-      },
-    ],
-    []
+    () =>
+      isTeachingMode
+        ? [
+            {
+              label: "Summary",
+              description: "Supervision snapshot",
+              icon: faClipboardList,
+              prompt: `Summarize the teaching project ${project?.code || ""}. Focus on progress, blockers, missing artifacts, report cadence, and next supervision actions.`,
+            },
+            {
+              label: "Progress",
+              description: "Compare latest reports",
+              icon: faChartPie,
+              prompt: `Compare the latest progress reports for the teaching project ${project?.code || ""}. Highlight completed work, weak signals, and what changed since the previous report.`,
+            },
+            {
+              label: "Blockers",
+              description: "Intervention priorities",
+              icon: faTriangleExclamation,
+              prompt: `Review the blockers for the teaching project ${project?.code || ""}. Explain severity, likely causes, and the concrete supervision actions that should happen next.`,
+            },
+            {
+              label: "Feedback",
+              description: "Next meeting feedback",
+              icon: faComments,
+              prompt: `Draft supervisor feedback for the next meeting of the teaching project ${project?.code || ""}. Keep it evidence-based and practical.`,
+            },
+            {
+              label: "Oral",
+              description: "Exam questions",
+              icon: faGraduationCap,
+              prompt: `Prepare oral examination questions for the teaching project ${project?.code || ""}. Group them into technical questions, validation questions, and weak-point questions.`,
+            },
+            {
+              label: "Assessment",
+              description: "Grading evidence",
+              icon: faCheck,
+              prompt: `Summarize the evidence relevant for assessing the teaching project ${project?.code || ""}. Include strengths, weaknesses, missing evidence, and grading cautions.`,
+            },
+          ]
+        : [
+            {
+              label: "Brief",
+              description: "Project overview & status",
+              icon: faClipboardList,
+              prompt: "Prepare a project brief covering structure, open risks, review gaps, upcoming outputs, and the next reporting date.",
+            },
+            {
+              label: "Reporting",
+              description: "Reporting period snapshot",
+              icon: faChartPie,
+              prompt: "Prepare a reporting snapshot for the next reporting date using the current project structure, risks, activity, and indexed documents.",
+            },
+            {
+              label: "Delays",
+              description: "At-risk items & actions",
+              icon: faCalendarCheck,
+              prompt: "List delayed or at-risk deliverables, milestones, and reviews. Explain why and propose concrete actions.",
+            },
+            {
+              label: "Review",
+              description: "Review gaps & assignments",
+              icon: faMagnifyingGlass,
+              prompt: "Find deliverables with missing reviewers or weak review planning and propose assignments or due-month adjustments.",
+            },
+            {
+              label: "Changes",
+              description: "Recent activity impact",
+              icon: faClockRotateLeft,
+              prompt: "Summarize the most important recent project changes and explain their impact on delivery and reporting.",
+            },
+            {
+              label: "Meeting",
+              description: "Draft meeting agenda",
+              icon: faBookOpen,
+              prompt: "Draft a short project meeting agenda based on open risks, review gaps, upcoming outputs, and recent activity.",
+            },
+          ],
+    [
+      isTeachingMode,
+      project?.code,
+    ]
+  );
+  const assistantMode = useMemo(
+    () =>
+      isTeachingMode
+        ? {
+            label: "Teaching",
+            title: "Teaching Assistant",
+            icon: faGraduationCap,
+            promptPlaceholder: "Ask about progress, blockers, artifacts, oral exam, or assessment...",
+          }
+        : {
+            label: "Research",
+            title: "Research Assistant",
+            icon: faFlask,
+            promptPlaceholder: "Ask about reporting, delays, risks, documents...",
+          },
+    [isTeachingMode]
   );
 
   // Auto-scroll on new messages
@@ -313,6 +424,7 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
       setRisks([]);
       setDocuments([]);
       setActivity([]);
+      setTeachingWorkspace(null);
       setError("");
       return;
     }
@@ -369,6 +481,20 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
 
   async function loadAssistantOverview(projectId: string) {
     try {
+      if (project?.project_kind === "teaching") {
+        const [teachingRes, documentsRes, activityRes] = await Promise.all([
+          api.getTeachingWorkspace(projectId),
+          api.listDocuments(projectId),
+          api.listActivity(projectId, 1, 8),
+        ]);
+        setTeachingWorkspace(teachingRes);
+        setDocuments(documentsRes.items);
+        setActivity(activityRes.items);
+        setValidation(null);
+        setDeliverables([]);
+        setRisks([]);
+        return;
+      }
       const [validationRes, deliverablesRes, risksRes, documentsRes, activityRes] = await Promise.all([
         api.validateProject(projectId),
         api.listDeliverables(projectId),
@@ -381,6 +507,7 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
       setRisks(risksRes.items);
       setDocuments(documentsRes.items);
       setActivity(activityRes.items);
+      setTeachingWorkspace(null);
     } catch {
       // Sidebar data is non-blocking.
     }
@@ -717,10 +844,12 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
               <div className="chat-welcome">
                 <div className="chat-welcome-header">
                   <div className="chat-welcome-icon">
-                    <FontAwesomeIcon icon={faBolt} />
+                    <FontAwesomeIcon icon={assistantMode.icon} />
                   </div>
-                  <h3>Project Assistant</h3>
-                  <p>Ask questions about your project, generate reports, or get actionable insights.</p>
+                  <h3>{assistantMode.title}</h3>
+                  <div className={`assistant-mode-pill ${isTeachingMode ? "teaching" : "research"}`}>
+                    <FontAwesomeIcon icon={assistantMode.icon} /> {assistantMode.label}
+                  </div>
                 </div>
                 <div className="chat-welcome-actions">
                   {quickActions.map((item) => (
@@ -752,7 +881,7 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleDraftKeyDown}
-                placeholder="Ask about reporting, delays, risks, documents..."
+                placeholder={assistantMode.promptPlaceholder}
                 disabled={isBusy}
                 rows={1}
               />
@@ -773,32 +902,71 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
         {/* ─── Context Sidebar ─── */}
         <aside className="card assistant-sidebar">
           <div className="assistant-side-section">
+            <h4 className="assistant-section-title">Mode</h4>
+            <div className={`assistant-mode-card ${isTeachingMode ? "teaching" : "research"}`}>
+              <span className="assistant-mode-icon"><FontAwesomeIcon icon={assistantMode.icon} /></span>
+              <strong>{assistantMode.title}</strong>
+            </div>
+          </div>
+
+          <div className="assistant-side-section">
             <h4 className="assistant-section-title">Brief</h4>
             <div className="assistant-brief-grid">
-              <div className="assistant-brief-cell">
-                <span>Month</span>
-                <strong>{projectMonth ? `M${projectMonth}` : "-"}</strong>
-              </div>
-              <div className="assistant-brief-cell">
-                <span>Next Report</span>
-                <strong>{nextReportingDate}</strong>
-              </div>
-              <div className="assistant-brief-cell">
-                <span>Open Risks</span>
-                <strong className={openRisks.length > 0 ? "has-issues" : ""}>{openRisks.length}</strong>
-              </div>
-              <div className="assistant-brief-cell">
-                <span>Review Gaps</span>
-                <strong className={reviewGaps.length > 0 ? "has-issues" : ""}>{reviewGaps.length}</strong>
-              </div>
-              <div className="assistant-brief-cell">
-                <span>Indexed Docs</span>
-                <strong>{indexedDocuments}</strong>
-              </div>
-              <div className="assistant-brief-cell">
-                <span>Deliverables</span>
-                <strong>{deliverables.length}</strong>
-              </div>
+              {isTeachingMode ? (
+                <>
+                  <div className="assistant-brief-cell">
+                    <span>Reports</span>
+                    <strong>{teachingWorkspace?.progress_reports.length || 0}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Students</span>
+                    <strong>{teachingWorkspace?.students.length || 0}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Blockers</span>
+                    <strong className={teachingOpenBlockers.length > 0 ? "has-issues" : ""}>{teachingOpenBlockers.length}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Missing</span>
+                    <strong className={teachingMissingArtifacts.length > 0 ? "has-issues" : ""}>{teachingMissingArtifacts.length}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Transcripts</span>
+                    <strong>{(teachingWorkspace?.progress_reports || []).reduce((sum, item) => sum + (item.transcript_document_keys?.length || 0), 0)}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Grade</span>
+                    <strong>{teachingWorkspace?.assessment?.grade ?? "-"}</strong>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="assistant-brief-cell">
+                    <span>Month</span>
+                    <strong>{projectMonth ? `M${projectMonth}` : "-"}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Next Report</span>
+                    <strong>{nextReportingDate}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Open Risks</span>
+                    <strong className={openRisks.length > 0 ? "has-issues" : ""}>{openRisks.length}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Review Gaps</span>
+                    <strong className={reviewGaps.length > 0 ? "has-issues" : ""}>{reviewGaps.length}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Indexed Docs</span>
+                    <strong>{indexedDocuments}</strong>
+                  </div>
+                  <div className="assistant-brief-cell">
+                    <span>Deliverables</span>
+                    <strong>{deliverables.length}</strong>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

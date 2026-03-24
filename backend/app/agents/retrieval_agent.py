@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.document import DocumentChunk, DocumentStatus, ProjectDocument
 from app.models.meeting import MeetingChunk, MeetingRecord
 from app.models.research import ResearchChunk, ResearchNote, ResearchReference
+from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentRequirement
 from app.models.teaching import TeachingChunk
 
 logger = logging.getLogger(__name__)
@@ -70,29 +71,31 @@ class RetrievalAgent:
 
         # --- TF-IDF results ---
         tfidf_results: list[RetrievalResult] = []
-        if scope_filter not in {"meetings", "research", "teaching"}:
+        if scope_filter not in {"meetings", "research", "teaching", "resources"}:
             tfidf_results.extend(
                 self._search_documents(project_id, tokens, idf, entity_id, referenced_document_keys)
             )
-        if scope_filter not in {"documents", "research", "teaching"}:
+        if scope_filter not in {"documents", "research", "teaching", "resources"}:
             tfidf_results.extend(self._search_meeting_chunks(project_id, tokens, idf))
             tfidf_results.extend(self._search_raw_meetings(project_id, tokens, idf))
         if scope_filter is None or scope_filter == "research":
             tfidf_results.extend(self._search_research_chunks(project_id, tokens, idf))
         if scope_filter is None or scope_filter == "teaching":
             tfidf_results.extend(self._search_teaching_chunks(project_id, tokens, idf))
+        if scope_filter is None or scope_filter == "resources":
+            tfidf_results.extend(self._search_resource_records(project_id, tokens, idf))
 
         # --- Vector results ---
         vector_results: list[RetrievalResult] = []
         query_embedding = self._get_query_embedding(query)
         if query_embedding is not None:
-            if scope_filter not in {"meetings", "research", "teaching"}:
+            if scope_filter not in {"meetings", "research", "teaching", "resources"}:
                 vector_results.extend(
                     self._vector_search_documents(
                         project_id, query_embedding, entity_id, referenced_document_keys
                     )
                 )
-            if scope_filter not in {"documents", "research", "teaching"}:
+            if scope_filter not in {"documents", "research", "teaching", "resources"}:
                 vector_results.extend(
                     self._vector_search_meetings(project_id, query_embedding)
                 )
@@ -496,6 +499,164 @@ class RetrievalAgent:
             return "research_conclusion"
         return "research_observation"
 
+    def _search_resource_records(
+        self,
+        project_id: uuid.UUID,
+        tokens: list[str],
+        idf: dict[str, float],
+    ) -> list[RetrievalResult]:
+        requirements = list(
+            self.db.scalars(
+                select(EquipmentRequirement)
+                .where(EquipmentRequirement.project_id == project_id)
+                .order_by(EquipmentRequirement.created_at.desc())
+            ).all()
+        )
+        bookings = list(
+            self.db.scalars(
+                select(EquipmentBooking)
+                .where(EquipmentBooking.project_id == project_id)
+                .order_by(EquipmentBooking.created_at.desc())
+            ).all()
+        )
+        blockers = list(
+            self.db.scalars(
+                select(EquipmentBlocker)
+                .where(EquipmentBlocker.project_id == project_id)
+                .order_by(EquipmentBlocker.created_at.desc())
+            ).all()
+        )
+        equipment_ids = {item.equipment_id for item in requirements} | {item.equipment_id for item in bookings} | {item.equipment_id for item in blockers}
+        equipment_lookup = (
+            {item.id: item for item in self.db.scalars(select(Equipment).where(Equipment.id.in_(equipment_ids))).all()}
+            if equipment_ids
+            else {}
+        )
+        downtime_rows = (
+            list(
+                self.db.scalars(
+                    select(EquipmentDowntime)
+                    .where(EquipmentDowntime.equipment_id.in_(equipment_ids))
+                    .order_by(EquipmentDowntime.start_at.desc())
+                ).all()
+            )
+            if equipment_ids
+            else []
+        )
+
+        results: list[RetrievalResult] = []
+
+        for item in requirements:
+            equipment = equipment_lookup.get(item.equipment_id)
+            text = "\n".join(
+                part for part in [
+                    f"Equipment Requirement: {equipment.name if equipment else 'Equipment'}",
+                    f"Priority: {item.priority}",
+                    f"Purpose: {item.purpose}",
+                    f"Notes: {item.notes}" if item.notes else None,
+                    f"Equipment Status: {equipment.status}" if equipment else None,
+                ] if part
+            )
+            score = self._tfidf_score(text.lower(), tokens, idf)
+            if score <= 0 and tokens:
+                continue
+            results.append(
+                RetrievalResult(
+                    source_type="resource_requirement",
+                    source_id=str(item.id),
+                    source_key=f"resource:requirement:{item.id}",
+                    title=equipment.name if equipment else "Equipment Requirement",
+                    version=1,
+                    chunk_index=0,
+                    content=text,
+                    score=score,
+                )
+            )
+
+        for item in bookings:
+            equipment = equipment_lookup.get(item.equipment_id)
+            text = "\n".join(
+                part for part in [
+                    f"Equipment Booking: {equipment.name if equipment else 'Equipment'}",
+                    f"Status: {item.status}",
+                    f"Purpose: {item.purpose}",
+                    f"Start: {item.start_at.isoformat() if item.start_at else ''}",
+                    f"End: {item.end_at.isoformat() if item.end_at else ''}",
+                    f"Notes: {item.notes}" if item.notes else None,
+                ] if part
+            )
+            score = self._tfidf_score(text.lower(), tokens, idf)
+            if score <= 0 and tokens:
+                continue
+            results.append(
+                RetrievalResult(
+                    source_type="resource_booking",
+                    source_id=str(item.id),
+                    source_key=f"resource:booking:{item.id}",
+                    title=equipment.name if equipment else "Equipment Booking",
+                    version=1,
+                    chunk_index=0,
+                    content=text,
+                    score=score,
+                )
+            )
+
+        for item in blockers:
+            equipment = equipment_lookup.get(item.equipment_id)
+            text = "\n".join(
+                part for part in [
+                    f"Equipment Blocker: {equipment.name if equipment else 'Equipment'}",
+                    f"Reason: {item.reason}",
+                    f"Status: {item.status}",
+                    f"Blocked Days: {item.blocked_days}",
+                    f"Started At: {item.started_at.isoformat() if item.started_at else ''}",
+                    f"Ended At: {item.ended_at.isoformat() if item.ended_at else ''}" if item.ended_at else None,
+                ] if part
+            )
+            score = self._tfidf_score(text.lower(), tokens, idf)
+            if score <= 0 and tokens:
+                continue
+            results.append(
+                RetrievalResult(
+                    source_type="resource_blocker",
+                    source_id=str(item.id),
+                    source_key=f"resource:blocker:{item.id}",
+                    title=equipment.name if equipment else "Equipment Blocker",
+                    version=1,
+                    chunk_index=0,
+                    content=text,
+                    score=score,
+                )
+            )
+
+        for item in downtime_rows:
+            equipment = equipment_lookup.get(item.equipment_id)
+            text = "\n".join(
+                part for part in [
+                    f"Equipment Downtime: {equipment.name if equipment else 'Equipment'}",
+                    f"Reason: {item.reason}",
+                    f"Start: {item.start_at.isoformat() if item.start_at else ''}",
+                    f"End: {item.end_at.isoformat() if item.end_at else ''}",
+                    f"Notes: {item.notes}" if item.notes else None,
+                ] if part
+            )
+            score = self._tfidf_score(text.lower(), tokens, idf)
+            if score <= 0 and tokens:
+                continue
+            results.append(
+                RetrievalResult(
+                    source_type="resource_downtime",
+                    source_id=str(item.id),
+                    source_key=f"resource:downtime:{item.id}",
+                    title=equipment.name if equipment else "Equipment Downtime",
+                    version=1,
+                    chunk_index=0,
+                    content=text,
+                    score=score,
+                )
+            )
+        return results
+
     def _research_chunk_meta(
         self,
         *,
@@ -542,12 +703,12 @@ class RetrievalAgent:
         vector_scores: dict[tuple[str, int], float] = {}
 
         for r in tfidf_results:
-            key = (r.source_id, r.chunk_index)
+            key = (r.source_key, r.chunk_index)
             tfidf_scores[key] = r.score / max_tfidf
             merged[key] = r
 
         for r in vector_results:
-            key = (r.source_id, r.chunk_index)
+            key = (r.source_key, r.chunk_index)
             vector_scores[key] = r.score  # already in [0, 1] (cosine similarity)
             if key not in merged:
                 merged[key] = r
@@ -744,7 +905,7 @@ class RetrievalAgent:
         total_chunks = 0
         token_doc_freq: dict[str, int] = {t: 0 for t in tokens}
 
-        if scope_filter not in {"meetings", "research", "teaching"}:
+        if scope_filter not in {"meetings", "research", "teaching", "resources"}:
             doc_chunks = self.db.scalars(
                 select(DocumentChunk.content)
                 .join(ProjectDocument, DocumentChunk.document_id == ProjectDocument.id)
@@ -761,7 +922,7 @@ class RetrievalAgent:
                     if t in lower:
                         token_doc_freq[t] += 1
 
-        if scope_filter not in {"documents", "research", "teaching"}:
+        if scope_filter not in {"documents", "research", "teaching", "resources"}:
             meeting_chunks = self.db.scalars(
                 select(MeetingChunk.content)
                 .join(MeetingRecord, MeetingChunk.meeting_id == MeetingRecord.id)
@@ -795,6 +956,30 @@ class RetrievalAgent:
             ).all()
             total_chunks += len(teaching_chunks)
             for content in teaching_chunks:
+                lower = (content or "").lower()
+                for t in tokens:
+                    if t in lower:
+                        token_doc_freq[t] += 1
+
+        if scope_filter is None or scope_filter == "resources":
+            resource_texts: list[str] = []
+            resource_texts.extend(
+                self.db.scalars(
+                    select(EquipmentRequirement.purpose).where(EquipmentRequirement.project_id == project_id)
+                ).all()
+            )
+            resource_texts.extend(
+                self.db.scalars(
+                    select(EquipmentBooking.purpose).where(EquipmentBooking.project_id == project_id)
+                ).all()
+            )
+            resource_texts.extend(
+                self.db.scalars(
+                    select(EquipmentBlocker.reason).where(EquipmentBlocker.project_id == project_id)
+                ).all()
+            )
+            total_chunks += len(resource_texts)
+            for content in resource_texts:
                 lower = (content or "").lower()
                 for t in tokens:
                     if t in lower:
@@ -850,7 +1035,7 @@ class RetrievalAgent:
         seen: set[tuple[str, int]] = set()
         deduped: list[RetrievalResult] = []
         for r in results:
-            key = (r.source_id, r.chunk_index)
+            key = (r.source_key, r.chunk_index)
             if key in seen:
                 continue
             seen.add(key)

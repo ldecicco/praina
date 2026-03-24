@@ -2,9 +2,10 @@ import json
 import logging
 import re
 from typing import Any
-from urllib import error, request
 
 from app.core.config import settings
+from app.llm.factory import get_text_provider
+from app.llm.json_utils import parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class ChatActionExtractionAgent:
         prompt = self._build_prompt(user_prompt=user_prompt, project_context=project_context)
         logger.info("Action extraction prompt (full):\n%s", prompt)
 
-        raw = self._generate_with_ollama_chat(prompt, allow_compaction=True)
+        raw = self._generate_text(prompt)
         if not raw:
             if not self.last_error:
                 self._append_error("LLM did not return a response")
@@ -34,107 +35,15 @@ class ChatActionExtractionAgent:
             return None
         return self._normalize(payload)
 
-    def _generate_with_ollama_chat(self, prompt: str, *, allow_compaction: bool) -> str:
-        endpoint = settings.ollama_base_url.rstrip("/") + "/api/chat"
-        payload: dict[str, Any] = {
-            "model": settings.ollama_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": True,
-            "chat_template_kwargs": {
-                "enable_thinking": settings.ollama_enable_thinking,
-            },
-            "options": {"temperature": 0},
-        }
-        req = request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+    def _generate_text(self, prompt: str) -> str:
+        raw = get_text_provider().generate(
+            [{"role": "user", "content": prompt}],
+            temperature=0,
+            timeout=settings.action_extraction_http_timeout_seconds,
         )
-        thinking_parts: list[str] = []
-        content_parts: list[str] = []
-        last_done_reason = ""
-        try:
-            with request.urlopen(req, timeout=settings.action_extraction_http_timeout_seconds) as resp:
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8").strip()
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        self._append_error(f"Ollama chat stream returned invalid JSON chunk: {exc}")
-                        logger.warning("Action extraction chat chunk decode failed: %s", exc)
-                        return ""
-                    api_error = chunk.get("error")
-                    if api_error:
-                        self._append_error(f"Ollama API error: {api_error}")
-                        return ""
-                    message = chunk.get("message")
-                    if isinstance(message, dict):
-                        content = message.get("content")
-                        if isinstance(content, str) and content:
-                            content_parts.append(content)
-                        thinking = message.get("thinking")
-                        if isinstance(thinking, str) and thinking:
-                            thinking_parts.append(thinking)
-                    top_level_thinking = chunk.get("thinking")
-                    if isinstance(top_level_thinking, str) and top_level_thinking:
-                        thinking_parts.append(top_level_thinking)
-                    if chunk.get("done"):
-                        done_reason = chunk.get("done_reason")
-                        if isinstance(done_reason, str):
-                            last_done_reason = done_reason
-        except (error.URLError, TimeoutError, OSError) as exc:
-            self._append_error(f"Ollama chat extraction failed at {endpoint}: {exc}")
-            logger.warning("Action extraction via Ollama chat failed: %s", exc)
-            return ""
-
-        full_content = "".join(content_parts).strip()
-        full_thinking = "".join(thinking_parts).strip()
-        logger.info(
-            "Action extraction chat stream summary: done_reason=%s thinking_chars=%s content_chars=%s",
-            last_done_reason or "",
-            len(full_thinking),
-            len(full_content),
-        )
-        if full_content:
-            return full_content
-        if full_thinking:
-            json_from_thinking = self._extract_last_json_object(full_thinking)
-            if json_from_thinking:
-                return json_from_thinking
-            if allow_compaction:
-                compacted = self._compact_thinking_to_json(full_thinking)
-                if compacted:
-                    return compacted
-        self._append_error(
-            "Ollama chat stream produced no final content"
-            + (f" (done_reason={last_done_reason})" if last_done_reason else "")
-        )
-        return ""
-
-    def _compact_thinking_to_json(self, thinking: str) -> str:
-        compact_prompt = (
-            "Convert the following reasoning trace into the final structured JSON only.\n"
-            "Return one valid JSON object and nothing else.\n"
-            "If the reasoning describes multiple ordered actions, return `actions`.\n"
-            f"Reasoning trace:\n{thinking}\n"
-        )
-        logger.info("Action extraction compaction prompt (full):\n%s", compact_prompt)
-        return self._generate_with_ollama_chat(compact_prompt, allow_compaction=False)
-
-    def _extract_last_json_object(self, text: str) -> str:
-        matches = re.findall(r"\{.*\}", text, flags=re.DOTALL)
-        if not matches:
-            return ""
-        for candidate in reversed(matches):
-            snippet = candidate.strip()
-            try:
-                json.loads(snippet)
-            except json.JSONDecodeError:
-                continue
-            return snippet
+        if raw:
+            return raw
+        self._append_error("Text extraction provider returned no output")
         return ""
 
     def _append_error(self, detail: str) -> None:
@@ -149,33 +58,7 @@ class ChatActionExtractionAgent:
         self.last_error = f"{self.last_error}; {detail}"
 
     def _parse_json(self, raw: str) -> dict[str, Any] | None:
-        text = raw.strip()
-        if not text:
-            return None
-
-        # Remove optional fenced markdown wrapper if model emits one.
-        fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.DOTALL)
-        if fence_match:
-            text = fence_match.group(1).strip()
-
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            snippet = text[start : end + 1]
-            try:
-                data = json.loads(snippet)
-                if isinstance(data, dict):
-                    return data
-            except json.JSONDecodeError:
-                return None
-        return None
+        return parse_json_object(raw)
 
     def _normalize(self, payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(payload.get("actions"), list):

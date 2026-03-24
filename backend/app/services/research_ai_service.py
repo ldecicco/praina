@@ -10,11 +10,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.llm.factory import get_text_provider
+from app.llm.json_utils import extract_json_object
 from app.models.document import DocumentChunk, ProjectDocument
 from app.models.meeting import MeetingRecord
 from app.models.research import (
@@ -197,41 +197,22 @@ class SummaryChunk:
 class ResearchAIService:
     def __init__(self, db: Session):
         self.db = db
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
+        self.provider = get_text_provider()
 
     # ── Ollama chat helper ─────────────────────────────────────────────
 
     def _chat(self, system: str, user: str) -> str:
-        with httpx.Client(timeout=180) as client:
-            resp = client.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "stream": False,
-                    "chat_template_kwargs": {
-                        "enable_thinking": settings.ollama_enable_thinking,
-                    },
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        return data.get("message", {}).get("content", "").strip()
+        return self.provider.generate(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            timeout=180,
+        )
 
     def _chat_json(self, system: str, user: str) -> dict[str, Any]:
         raw = self._chat(system, user)
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            cleaned = "\n".join(lines).strip()
+        cleaned = extract_json_object(raw)
         return json.loads(cleaned)
 
     def _load_json_object(self, value: str | None) -> dict[str, Any] | None:

@@ -332,7 +332,7 @@ class CoherenceAgent:
             + language_instruction(project.language)
         )
 
-        raw = self._llm._generate_with_ollama_chat(prompt, allow_compaction=True)
+        raw = self._llm._generate_text(prompt)
         if not raw:
             return []
         payload = self._llm._parse_json(raw)

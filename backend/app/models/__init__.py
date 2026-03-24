@@ -50,6 +50,7 @@ from app.models.research import (
     ResearchNote,
     ResearchReference,
 )
+from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentRequirement
 from app.models.teaching import (
     TeachingArtifactStatus,
     TeachingArtifactType,
@@ -154,6 +155,11 @@ __all__ = [
     "ResearchCollectionMember",
     "ResearchNote",
     "ResearchReference",
+    "Equipment",
+    "EquipmentBlocker",
+    "EquipmentBooking",
+    "EquipmentDowntime",
+    "EquipmentRequirement",
     "TeachingArtifactStatus",
     "TeachingArtifactType",
     "TeachingBlockerSeverity",

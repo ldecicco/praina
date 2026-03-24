@@ -32,6 +32,8 @@ type CourseMaterialModal = "create" | "edit" | null;
 
 const BATCH_SIZE = 6;
 
+const MATERIAL_TYPE_ORDER = ["instructions", "rubric", "template", "schedule", "resource", "other"];
+
 export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -45,12 +47,20 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
   const [materialContent, setMaterialContent] = useState("");
   const [materialUrl, setMaterialUrl] = useState("");
   const [materialSortOrder, setMaterialSortOrder] = useState("0");
+  const [courseModal, setCourseModal] = useState(false);
+  const [courseCode, setCourseCode] = useState("");
+  const [courseTitle, setCourseTitle] = useState("");
+  const [courseDescription, setCourseDescription] = useState("");
+  const [courseIsActive, setCourseIsActive] = useState(true);
+  const [courseHasDeadlines, setCourseHasDeadlines] = useState(false);
+  const [courseTeacherUserId, setCourseTeacherUserId] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [expandedMaterials, setExpandedMaterials] = useState<Set<string>>(new Set());
+  const [materialTypeFilter, setMaterialTypeFilter] = useState("");
 
   const loadWorkspace = useCallback(async () => {
     try {
@@ -61,7 +71,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
       ]);
       const teachingProjects = projectResponse.items.filter((item) => item.project_kind === "teaching");
 
-      // Fetch workspaces in batches to avoid overwhelming the server
       const workspaces: CourseProjectRow[] = [];
       for (let i = 0; i < teachingProjects.length; i += BATCH_SIZE) {
         const batch = teachingProjects.slice(i, i + BATCH_SIZE);
@@ -99,7 +108,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
     void loadUsers();
   }, [loadWorkspace, loadUsers]);
 
-  // Auto-dismiss status messages after 3 seconds
   useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(""), 3000);
@@ -127,6 +135,40 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
       setMaterialContent(material.content_markdown || "");
       setMaterialUrl(material.external_url || "");
       setMaterialSortOrder(String(material.sort_order));
+    }
+  }
+
+  function openCourseModal() {
+    if (!selectedCourse) return;
+    setCourseCode(selectedCourse.code);
+    setCourseTitle(selectedCourse.title);
+    setCourseDescription(selectedCourse.description || "");
+    setCourseIsActive(selectedCourse.is_active);
+    setCourseHasDeadlines(selectedCourse.has_project_deadlines);
+    setCourseTeacherUserId(selectedCourse.teacher?.user_id || "");
+    setCourseModal(true);
+  }
+
+  async function handleSaveCourse() {
+    if (!selectedCourseId || !courseCode.trim() || !courseTitle.trim()) return;
+    try {
+      setBusy(true);
+      const updated = await api.updateCourse(selectedCourseId, {
+        code: courseCode.trim(),
+        title: courseTitle.trim(),
+        description: courseDescription.trim() || null,
+        is_active: courseIsActive,
+        has_project_deadlines: courseHasDeadlines,
+        teacher_user_id: courseTeacherUserId || null,
+      });
+      setCourses((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setCourseModal(false);
+      setStatus("Saved.");
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save course.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -244,6 +286,26 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
     () => (selectedCourse?.materials || []).slice().sort((left, right) => left.sort_order - right.sort_order || left.title.localeCompare(right.title)),
     [selectedCourse]
   );
+  const materialTypes = useMemo(() => {
+    const types = new Set(selectedCourseMaterials.map((item) => item.material_type));
+    return MATERIAL_TYPE_ORDER.filter((type) => types.has(type));
+  }, [selectedCourseMaterials]);
+  const filteredMaterials = useMemo(
+    () => materialTypeFilter ? selectedCourseMaterials.filter((item) => item.material_type === materialTypeFilter) : selectedCourseMaterials,
+    [selectedCourseMaterials, materialTypeFilter]
+  );
+  const groupedMaterials = useMemo(() => {
+    const groups: { type: string; items: CourseMaterial[] }[] = [];
+    for (const material of filteredMaterials) {
+      const last = groups[groups.length - 1];
+      if (last && last.type === material.material_type) {
+        last.items.push(material);
+      } else {
+        groups.push({ type: material.material_type, items: [material] });
+      }
+    }
+    return groups;
+  }, [filteredMaterials]);
   const openBlockers = selectedCourseProjects.reduce(
     (total, item) => total + item.workspace.blockers.filter((entry) => entry.status !== "resolved").length,
     0
@@ -254,11 +316,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
   );
   const atRiskProjects = selectedCourseProjects.filter((item) => item.workspace.profile.health !== "green").length;
   const activeCourses = courses.filter((item) => item.is_active).length;
-  const myCourses = courses.filter(
-    (item) =>
-      item.teacher?.user_id === currentUser.id ||
-      item.teaching_assistants.some((entry) => entry.user_id === currentUser.id)
-  ).length;
   const canManageSelectedCourse = Boolean(
     selectedCourse &&
       (currentUser.platform_role === "super_admin" || selectedCourse.teacher?.user_id === currentUser.id)
@@ -286,16 +343,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
         <div className="setup-summary-bar">
           <div className="teaching-course-summary-left">
             <div className="setup-summary-stats"><span>Loading courses...</span></div>
-          </div>
-        </div>
-        <div className="teaching-course-main">
-          <div className="teaching-course-kpis">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="card teaching-card teaching-course-kpi">
-                <span>&nbsp;</span>
-                <strong>&mdash;</strong>
-              </div>
-            ))}
           </div>
         </div>
       </div>
@@ -341,105 +388,68 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
             <span>{courses.length} courses</span>
             <span className="setup-summary-sep" />
             <span>{activeCourses} active</span>
-            <span className="setup-summary-sep" />
-            <span>{myCourses} assigned</span>
             {selectedCourse ? (
               <>
                 <span className="setup-summary-sep" />
+                <span>Teacher: {selectedCourse.teacher?.display_name || "-"}</span>
+                <span className="setup-summary-sep" />
                 <span>{selectedCourseProjects.length} projects</span>
                 <span className="setup-summary-sep" />
-                <span>{openBlockers} open blockers</span>
+                <span>{atRiskProjects} at risk</span>
                 <span className="setup-summary-sep" />
-                <span>Deadlines: {selectedCourse.has_project_deadlines ? "enabled" : "disabled"}</span>
+                <span>{openBlockers} blockers</span>
+                <span className="setup-summary-sep" />
+                <span>{missingArtifacts} missing</span>
+                <span className="setup-summary-sep" />
+                <span>Deadlines: {selectedCourse.has_project_deadlines ? "on" : "off"}</span>
               </>
             ) : null}
           </div>
         </div>
+        {selectedCourse && canManageSelectedCourse ? (
+          <button type="button" className="ghost docs-action-btn" title="Edit Course" onClick={openCourseModal}>
+            <FontAwesomeIcon icon={faPenToSquare} />
+          </button>
+        ) : null}
       </div>
 
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="success-message">{status}</p> : null}
 
       <div className="teaching-course-main">
-        <div className="teaching-course-kpis">
-          <div className="card teaching-card teaching-course-kpi">
-            <span>Projects</span>
-            <strong>{selectedCourseProjects.length}</strong>
-          </div>
-          <div className="card teaching-card teaching-course-kpi">
-            <span>At Risk</span>
-            <strong>{atRiskProjects}</strong>
-          </div>
-          <div className="card teaching-card teaching-course-kpi">
-            <span>Open Blockers</span>
-            <strong>{openBlockers}</strong>
-          </div>
-          <div className="card teaching-card teaching-course-kpi">
-            <span>Missing Artifacts</span>
-            <strong>{missingArtifacts}</strong>
-          </div>
-        </div>
-
-        {/* Course Info (read-only) */}
-        <div className="card teaching-card">
-          <div className="proposal-card-head">
-            <strong>{selectedCourse ? `${selectedCourse.code} · ${selectedCourse.title}` : "Course"}</strong>
-          </div>
-          {selectedCourse ? (
-            <div className="teaching-dashboard-list">
-              <div>
-                <span>Teacher</span>
-                <strong>{selectedCourse.teacher?.display_name || "-"}</strong>
-              </div>
-              <div>
-                <span>Teaching Assistants</span>
-                <strong>
-                  {selectedCourse.teaching_assistants.length > 0
-                    ? selectedCourse.teaching_assistants.map((a) => a.display_name).join(", ")
-                    : "-"}
-                </strong>
-              </div>
-            </div>
-          ) : (
-            <div className="teaching-empty">Select a course</div>
-          )}
-        </div>
-
-        {/* Staff Management (separate card, only for managers) */}
+        {/* Staff Management (managers only) */}
         {selectedCourse && canManageSelectedCourse ? (
           <div className="card teaching-card">
             <div className="proposal-card-head">
-              <strong>Staff</strong>
+              <strong>Teaching Assistants</strong>
             </div>
-            <div className="teaching-staff-list">
+            <div className="teaching-staff-strip">
               {selectedCourse.teaching_assistants.map((assistant) => (
-                <div key={assistant.user_id} className="teaching-staff-row">
-                  <span>Teaching Assistant</span>
-                  <strong>{assistant.display_name}</strong>
+                <div key={assistant.user_id} className="teaching-staff-chip">
+                  <span>{assistant.display_name}</span>
                   <button
                     type="button"
-                    className="ghost small danger"
+                    className="ghost docs-action-btn danger-text"
+                    title="Remove"
                     disabled={busy}
                     onClick={() => void handleRemoveTeachingAssistant(assistant.user_id)}
                   >
-                    Remove
+                    <FontAwesomeIcon icon={faXmark} />
                   </button>
                 </div>
               ))}
-              {selectedCourse.teaching_assistants.length === 0 ? <div className="teaching-empty">No teaching assistants</div> : null}
-            </div>
-            <div className="meetings-toolbar">
-              <div className="meetings-filter-group">
+              {selectedCourse.teaching_assistants.length === 0 ? <span className="teaching-empty">None</span> : null}
+              <div className="teaching-staff-add">
                 <select value={taUserId} onChange={(event) => setTaUserId(event.target.value)}>
-                  <option value="">Select user</option>
+                  <option value="">Add assistant...</option>
                   {availableTaUsers.map((user) => (
                     <option key={user.id} value={user.id}>
                       {user.display_name} · {user.email}
                     </option>
                   ))}
                 </select>
-                <button type="button" className="ghost" disabled={busy || !taUserId} onClick={() => void handleAddTeachingAssistant()}>
-                  Add Teaching Assistant
+                <button type="button" className="meetings-new-btn" disabled={busy || !taUserId} onClick={() => void handleAddTeachingAssistant()}>
+                  <FontAwesomeIcon icon={faPlus} /> Add
                 </button>
               </div>
             </div>
@@ -449,52 +459,70 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
         <div className="card teaching-card">
           <div className="proposal-card-head">
             <strong>Materials</strong>
-            {selectedCourse && canManageSelectedCourse ? (
-              <button type="button" className="meetings-new-btn" onClick={() => openMaterialModal("create")}>
-                <FontAwesomeIcon icon={faPlus} /> Add
-              </button>
-            ) : null}
+            <div className="teaching-row-actions">
+              {materialTypes.length > 1 ? (
+                <select
+                  className="teaching-material-type-filter"
+                  value={materialTypeFilter}
+                  onChange={(event) => setMaterialTypeFilter(event.target.value)}
+                >
+                  <option value="">All types</option>
+                  {materialTypes.map((type) => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+              ) : null}
+              {selectedCourse && canManageSelectedCourse ? (
+                <button type="button" className="meetings-new-btn" onClick={() => openMaterialModal("create")}>
+                  <FontAwesomeIcon icon={faPlus} /> Add
+                </button>
+              ) : null}
+            </div>
           </div>
           {selectedCourse ? (
             <div className="teaching-materials-list">
-              {selectedCourseMaterials.map((material) => (
-                <div key={material.id} className="teaching-material-card">
-                  <div className="proposal-card-head">
-                    <div className="teaching-material-head">
-                      <span className="chip small">{material.material_type}</span>
-                      <strong>{material.title}</strong>
-                      {material.external_url ? (
-                        <a href={material.external_url} target="_blank" rel="noreferrer" className="teaching-material-link" title={material.external_url}>
-                          <FontAwesomeIcon icon={faArrowUpRightFromSquare} />
-                        </a>
+              {groupedMaterials.map((group) => (
+                <div key={group.type} className="teaching-material-group">
+                  <div className="teaching-material-group-label">{group.type}</div>
+                  {group.items.map((material) => (
+                    <div key={material.id} className="teaching-material-card">
+                      <div className="proposal-card-head">
+                        <div className="teaching-material-head">
+                          <strong>{material.title}</strong>
+                          {material.external_url ? (
+                            <a href={material.external_url} target="_blank" rel="noreferrer" className="teaching-material-link" title={material.external_url}>
+                              <FontAwesomeIcon icon={faArrowUpRightFromSquare} />
+                            </a>
+                          ) : null}
+                        </div>
+                        <div className="teaching-row-actions">
+                          {material.content_markdown ? (
+                            <button
+                              type="button"
+                              className="ghost docs-action-btn"
+                              title={expandedMaterials.has(material.id) ? "Collapse" : "Expand"}
+                              onClick={() => toggleMaterialExpanded(material.id)}
+                            >
+                              <FontAwesomeIcon icon={expandedMaterials.has(material.id) ? faChevronUp : faChevronDown} />
+                            </button>
+                          ) : null}
+                          {canManageSelectedCourse ? (
+                            <>
+                              <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openMaterialModal("edit", material)}>
+                                <FontAwesomeIcon icon={faPenToSquare} />
+                              </button>
+                              <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void handleDeleteMaterial(material.id)}>
+                                <FontAwesomeIcon icon={faTrash} />
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                      {material.content_markdown && expandedMaterials.has(material.id) ? (
+                        <div className="chat-markdown teaching-markdown teaching-material-content">{renderMarkdown(material.content_markdown)}</div>
                       ) : null}
                     </div>
-                    <div className="teaching-row-actions">
-                      {material.content_markdown ? (
-                        <button
-                          type="button"
-                          className="ghost docs-action-btn"
-                          title={expandedMaterials.has(material.id) ? "Collapse" : "Expand"}
-                          onClick={() => toggleMaterialExpanded(material.id)}
-                        >
-                          <FontAwesomeIcon icon={expandedMaterials.has(material.id) ? faChevronUp : faChevronDown} />
-                        </button>
-                      ) : null}
-                      {canManageSelectedCourse ? (
-                        <>
-                          <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openMaterialModal("edit", material)}>
-                            <FontAwesomeIcon icon={faPenToSquare} />
-                          </button>
-                          <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void handleDeleteMaterial(material.id)}>
-                            <FontAwesomeIcon icon={faTrash} />
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                  {material.content_markdown && expandedMaterials.has(material.id) ? (
-                    <div className="chat-markdown teaching-markdown teaching-material-content">{renderMarkdown(material.content_markdown)}</div>
-                  ) : null}
+                  ))}
                 </div>
               ))}
               {selectedCourseMaterials.length === 0 ? <div className="teaching-empty">No materials</div> : null}
@@ -525,7 +553,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
                   <th>Responsible</th>
                   <th>Blockers</th>
                   <th>Artifacts</th>
-                  <th>Report</th>
                   <th />
                 </tr>
               </thead>
@@ -533,7 +560,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
                 {filteredProjects.map((entry) => {
                   const blockers = entry.workspace.blockers.filter((item) => item.status !== "resolved").length;
                   const missing = entry.workspace.artifacts.filter((item) => item.required && item.status === "missing").length;
-                  const latest = entry.workspace.progress_reports[0];
                   const health = entry.workspace.profile.health;
                   const needsAttention = health !== "green" || blockers > 0 || missing > 0;
                   return (
@@ -545,9 +571,8 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
                       <td>{entry.workspace.profile.responsible_user?.display_name || "-"}</td>
                       <td>{blockers > 0 ? <span className="teaching-alert-inline"><FontAwesomeIcon icon={faTriangleExclamation} /> {blockers}</span> : "0"}</td>
                       <td>{missing}</td>
-                      <td>{latest?.report_date ? new Date(latest.report_date).toLocaleDateString() : "-"}</td>
                       <td>
-                        <button type="button" className="ghost small" onClick={() => onOpenProject(entry.project.id)}>
+                        <button type="button" className="ghost docs-action-btn" title="Open" onClick={() => onOpenProject(entry.project.id)}>
                           <FontAwesomeIcon icon={faArrowRight} />
                         </button>
                       </td>
@@ -555,13 +580,12 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
                   );
                 })}
                 {filteredProjects.length === 0 ? (
-                  <tr><td colSpan={9}>{projectSearch ? "No matching projects" : "No projects"}</td></tr>
+                  <tr><td colSpan={8}>{projectSearch ? "No matching projects" : "No projects"}</td></tr>
                 ) : null}
               </tbody>
             </table>
           </div>
         </div>
-
       </div>
 
       {materialModal ? (
@@ -570,7 +594,7 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
             <div className="modal-head">
               <h3>{materialModal === "edit" ? "Edit Material" : "Add Material"}</h3>
               <div className="modal-head-actions">
-                <button type="button" onClick={() => void handleSaveMaterial()} disabled={busy}>
+                <button type="button" className="meetings-new-btn" onClick={() => void handleSaveMaterial()} disabled={busy}>
                   {busy ? "Saving..." : "Save"}
                 </button>
                 <button type="button" className="ghost docs-action-btn" onClick={() => setMaterialModal(null)} title="Close">
@@ -607,6 +631,61 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
               <div className="card teaching-editor-card">
                 <ProposalRichEditor value={materialContent} onChange={setMaterialContent} placeholder="Content" />
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {courseModal ? (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <div className="modal-card settings-modal-card">
+            <div className="modal-head">
+              <h3>Edit Course</h3>
+              <div className="modal-head-actions">
+                <button type="button" className="meetings-new-btn" onClick={() => void handleSaveCourse()} disabled={busy}>
+                  {busy ? "Saving..." : "Save"}
+                </button>
+                <button type="button" className="ghost docs-action-btn" onClick={() => setCourseModal(false)} title="Close">
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            </div>
+            <div className="form-grid">
+              <label>
+                Code
+                <input value={courseCode} onChange={(event) => setCourseCode(event.target.value)} />
+              </label>
+              <label>
+                Title
+                <input value={courseTitle} onChange={(event) => setCourseTitle(event.target.value)} />
+              </label>
+              <label>
+                Teacher
+                <select value={courseTeacherUserId} onChange={(event) => setCourseTeacherUserId(event.target.value)}>
+                  <option value="">Unassigned</option>
+                  {users.map((user) => (
+                    <option key={user.id} value={user.id}>{user.display_name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Status
+                <select value={courseIsActive ? "active" : "inactive"} onChange={(event) => setCourseIsActive(event.target.value === "active")}>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </label>
+              <label>
+                Deadlines
+                <select value={courseHasDeadlines ? "enabled" : "disabled"} onChange={(event) => setCourseHasDeadlines(event.target.value === "enabled")}>
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </label>
+              <label className="full-span">
+                Description
+                <textarea rows={3} value={courseDescription} onChange={(event) => setCourseDescription(event.target.value)} />
+              </label>
             </div>
           </div>
         </div>

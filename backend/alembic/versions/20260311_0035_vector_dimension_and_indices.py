@@ -1,4 +1,4 @@
-"""vector dimension change (1536 -> 2560) and HNSW indices
+"""vector dimension change (1536 -> 2560)
 
 Revision ID: 20260311_0035
 Revises: 20260310_0034
@@ -15,23 +15,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Change embedding dimension from 1536 to 768 (nomic-embed-text)
-    # Must drop and recreate since pgvector Vector type is fixed-width
+    # Change embedding dimension from 1536 to 2560.
+    # pgvector HNSW indices do not support vectors above 2000 dimensions,
+    # so this migration intentionally does not create ANN indices.
     op.execute("ALTER TABLE document_chunks DROP COLUMN IF EXISTS embedding")
     op.execute("ALTER TABLE document_chunks ADD COLUMN embedding vector(2560)")
 
     op.execute("ALTER TABLE meeting_chunks DROP COLUMN IF EXISTS embedding")
     op.execute("ALTER TABLE meeting_chunks ADD COLUMN embedding vector(2560)")
-
-    # Create HNSW indices for cosine similarity search
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding "
-        "ON document_chunks USING hnsw (embedding vector_cosine_ops)"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_meeting_chunks_embedding "
-        "ON meeting_chunks USING hnsw (embedding vector_cosine_ops)"
-    )
+    op.execute("DROP INDEX IF EXISTS ix_document_chunks_embedding")
+    op.execute("DROP INDEX IF EXISTS ix_meeting_chunks_embedding")
 
 
 def downgrade() -> None:

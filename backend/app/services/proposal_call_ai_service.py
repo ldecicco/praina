@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
-from urllib import error, request
 
 from app.core.config import settings
+from app.llm.factory import get_text_provider
+from app.llm.json_utils import parse_json_object
 from app.services.onboarding_service import ValidationError
 from app.services.text_extraction import chunk_text
 
@@ -81,8 +82,7 @@ logger = logging.getLogger(__name__)
 
 class ProposalCallAIService:
     def __init__(self) -> None:
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
+        self.provider = get_text_provider()
 
     def extract_call_fields(
         self,
@@ -180,75 +180,27 @@ class ProposalCallAIService:
         return self._parse_json_payload(raw)
 
     def _chat(self, *, system: str, user: str, stream_callback: callable | None = None) -> str:
-        endpoint = settings.ollama_base_url.rstrip("/") + "/api/chat"
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "stream": True,
-            "chat_template_kwargs": {
-                "enable_thinking": settings.ollama_enable_thinking,
-            },
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        req = request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        content_parts: list[str] = []
-        last_done_reason = ""
         try:
-            with request.urlopen(req, timeout=settings.call_extraction_http_timeout_seconds) as resp:
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8").strip()
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        logger.warning("Call extraction stream chunk decode failed: %s", exc)
-                        raise ValidationError("Call extraction returned an invalid response. Try again or enter the call manually.") from exc
-                    api_error = chunk.get("error")
-                    if api_error:
-                        raise ValidationError(f"Call extraction failed: {api_error}")
-                    message = chunk.get("message")
-                    if isinstance(message, dict):
-                        content = message.get("content")
-                        if isinstance(content, str) and content:
-                            content_parts.append(content)
-                            if stream_callback:
-                                stream_callback("".join(content_parts))
-                    if chunk.get("done"):
-                        done_reason = chunk.get("done_reason")
-                        if isinstance(done_reason, str):
-                            last_done_reason = done_reason
-        except (error.URLError, TimeoutError, OSError) as exc:
-            logger.warning("Call extraction timed out against Ollama: %s", exc)
-            raise ValidationError("Call extraction timed out. Try again, use a smaller PDF, or extract the call manually.") from exc
-        raw = "".join(content_parts).strip()
-        if not raw:
-            raise ValidationError(
-                "Call extraction returned an empty response."
-                + (f" (done_reason={last_done_reason})" if last_done_reason else "")
+            raw = self.provider.generate(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                timeout=settings.call_extraction_http_timeout_seconds,
             )
+        except Exception as exc:
+            logger.warning("Call extraction timed out against active provider: %s", exc)
+            raise ValidationError("Call extraction timed out. Try again, use a smaller PDF, or extract the call manually.") from exc
+        raw = (raw or "").strip()
+        if stream_callback and raw:
+            stream_callback(raw)
+        if not raw:
+            raise ValidationError("Call extraction returned an empty response.")
         return raw
 
     def _parse_json_payload(self, raw: str) -> dict[str, Any]:
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
-        try:
-            parsed = json.loads(raw or "{}")
-        except json.JSONDecodeError as exc:
+        parsed = parse_json_object(raw)
+        if parsed is None:
             logger.warning("Call extraction returned invalid JSON")
-            raise ValidationError("Call extraction returned an invalid response. Try again or enter the call manually.") from exc
-        if not isinstance(parsed, dict):
             raise ValidationError("Call extraction returned an invalid response. Try again or enter the call manually.")
         return {key: parsed.get(key) for key in CALL_FIELD_KEYS}

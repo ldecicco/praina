@@ -59,6 +59,15 @@ import type {
   ResearchCollectionMember,
   ResearchReference,
   ResearchNote,
+  Equipment,
+  EquipmentBlocker,
+  EquipmentBooking,
+  EquipmentConflict,
+  EquipmentDowntime,
+  Lab,
+  LabClosure,
+  EquipmentRequirement,
+  ProjectResourcesWorkspace,
   TeachingProjectArtifact,
   TeachingProjectAssessment,
   TeachingProjectBlocker,
@@ -323,6 +332,234 @@ export const api = {
 
   getTeachingWorkspace(projectId: string): Promise<TeachingWorkspace> {
     return request(`/projects/${projectId}/teaching`);
+  },
+
+  listEquipment(page = 1, pageSize = 100, search = "", category = "", status = ""): Promise<Paginated<Equipment>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (search.trim()) query.set("search", search.trim());
+    if (category.trim()) query.set("category", category.trim());
+    if (status.trim()) query.set("status", status.trim());
+    return request(`/resources/equipment?${query.toString()}`);
+  },
+
+  listLabs(page = 1, pageSize = 100): Promise<Paginated<Lab>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    return request(`/resources/labs?${query.toString()}`);
+  },
+
+  createLab(payload: {
+    name: string;
+    building?: string | null;
+    room?: string | null;
+    notes?: string | null;
+    responsible_user_id?: string | null;
+    is_active?: boolean;
+  }): Promise<Lab> {
+    return request("/resources/labs", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateLab(
+    labId: string,
+    payload: {
+      name?: string;
+      building?: string | null;
+      room?: string | null;
+      notes?: string | null;
+      responsible_user_id?: string | null;
+      is_active?: boolean;
+    }
+  ): Promise<Lab> {
+    return request(`/resources/labs/${labId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteLab(labId: string): Promise<void> {
+    return request(`/resources/labs/${labId}`, { method: "DELETE" });
+  },
+
+  listLabClosures(page = 1, pageSize = 100, labId = ""): Promise<Paginated<LabClosure>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (labId) query.set("lab_id", labId);
+    return request(`/resources/lab-closures?${query.toString()}`);
+  },
+
+  createLabClosure(payload: {
+    lab_id: string;
+    start_at: string;
+    end_at: string;
+    reason?: string;
+    notes?: string | null;
+  }): Promise<LabClosure> {
+    return request("/resources/lab-closures", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateLabClosure(
+    closureId: string,
+    payload: {
+      lab_id: string;
+      start_at: string;
+      end_at: string;
+      reason?: string;
+      notes?: string | null;
+    }
+  ): Promise<LabClosure> {
+    return request(`/resources/lab-closures/${closureId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteLabClosure(closureId: string): Promise<void> {
+    return request(`/resources/lab-closures/${closureId}`, { method: "DELETE" });
+  },
+
+  createEquipment(payload: {
+    name: string;
+    category?: string | null;
+    model?: string | null;
+    serial_number?: string | null;
+    description?: string | null;
+    location?: string | null;
+    lab_id?: string | null;
+    owner_user_id?: string | null;
+    status?: string;
+    usage_mode?: string;
+    access_notes?: string | null;
+    booking_notes?: string | null;
+    maintenance_notes?: string | null;
+    is_active?: boolean;
+  }): Promise<Equipment> {
+    return request("/resources/equipment", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateEquipment(
+    equipmentId: string,
+    payload: {
+      name?: string;
+      category?: string | null;
+      model?: string | null;
+      serial_number?: string | null;
+      description?: string | null;
+      location?: string | null;
+      lab_id?: string | null;
+      owner_user_id?: string | null;
+      status?: string;
+      usage_mode?: string;
+      access_notes?: string | null;
+      booking_notes?: string | null;
+      maintenance_notes?: string | null;
+      is_active?: boolean;
+    }
+  ): Promise<Equipment> {
+    return request(`/resources/equipment/${equipmentId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteEquipment(equipmentId: string): Promise<void> {
+    return request(`/resources/equipment/${equipmentId}`, { method: "DELETE" });
+  },
+
+  listEquipmentBookings(page = 1, pageSize = 100, equipmentId = "", projectId = "", status = ""): Promise<Paginated<EquipmentBooking>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (equipmentId) query.set("equipment_id", equipmentId);
+    if (projectId) query.set("project_id", projectId);
+    if (status.trim()) query.set("status", status.trim());
+    return request(`/resources/bookings?${query.toString()}`);
+  },
+
+  createEquipmentBooking(payload: {
+    equipment_id: string;
+    project_id: string;
+    start_at: string;
+    end_at: string;
+    purpose: string;
+    notes?: string | null;
+  }): Promise<EquipmentBooking> {
+    return request("/resources/bookings", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateEquipmentBooking(
+    bookingId: string,
+    payload: {
+      start_at?: string;
+      end_at?: string;
+      purpose?: string;
+      notes?: string | null;
+      status?: string;
+    }
+  ): Promise<EquipmentBooking> {
+    return request(`/resources/bookings/${bookingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  approveEquipmentBooking(bookingId: string, notes?: string | null): Promise<EquipmentBooking> {
+    return request(`/resources/bookings/${bookingId}/approve`, { method: "POST", body: JSON.stringify({ notes: notes || null }) });
+  },
+
+  rejectEquipmentBooking(bookingId: string, notes?: string | null): Promise<EquipmentBooking> {
+    return request(`/resources/bookings/${bookingId}/reject`, { method: "POST", body: JSON.stringify({ notes: notes || null }) });
+  },
+
+  listEquipmentDowntime(page = 1, pageSize = 100, equipmentId = ""): Promise<Paginated<EquipmentDowntime>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (equipmentId) query.set("equipment_id", equipmentId);
+    return request(`/resources/downtime?${query.toString()}`);
+  },
+
+  createEquipmentDowntime(payload: {
+    equipment_id: string;
+    start_at: string;
+    end_at: string;
+    reason?: string;
+    notes?: string | null;
+  }): Promise<EquipmentDowntime> {
+    return request("/resources/downtime", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateEquipmentDowntime(
+    downtimeId: string,
+    payload: { start_at?: string; end_at?: string; reason?: string; notes?: string | null }
+  ): Promise<EquipmentDowntime> {
+    return request(`/resources/downtime/${downtimeId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteEquipmentDowntime(downtimeId: string): Promise<void> {
+    return request(`/resources/downtime/${downtimeId}`, { method: "DELETE" });
+  },
+
+  listEquipmentConflicts(payload?: {
+    equipment_id?: string;
+    project_id?: string;
+    start_at?: string;
+    end_at?: string;
+  }): Promise<EquipmentConflict[]> {
+    const query = new URLSearchParams();
+    if (payload?.equipment_id) query.set("equipment_id", payload.equipment_id);
+    if (payload?.project_id) query.set("project_id", payload.project_id);
+    if (payload?.start_at) query.set("start_at", payload.start_at);
+    if (payload?.end_at) query.set("end_at", payload.end_at);
+    return request(`/resources/conflicts${query.size ? `?${query.toString()}` : ""}`);
+  },
+
+  getProjectResources(projectId: string): Promise<ProjectResourcesWorkspace> {
+    return request(`/projects/${projectId}/resources`);
+  },
+
+  listProjectEquipmentRequirements(projectId: string): Promise<Paginated<EquipmentRequirement>> {
+    return request(`/projects/${projectId}/resources/requirements`);
+  },
+
+  createProjectEquipmentRequirement(
+    projectId: string,
+    payload: { equipment_id: string; priority?: string; purpose: string; notes?: string | null }
+  ): Promise<EquipmentRequirement> {
+    return request(`/projects/${projectId}/resources/requirements`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateProjectEquipmentRequirement(
+    projectId: string,
+    requirementId: string,
+    payload: { priority?: string; purpose?: string; notes?: string | null }
+  ): Promise<EquipmentRequirement> {
+    return request(`/projects/${projectId}/resources/requirements/${requirementId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteProjectEquipmentRequirement(projectId: string, requirementId: string): Promise<void> {
+    return request(`/projects/${projectId}/resources/requirements/${requirementId}`, { method: "DELETE" });
   },
 
   updateTeachingProfile(projectId: string, payload: {

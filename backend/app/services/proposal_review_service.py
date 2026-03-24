@@ -4,11 +4,11 @@ import json
 import uuid
 from typing import Any
 
-import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.llm.factory import get_text_provider
+from app.llm.json_utils import parse_json_object
 from app.models.organization import TeamMember
 from app.models.project import Project
 from app.models.proposal import ProjectProposalSection, ProposalCallBrief
@@ -89,8 +89,7 @@ Rules:
 class ProposalReviewService:
     def __init__(self, db: Session):
         self.db = db
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
+        self.provider = get_text_provider()
 
     def list_findings(
         self,
@@ -485,32 +484,14 @@ class ProposalReviewService:
         return payload
 
     def _chat_json(self, system: str, user: str) -> dict[str, Any]:
-        with httpx.Client(timeout=180) as client:
-            resp = client.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "stream": False,
-                    "chat_template_kwargs": {
-                        "enable_thinking": settings.ollama_enable_thinking,
-                    },
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        raw = data.get("message", {}).get("content", "").strip()
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
-        return json.loads(raw or "{}")
+        raw = self.provider.generate(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            timeout=180,
+        )
+        return parse_json_object(raw) or {}
 
     def _tokens(self, value: str) -> set[str]:
         return {

@@ -6,7 +6,7 @@ from calendar import monthrange
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.agents.chat_action_extraction_agent import ChatActionExtractionAgent
@@ -57,6 +57,7 @@ from app.schemas.work import (
 from app.schemas.project import ProjectUpdate
 from app.services.onboarding_service import NotFoundError, OnboardingService, ValidationError
 from app.services.project_chat_service import ProjectChatService
+from app.services.resources_service import ResourcesService
 
 MAX_CITATIONS = 3
 PROJECT_CHAT_ROOM_CONVERSATION_PREFIX = "__project_chat_room__"
@@ -178,7 +179,17 @@ class ChatService:
         self.db.add(assistant_message)
 
         if conversation.title == "New conversation":
-            conversation.title = self._conversation_title_from_prompt(text)
+            self.db.execute(
+                update(ChatConversation)
+                .where(
+                    ChatConversation.id == conversation.id,
+                    ChatConversation.project_id == project_id,
+                )
+                .values(
+                    title=self._conversation_title_from_prompt(text),
+                    updated_at=func.now(),
+                )
+            )
 
         self.db.commit()
         self.db.refresh(user_message)
@@ -261,8 +272,8 @@ class ChatService:
                     None,
                     (
                         "I could not parse this action request with the LLM. "
-                        f"{detail}. Verify Ollama is running at `{settings.ollama_base_url}` "
-                        f"and model `{settings.ollama_model}` is available."
+                        f"{detail}. Verify the active text inference provider "
+                        f"`{settings.text_inference_provider}` is correctly configured."
                     ),
                 )
             return None, None
@@ -1387,6 +1398,16 @@ class ChatService:
             lines.append("I can break this down by specific WP if you name the WP code.")
         if any(term in prompt_lower for term in ["document", "proposal", "agreement", "coherence"]):
             lines.append("Document coherence checks are available on indexed excerpts and deliverable references.")
+        resources = context.get("resources")
+        if isinstance(resources, dict):
+            counts_resources = resources.get("counts", {})
+            if isinstance(counts_resources, dict) and counts_resources.get("requirements", 0):
+                lines.append(
+                    "Resource view: "
+                    f"{counts_resources.get('requirements', 0)} requirements, "
+                    f"{counts_resources.get('active_bookings', 0)} active bookings, "
+                    f"{counts_resources.get('open_blockers', 0)} open equipment blockers."
+                )
 
         if citations:
             lines.append("Relevant evidence found in the project knowledge base.")
@@ -1421,6 +1442,7 @@ class ChatService:
             "open_risks": self._open_risks(project.id),
             "recent_activity": self._recent_activity(project.id),
             "recent_meetings": self._recent_meetings(project.id),
+            "resources": ResourcesService(self.db).project_resource_summary(project.id),
             "command_help": self._command_help(),
             "proposal_sections": self._proposal_summary(project.id),
             "consortium": self._consortium_summary(project.id),
@@ -1455,6 +1477,7 @@ class ChatService:
                 ),
             },
             "recent_activity": self._recent_activity(project.id),
+            "resources": ResourcesService(self.db).project_resource_summary(project.id),
             "teaching_project": teaching_summary,
         }
 

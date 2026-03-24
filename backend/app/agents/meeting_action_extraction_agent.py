@@ -14,7 +14,7 @@ class MeetingActionExtractionAgent(ChatActionExtractionAgent):
             self._append_error("Meeting content is empty.")
             return None
         prompt = self._build_prompt(meeting_content=content, project_context=project_context)
-        raw = self._generate_with_ollama_chat(prompt, allow_compaction=True)
+        raw = self._generate_text(prompt)
         if not raw:
             if not self.last_error:
                 self._append_error("LLM did not return a response")

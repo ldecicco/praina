@@ -19,6 +19,7 @@ import {
 
 import { api } from "../lib/api";
 import { renderMarkdown } from "../lib/renderMarkdown";
+import { ProjectResourcesPanel } from "./ProjectResourcesPanel";
 import { ProposalRichEditor } from "./ProposalRichEditor";
 import type {
   AuthUser,
@@ -86,6 +87,8 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
   const [assessmentEditorTab, setAssessmentEditorTab] = useState<AssessmentEditorTab>("strengths");
   const [reportEditorTab, setReportEditorTab] = useState<ReportEditorTab>("work_done");
   const [overviewDocTab, setOverviewDocTab] = useState<OverviewDocTab>("objectives");
+  const [artifactTypeFilter, setArtifactTypeFilter] = useState("");
+  const [artifactStatusFilter, setArtifactStatusFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -557,6 +560,25 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     }
   }
 
+  async function quickResolveBlocker(blockerId: string) {
+    if (!selectedProjectId) return;
+    try {
+      const item = workspace?.blockers.find((entry) => entry.id === blockerId);
+      if (!item) return;
+      await api.updateTeachingBlocker(selectedProjectId, blockerId, {
+        title: item.title,
+        description: item.description || null,
+        severity: item.severity,
+        status: "resolved",
+        detected_from: item.detected_from || null,
+      });
+      await loadWorkspace();
+      setStatus("Resolved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resolve blocker.");
+    }
+  }
+
   async function saveAssessment() {
     if (!selectedProjectId) return;
     try {
@@ -633,6 +655,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
   const statusLabel = profileStatus.split("_").join(" ");
   const courseLabel = selectedCourse ? `${selectedCourse.code} · ${selectedCourse.title}` : "No course";
   const hasProjectDeadlines = selectedCourse?.has_project_deadlines ?? true;
+  const overdueMilestones = workspace?.milestones.filter((item) => hasProjectDeadlines && isOverdue(item.due_at, item.status)).length ?? 0;
   const courseStaff: CourseStaffUser[] = selectedCourse
     ? [selectedCourse.teacher, ...selectedCourse.teaching_assistants].filter((item): item is CourseStaffUser => Boolean(item))
     : [];
@@ -645,7 +668,9 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
           <span className="setup-summary-sep" />
           <span>{courseLabel}</span>
           <span className="setup-summary-sep" />
-          <span>{academicYear || "No year"}</span>
+          <span>{academicYear || "No year"}{term ? ` · ${term}` : ""}</span>
+          <span className="setup-summary-sep" />
+          <span>{workspace?.profile.responsible_user?.display_name || "No responsible"}</span>
           <span className="setup-summary-sep" />
           <span>{statusLabel}</span>
           <span className="setup-summary-sep" />
@@ -654,6 +679,12 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
           <span>{openBlockers} blockers</span>
           <span className="setup-summary-sep" />
           <span>{missingArtifacts} missing</span>
+          {overdueMilestones > 0 ? (
+            <>
+              <span className="setup-summary-sep" />
+              <span className="danger-text">{overdueMilestones} overdue</span>
+            </>
+          ) : null}
         </div>
         <div className="teaching-summary-actions">
           <button
@@ -708,65 +739,46 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         <button type="button" className={`delivery-tab ${tab === "assessment" ? "active" : ""}`} onClick={() => setTab("assessment")}>
           Assessment
         </button>
+        {tab === "progress" ? (
+          <button type="button" className="meetings-new-btn delivery-tab-action" onClick={() => openModal("report")}>
+            <FontAwesomeIcon icon={faPlus} /> Report
+          </button>
+        ) : null}
       </div>
 
       {loading || !workspace || !profile ? <div className="card">Loading...</div> : null}
 
       {!loading && workspace && profile && tab === "overview" ? (
         <div className="teaching-section-stack">
-          {/* Project info — only fields NOT in the summary bar */}
-          <div className="teaching-dashboard-grid">
-            <div className="card teaching-card">
-              <div className="proposal-card-head">
-                <strong>Project</strong>
+          {/* Latest Report */}
+          <div className="card teaching-card">
+            <div className="proposal-card-head">
+              <div className="teaching-report-head-left">
+                <strong>Latest Report</strong>
+                {latestReport ? (
+                  <span className="teaching-report-meta-inline">{latestReport.report_date ? new Date(latestReport.report_date).toLocaleDateString() : ""}{latestReport.meeting_date ? ` · Meeting ${new Date(latestReport.meeting_date).toLocaleDateString()}` : ""}</span>
+                ) : null}
+              </div>
+              <div className="teaching-report-head-right">
+                <span className="teaching-meta-inline">{reportingCadenceDays}d cadence</span>
+                {finalGrade ? <span className="chip small">Grade: {finalGrade}</span> : null}
                 <button type="button" className="ghost docs-action-btn" onClick={() => openModal("project")} title="Edit project">
                   <FontAwesomeIcon icon={faPenToSquare} />
                 </button>
-              </div>
-              <div className="teaching-dashboard-list">
-                <div>
-                  <span>Responsible</span>
-                  <strong>{workspace.profile.responsible_user?.display_name || "-"}</strong>
-                </div>
-                <div>
-                  <span>Term</span>
-                  <strong>{term || "-"}</strong>
-                </div>
-                <div>
-                  <span>Cadence</span>
-                  <strong>{reportingCadenceDays} days</strong>
-                </div>
-                <div>
-                  <span>Grade</span>
-                  <strong>{finalGrade || "-"}</strong>
-                </div>
-              </div>
-            </div>
-
-            {/* Latest Report — height-constrained */}
-            <div className="card teaching-card">
-              <div className="proposal-card-head">
-                <strong>Latest Report</strong>
                 {latestReport ? (
-                  <button type="button" className="ghost docs-action-btn" onClick={() => openModal("report", latestReport.id)}>
+                  <button type="button" className="ghost docs-action-btn" onClick={() => openModal("report", latestReport.id)} title="Edit report">
                     <FontAwesomeIcon icon={faPenToSquare} />
                   </button>
                 ) : null}
               </div>
-              {latestReport ? (
-                <>
-                  <div className="teaching-report-meta">
-                    <span>{latestReport.report_date ? new Date(latestReport.report_date).toLocaleDateString() : "-"}</span>
-                    {latestReport.meeting_date ? <span>Meeting {new Date(latestReport.meeting_date).toLocaleDateString()}</span> : null}
-                  </div>
-                  <div className="chat-markdown teaching-markdown teaching-latest-report-content">
-                    {renderMarkdown(latestReport.work_done_markdown)}
-                  </div>
-                </>
-              ) : (
-                <div className="teaching-empty">No progress reports</div>
-              )}
             </div>
+            {latestReport ? (
+              <div className="chat-markdown teaching-markdown teaching-latest-report-content">
+                {renderMarkdown(latestReport.work_done_markdown)}
+              </div>
+            ) : (
+              <div className="teaching-empty">No progress reports yet</div>
+            )}
           </div>
 
           {/* Objectives / Specifications — tabbed card */}
@@ -811,29 +823,21 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                 <FontAwesomeIcon icon={faPlus} /> Add
               </button>
             </div>
-            <div className="simple-table-wrap">
-              <table className="simple-table compact-table">
-                <thead><tr><th>Name</th><th>Email</th><th /></tr></thead>
-                <tbody>
-                  {workspace.students.map((item) => (
-                    <tr key={item.id}>
-                      <td><strong>{item.full_name}</strong></td>
-                      <td>{item.email || "-"}</td>
-                      <td className="teaching-row-actions">
-                        <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("student", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                        <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("student", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
-                      </td>
-                    </tr>
-                  ))}
-                  {workspace.students.length === 0 ? <tr><td colSpan={3}>No students</td></tr> : null}
-                </tbody>
-              </table>
+            <div className="teaching-staff-strip">
+              {workspace.students.map((item) => (
+                <div key={item.id} className="teaching-staff-chip">
+                  <span>{item.full_name}{item.email ? ` · ${item.email}` : ""}</span>
+                  <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("student", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
+                  <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("student", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                </div>
+              ))}
+              {workspace.students.length === 0 ? <span className="teaching-empty">No students</span> : null}
             </div>
           </div>
 
           <div className="card teaching-card">
             <div className="proposal-card-head">
-              <strong>Milestones</strong>
+              <span className="teaching-section-label"><strong>Milestones</strong> <span className="delivery-tab-count">{workspace.milestones.length}</span></span>
               <button type="button" className="meetings-new-btn" onClick={() => openModal("milestone")}>
                 <FontAwesomeIcon icon={faPlus} /> Add
               </button>
@@ -854,7 +858,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                     const overdue = hasProjectDeadlines && isOverdue(item.due_at, item.status);
                     return (
                       <tr key={item.id} className={overdue ? "teaching-row-attention red" : ""}>
-                        <td>{item.kind}</td>
+                        <td><span className="chip small">{item.kind}</span></td>
                         <td><strong>{item.label}</strong></td>
                         {hasProjectDeadlines ? (
                           <td className={overdue ? "teaching-overdue-text" : ""}>
@@ -873,11 +877,9 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                 </tbody>
               </table>
             </div>
-          </div>
 
-          <div className="card teaching-card">
-            <div className="proposal-card-head">
-              <strong>Blockers</strong>
+            <div className="proposal-card-head" style={{ marginTop: 8 }}>
+              <span className="teaching-section-label"><strong>Blockers</strong> <span className="delivery-tab-count">{openBlockers}</span></span>
               <button type="button" className="meetings-new-btn" onClick={() => openModal("blocker")}>
                 <FontAwesomeIcon icon={faPlus} /> Add
               </button>
@@ -887,11 +889,14 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                 <thead><tr><th>Title</th><th>Severity</th><th>Status</th><th /></tr></thead>
                 <tbody>
                   {workspace.blockers.map((item) => (
-                    <tr key={item.id}>
+                    <tr key={item.id} className={item.status !== "resolved" ? "teaching-row-attention yellow" : ""}>
                       <td><strong>{item.title}</strong></td>
                       <td><span className="chip small">{item.severity}</span></td>
                       <td><span className="chip small">{item.status}</span></td>
                       <td className="teaching-row-actions">
+                        {item.status !== "resolved" ? (
+                          <button type="button" className="ghost icon-text-button small" onClick={() => void quickResolveBlocker(item.id)}>Resolve</button>
+                        ) : null}
                         <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("blocker", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
                         <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("blocker", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
                       </td>
@@ -902,6 +907,8 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
               </table>
             </div>
           </div>
+
+          <ProjectResourcesPanel projectId={selectedProjectId} />
         </div>
       ) : null}
 
@@ -909,15 +916,35 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         <div className="card teaching-card">
           <div className="proposal-card-head">
             <strong>Artifacts</strong>
-            <button type="button" className="meetings-new-btn" onClick={() => openModal("artifact")}>
-              <FontAwesomeIcon icon={faPlus} /> Add
-            </button>
+            <div className="teaching-assessment-head-right">
+              <select className="teaching-material-type-filter" value={artifactTypeFilter} onChange={(event) => setArtifactTypeFilter(event.target.value)}>
+                <option value="">All Types</option>
+                <option value="report">Report</option>
+                <option value="repository">Repository</option>
+                <option value="video">Video</option>
+                <option value="slides">Slides</option>
+                <option value="dataset">Dataset</option>
+                <option value="other">Other</option>
+              </select>
+              <select className="teaching-material-type-filter" value={artifactStatusFilter} onChange={(event) => setArtifactStatusFilter(event.target.value)}>
+                <option value="">All Status</option>
+                <option value="missing">Missing</option>
+                <option value="submitted">Submitted</option>
+                <option value="accepted">Accepted</option>
+                <option value="needs_revision">Needs Revision</option>
+              </select>
+              <button type="button" className="meetings-new-btn" onClick={() => openModal("artifact")}>
+                <FontAwesomeIcon icon={faPlus} /> Add
+              </button>
+            </div>
           </div>
           <div className="simple-table-wrap">
             <table className="simple-table compact-table">
               <thead><tr><th>Label</th><th>Type</th><th>Required</th><th>Status</th><th>Link</th><th /></tr></thead>
               <tbody>
-                {workspace.artifacts.map((item) => (
+                {workspace.artifacts
+                  .filter((item) => (!artifactTypeFilter || item.artifact_type === artifactTypeFilter) && (!artifactStatusFilter || item.status === artifactStatusFilter))
+                  .map((item) => (
                   <tr key={item.id}>
                     <td><strong>{item.label}</strong></td>
                     <td>{item.artifact_type}</td>
@@ -938,7 +965,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                     </td>
                   </tr>
                 ))}
-                {workspace.artifacts.length === 0 ? <tr><td colSpan={6}>No artifacts</td></tr> : null}
+                {workspace.artifacts.filter((item) => (!artifactTypeFilter || item.artifact_type === artifactTypeFilter) && (!artifactStatusFilter || item.status === artifactStatusFilter)).length === 0 ? <tr><td colSpan={6}>{workspace.artifacts.length === 0 ? "No artifacts" : "No matching artifacts"}</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -947,14 +974,6 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
 
       {!loading && workspace && tab === "progress" ? (
         <div className="teaching-progress-stack">
-          <div className="setup-summary-bar">
-            <div className="setup-summary-stats">
-              <span>{workspace.progress_reports.length} reports</span>
-            </div>
-            <button type="button" className="meetings-new-btn" onClick={() => openModal("report")}>
-              <FontAwesomeIcon icon={faPlus} /> Add
-            </button>
-          </div>
           <div className="teaching-timeline">
             {workspace.progress_reports.map((item, index) => {
               const isExpanded = index === 0 || expandedReports.has(item.id);
@@ -990,33 +1009,31 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                     </button>
                     {isExpanded ? (
                       <div className="teaching-report-body">
-                        <div className="teaching-report-grid">
+                        <div className="teaching-report-stack">
                           <div>
                             <strong className="teaching-report-section-label">Work Done</strong>
                             <div className="chat-markdown teaching-markdown">{renderMarkdown(item.work_done_markdown)}</div>
                           </div>
-                          <div className="teaching-report-lists">
+                          {item.next_steps_markdown ? (
                             <div>
-                              <strong>Next Steps</strong>
+                              <strong className="teaching-report-section-label">Next Steps</strong>
                               <div className="chat-markdown teaching-markdown">{renderMarkdown(item.next_steps_markdown)}</div>
                             </div>
+                          ) : null}
+                          {item.blockers.length > 0 ? (
                             <div>
-                              <strong>Blockers</strong>
-                              {item.blockers.length ? (
-                                <div className="teaching-report-blocker-list">
-                                  {item.blockers.map((entry) => (
-                                    <div key={entry.id} className={`teaching-report-blocker-item ${entry.status === "resolved" ? "resolved" : ""}`}>
-                                      <span className={`teaching-report-blocker-severity ${entry.severity}`} title={entry.severity} />
-                                      <span>{entry.title}</span>
-                                      <span className="chip small">{entry.status}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="teaching-empty">No blockers</span>
-                              )}
+                              <strong className="teaching-report-section-label">Blockers</strong>
+                              <div className="teaching-report-blocker-list">
+                                {item.blockers.map((entry) => (
+                                  <div key={entry.id} className={`teaching-report-blocker-item ${entry.status === "resolved" ? "resolved" : ""}`}>
+                                    <span className={`teaching-report-blocker-severity ${entry.severity}`} title={entry.severity} />
+                                    <span>{entry.title}</span>
+                                    <span className="chip small">{entry.status}</span>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
-                          </div>
+                          ) : null}
                         </div>
                         {hasFeedback ? (
                           <div className="teaching-feedback-block">
@@ -1071,13 +1088,13 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         <div className="card teaching-card">
           <div className="proposal-card-head">
             <strong>Assessment</strong>
-            <button type="button" onClick={() => void saveAssessment()}>Save</button>
-          </div>
-          <div className="form-grid">
-            <label>
-              Grade
-              <input type="number" min={0} max={10} step={0.1} value={finalGrade} onChange={(event) => setFinalGrade(event.target.value)} />
-            </label>
+            <div className="teaching-assessment-head-right">
+              <label className="teaching-grade-inline">
+                Grade
+                <input type="number" min={0} max={10} step={0.1} value={finalGrade} onChange={(event) => setFinalGrade(event.target.value)} />
+              </label>
+              <button type="button" className="meetings-new-btn" onClick={() => void saveAssessment()}>Save</button>
+            </div>
           </div>
           <div className="delivery-tabs teaching-inline-tabs">
             <button
@@ -1117,12 +1134,14 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
       {modal ? (
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <div
-            className={`modal-card settings-modal-card ${
-              modal === "report"
-                ? "teaching-report-modal"
-                : modal === "objectives" || modal === "specifications"
-                  ? "teaching-editor-modal"
-                  : ""
+            className={`modal-card ${
+              modal === "student" || modal === "milestone" || modal === "blocker"
+                ? ""
+                : modal === "report"
+                  ? "settings-modal-card teaching-report-modal"
+                  : modal === "objectives" || modal === "specifications"
+                    ? "settings-modal-card teaching-editor-modal"
+                    : "settings-modal-card"
             }`}
           >
             <div className="modal-head">
@@ -1286,7 +1305,14 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
               <div className="form-grid">
                 <label>
                   Kind
-                  <input value={milestoneKind} onChange={(event) => setMilestoneKind(event.target.value)} />
+                  <select value={milestoneKind} onChange={(event) => setMilestoneKind(event.target.value)}>
+                    <option value="">Select</option>
+                    <option value="checkpoint">Checkpoint</option>
+                    <option value="presentation">Presentation</option>
+                    <option value="submission">Submission</option>
+                    <option value="review">Review</option>
+                    <option value="defense">Defense</option>
+                  </select>
                 </label>
                 <label>
                   Label

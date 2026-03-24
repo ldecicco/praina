@@ -116,6 +116,18 @@ npm install
 npm run dev
 ```
 
+## Containerized Deployment
+
+A full Docker setup is available in [deploy/docker/README.md](/home/luca/dev/code/praina/deploy/docker/README.md).
+
+Quick start:
+
+```bash
+cd deploy/docker
+cp .env.example .env
+docker compose up -d --build
+```
+
 ## Authentication
 
 The frontend includes built-in registration and login.

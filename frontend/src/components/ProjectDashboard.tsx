@@ -25,6 +25,7 @@ import {
 import { api } from "../lib/api";
 import { currentProjectMonth } from "../lib/utils";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { ProjectResourcesPanel } from "./ProjectResourcesPanel";
 import type {
   DashboardHealth,
   DashboardHealthIssue,
@@ -908,6 +909,8 @@ export function ProjectDashboard({ selectedProjectId, project, onNavigate, onPro
             </div>
             <ProjectActivityFeed projectId={selectedProjectId} limit={8} />
           </div>
+
+          <ProjectResourcesPanel projectId={selectedProjectId} />
         </div>
 
         <div className="dashboard-side-column">

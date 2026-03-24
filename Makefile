@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: backend-up backend-down backend-install backend-migrate backend-api backend-test frontend-install frontend-dev
+.PHONY: backend-up backend-down backend-install backend-migrate backend-api backend-test frontend-install frontend-dev deploy-up deploy-down deploy-logs
 
 backend-up:
 	cd backend && docker compose up -d
@@ -25,3 +25,12 @@ frontend-install:
 
 frontend-dev:
 	cd frontend && npm run dev
+
+deploy-up:
+	cd deploy/docker && cp -n .env.example .env || true && docker compose up -d --build
+
+deploy-down:
+	cd deploy/docker && docker compose down
+
+deploy-logs:
+	cd deploy/docker && docker compose logs -f

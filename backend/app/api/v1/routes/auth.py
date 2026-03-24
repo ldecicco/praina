@@ -16,6 +16,7 @@ from app.schemas.auth import (
     MembershipWithUserListRead,
     MembershipWithUserRead,
     MembershipRead,
+    PasswordChangeRequest,
     TokenRefreshRequest,
     UserAdminCreateRequest,
     UserAdminUpdateRequest,
@@ -109,6 +110,24 @@ def update_my_profile(
     db.commit()
     db.refresh(current_user)
     return _user_read(current_user)
+
+
+@router.post("/me/password")
+def change_my_password(
+    payload: PasswordChangeRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    service = AuthService(db)
+    try:
+        service.change_password(
+            current_user.id,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.post("/me/avatar")

@@ -32,8 +32,12 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
   const [jobTitle, setJobTitle] = useState(currentUser.job_title ?? "");
   const [organization, setOrganization] = useState(currentUser.organization ?? "");
   const [phone, setPhone] = useState(currentUser.phone ?? "");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(avatarSrc(currentUser));
-  const [busy, setBusy] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -43,7 +47,7 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
       setError("Display name is required.");
       return;
     }
-    setBusy(true);
+    setSavingProfile(true);
     setError("");
     setStatus("");
     try {
@@ -58,12 +62,12 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update profile.");
     } finally {
-      setBusy(false);
+      setSavingProfile(false);
     }
   }
 
   async function handleAvatarUpload(file: File) {
-    setBusy(true);
+    setSavingProfile(true);
     setError("");
     try {
       const result = await api.uploadMyAvatar(file);
@@ -73,7 +77,35 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload avatar.");
     } finally {
-      setBusy(false);
+      setSavingProfile(false);
+    }
+  }
+
+  async function handlePasswordChange() {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setError("All password fields are required.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("New password and confirmation do not match.");
+      return;
+    }
+    setChangingPassword(true);
+    setError("");
+    setStatus("");
+    try {
+      await api.changeMyPassword({
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setStatus("Password updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update password.");
+    } finally {
+      setChangingPassword(false);
     }
   }
 
@@ -89,7 +121,7 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
           className="modal-card"
           onKeyDown={(e) => {
             if (e.key === "Escape") onClose();
-            if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement) && !busy) {
+            if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement) && !savingProfile && !changingPassword) {
               e.preventDefault();
               void handleSave();
             }
@@ -145,10 +177,28 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
             </label>
           </div>
 
+          <div className="form-grid" style={{ padding: "0 16px 16px" }}>
+            <label>
+              Current Password
+              <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+            </label>
+            <label>
+              New Password
+              <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+            </label>
+            <label>
+              Confirm Password
+              <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+            </label>
+          </div>
+
           <div className="modal-actions" style={{ padding: "0 16px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button type="button" className="ghost" onClick={onClose}>Cancel</button>
-            <button type="button" className="primary" onClick={() => void handleSave()} disabled={busy}>
-              {busy ? "Saving..." : "Save"}
+            <button type="button" className="ghost" onClick={() => void handlePasswordChange()} disabled={changingPassword}>
+              {changingPassword ? "Saving..." : "Change Password"}
+            </button>
+            <button type="button" className="primary" onClick={() => void handleSave()} disabled={savingProfile}>
+              {savingProfile ? "Saving..." : "Save"}
             </button>
           </div>
         </div>

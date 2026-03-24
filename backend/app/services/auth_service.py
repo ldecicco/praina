@@ -112,6 +112,20 @@ class AuthService:
         self.db.refresh(user)
         return user, access_token, refresh_token
 
+    def change_password(self, user_id: uuid.UUID, *, current_password: str, new_password: str) -> UserAccount:
+        user = self.get_user_by_id(user_id)
+        if not verify_password(current_password, user.password_hash):
+            raise ValidationError("Current password is incorrect.")
+        cleaned_new_password = new_password.strip()
+        if len(cleaned_new_password) < 8:
+            raise ValidationError("New password must be at least 8 characters.")
+        if verify_password(cleaned_new_password, user.password_hash):
+            raise ValidationError("New password must be different from the current password.")
+        user.password_hash = hash_password(cleaned_new_password)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
     def get_user_by_id(self, user_id: uuid.UUID) -> UserAccount:
         user = self.db.get(UserAccount, user_id)
         if not user:

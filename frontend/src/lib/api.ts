@@ -174,6 +174,10 @@ export const api = {
     return request("/auth/me", { method: "PATCH", body: JSON.stringify(payload) });
   },
 
+  changeMyPassword(payload: { current_password: string; new_password: string }): Promise<{ ok: boolean }> {
+    return request("/auth/me/password", { method: "POST", body: JSON.stringify(payload) });
+  },
+
   uploadMyAvatar(file: File): Promise<{ avatar_url: string }> {
     const formData = new FormData();
     formData.append("file", file);

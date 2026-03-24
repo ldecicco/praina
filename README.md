@@ -180,7 +180,3 @@ Useful current planning docs:
 - [docs/resources-equipment-plan.md](/home/luca/dev/code/praina/docs/resources-equipment-plan.md)
 - [docs/codex-llm-provider-plan.md](/home/luca/dev/code/praina/docs/codex-llm-provider-plan.md)
 
-## Notes
-
-- Some older docs still contain the previous repository name `agentic-project-management`
-- The frontend and backend evolve quickly; the root README is intended to reflect the current shipped state at a high level

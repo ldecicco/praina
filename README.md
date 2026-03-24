@@ -1,146 +1,155 @@
-# Project Tracker (AI-First MVP)
+# Praina
 
-AI-first project tracking platform for research and innovation programs with:
-- Core project entities: consortium, partners, WPs, tasks, milestones, deliverables, reporting periods
-- Project-grounded AI assistant with citations
-- ChatOps workflows for safe data changes with explicit confirmation
-- Full auditability for governance and reporting
+Praina is an AI-first project supervision platform with three current product areas:
 
-## Architecture Direction
-- Backend: Python (`FastAPI` + `SQLAlchemy` + `PostgreSQL` + `pgvector`)
-- Agentic AI: `Agno`-based specialized agents
-- Frontend: Tailwind CSS + shadcn/ui-ready structure
-- LLM serving: Ollama
+- `Research`: funded research projects, proposal work, delivery tracking, meetings, documents, and research collections
+- `Teaching`: university student projects organized by course, with supervision workflows, progress reports, oral-exam support, course materials, and grading support
+- `Resources`: shared lab equipment, bookings, downtime, labs, and lab closures across both research and teaching
 
-## Repository Structure
-- `backend/`: Python API, data model, services, and Agno agent modules
-- `frontend/`: React + Vite MVP UI (Onboarding Wizard + Assignment Matrix)
-- `docs/`: architecture decisions, entity model, and API contracts
-- `api-collections/`: Postman and Bruno API collections
+## Current Product State
 
-## Installation
+### Research
+- project dashboard and planning timeline
+- proposal and submission workspaces
+- meetings, documents, todos, and project chat
+- research workspace with collections, references, notes, and AI synthesis
+- project assistant with grounded citations
+
+### Teaching
+- separate teaching section with `Courses` as the main entry point
+- teacher / TA governance model
+- teaching project dashboards
+- progress reports, blockers, artifacts, assessment, and oral support
+- course materials and teaching-specific assistant grounding
+
+### Resources
+- top-level resources section
+- equipment inventory and project resource requirements
+- equipment booking calendar
+- labs and lab closures
+- conflict detection, downtime, blocker-day tracking, and notification support
+
+## Stack
+
+- Backend: `FastAPI`, `SQLAlchemy`, `Alembic`, `PostgreSQL`
+- Frontend: `React`, `TypeScript`, `Vite`
+- Retrieval / embeddings: `pgvector` + Ollama embeddings
+- Text inference: Ollama or Codex, selectable through backend `.env`
+
+## Repository Layout
+
+- `backend/`: API, models, services, agents, migrations
+- `frontend/`: React application
+- `docs/`: planning and architecture notes
+- `api-collections/`: API collections
+
+## Quick Start
+
 ### Prerequisites
-- Python `3.11+`
-- Docker + Docker Compose
-- `jq` (optional, for smoke-test convenience)
 
-### 1. Start PostgreSQL (with pgvector)
+- Python `3.11+`
+- Node `18+`
+- Docker + Docker Compose
+
+### 1. Start PostgreSQL
+
 ```bash
 cd backend
 docker compose up -d
 ```
 
-### 2. Create and activate Python virtual environment
+### 2. Create the backend virtual environment
+
 ```bash
 cd backend
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
 pip install --upgrade pip
-pip install -e .
+pip install -e .[dev]
 ```
 
-### 4. Configure environment
+### 3. Configure the backend
+
 ```bash
 cp .env.example .env
 ```
 
-`POSTGRES_PORT` in `.env` controls the exposed Docker Postgres port.
-Backend DB connection is derived from `POSTGRES_*` variables (or `DATABASE_URL` if explicitly set).
-Set `CORS_ALLOWED_ORIGINS` to frontend origin(s), comma-separated.
+Important backend settings:
 
-### 5. Run database migrations
+- database: `POSTGRES_*` or `DATABASE_URL`
+- CORS: `CORS_ALLOWED_ORIGINS`
+- text inference: `TEXT_INFERENCE_PROVIDER=ollama|codex`
+- embeddings: Ollama settings remain required
+
+If you want to use Codex for text generation:
+
+```env
+TEXT_INFERENCE_PROVIDER=codex
+CODEX_MODEL=gpt-5.4
+CODEX_TIMEOUT_SECONDS=120
+```
+
+Embeddings still come from Ollama.
+
+### 4. Run migrations
+
 ```bash
+cd backend
+source .venv/bin/activate
 alembic upgrade head
 ```
 
-### 6. Start backend API
+### 5. Start the backend
+
 ```bash
-set -a && source .env && set +a
-uvicorn app.main:app --host "$APP_HOST" --port "$APP_PORT" --reload
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 9999 --reload
 ```
 
-API will be available at `http://$APP_HOST:$APP_PORT`.
+### 6. Start the frontend
 
-### 7. Test quickly (onboarding flow)
-Create a project:
 ```bash
-curl -s -X POST "http://$APP_HOST:$APP_PORT/api/v1/projects" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "HEU-ALPHA",
-    "title": "Alpha Research Program",
-    "description": "Initial integration test project."
-  }'
-```
-
-Health check:
-```bash
-curl -s "http://$APP_HOST:$APP_PORT/api/v1/health"
-```
-
-Full onboarding smoke test is documented in [docs/backend-smoke-test.md](/home/luca/dev/code/agentic-project-management/docs/backend-smoke-test.md).
-
-### 8. Start frontend MVP
-```bash
-cd ../frontend
+cd frontend
 cp .env.example .env
 npm install
 npm run dev
 ```
 
-Frontend uses `VITE_DEV_PORT` and `VITE_API_BASE` from `frontend/.env`.
-On first access, use the built-in `Register` / `Login` screen.
+## Authentication
 
-### 9. Chat Assistant
-Run latest migrations to enable chat tables:
-```bash
-cd ../backend
-alembic upgrade head
-```
+The frontend includes built-in registration and login.
 
-Chat API endpoints:
-- `GET /api/v1/projects/{project_id}/chat/conversations`
-- `POST /api/v1/projects/{project_id}/chat/conversations`
-- `GET /api/v1/projects/{project_id}/chat/conversations/{conversation_id}/messages`
-- `POST /api/v1/projects/{project_id}/chat/conversations/{conversation_id}/messages`
-- `POST /api/v1/projects/{project_id}/chat/conversations/{conversation_id}/messages/stream`
+There are currently user-level section capabilities:
 
-User-to-user project chat and auth endpoints:
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/refresh`
-- `GET /api/v1/auth/me`
-- `GET /api/v1/projects/{project_id}/rooms`
-- `POST /api/v1/projects/{project_id}/rooms`
-- `GET /api/v1/projects/{project_id}/rooms/{room_id}/messages`
-- `POST /api/v1/projects/{project_id}/rooms/{room_id}/messages`
-- `WS /api/v1/projects/{project_id}/rooms/{room_id}/ws?token=<access_token>`
+- `can_access_research`
+- `can_access_teaching`
 
-Chat runtime is configured in `backend/.env`:
-- `OLLAMA_BASE_URL`
-- `OLLAMA_MODEL`
-- `ASSISTANT_TEMPERATURE`
-- `ASSISTANT_HTTP_TIMEOUT_SECONDS`
+So a user may have access to:
 
-Start Ollama and pull model:
-```bash
-ollama serve
-ollama pull qwen3.5:9b
-```
+- research only
+- teaching only
+- both
 
-The frontend now includes an `Assistant` workspace in the left navigation.
+## AI Notes
 
-Chat can create/update WPs, tasks, deliverables, and milestones through proposal-confirmation commands.
-Each action is always staged first, then executed only after explicit confirmation:
-- `confirm <proposal_id>`
-- `cancel <proposal_id>`
+Praina currently uses one assistant surface with domain-aware behavior:
+
+- research assistant context for funded / proposal workflows
+- teaching assistant context for supervision workflows
+- resource context injected for equipment, bookings, downtime, and blockers
+
+Text generation can run on either:
+
+- Ollama
+- Codex
+
+Embeddings remain Ollama-backed.
 
 ## Developer Commands
-Use the root [Makefile](/home/luca/dev/code/agentic-project-management/Makefile):
+
+Use the root [Makefile](/home/luca/dev/code/praina/Makefile):
+
 - `make backend-up`
 - `make backend-install`
 - `make backend-migrate`
@@ -149,14 +158,17 @@ Use the root [Makefile](/home/luca/dev/code/agentic-project-management/Makefile)
 - `make frontend-install`
 - `make frontend-dev`
 
-## API Collections
-- Postman: [project-tracker-mvp.postman_collection.json](/home/luca/dev/code/agentic-project-management/api-collections/postman/project-tracker-mvp.postman_collection.json)
-- Bruno: [api-collections/bruno/project-tracker-mvp](/home/luca/dev/code/agentic-project-management/api-collections/bruno/project-tracker-mvp)
+## Documentation
 
-Set `baseUrl` in collection environments using your `.env` values (`APP_HOST`, `APP_PORT`).
+Start from [docs/README.md](/home/luca/dev/code/praina/docs/README.md).
 
-## Next Step
-Start from [backend/README.md](/home/luca/dev/code/agentic-project-management/backend/README.md) and [docs/backend-architecture.md](/home/luca/dev/code/agentic-project-management/docs/backend-architecture.md).
+Useful current planning docs:
 
-Frontend quality requirements are documented in [docs/frontend-quality-standard.md](/home/luca/dev/code/agentic-project-management/docs/frontend-quality-standard.md).
-Full documentation index: [docs/README.md](/home/luca/dev/code/agentic-project-management/docs/README.md).
+- [docs/teaching-projects-plan.md](/home/luca/dev/code/praina/docs/teaching-projects-plan.md)
+- [docs/resources-equipment-plan.md](/home/luca/dev/code/praina/docs/resources-equipment-plan.md)
+- [docs/codex-llm-provider-plan.md](/home/luca/dev/code/praina/docs/codex-llm-provider-plan.md)
+
+## Notes
+
+- Some older docs still contain the previous repository name `agentic-project-management`
+- The frontend and backend evolve quickly; the root README is intended to reflect the current shipped state at a high level

@@ -605,7 +605,9 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     setTab("bookings");
   }
 
-  const weekLabel = `${weekDays[0]?.toLocaleDateString([], { day: "2-digit", month: "short" })} - ${weekDays[6]?.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" })}`;
+  const weekStartLabel = weekDays[0]?.toLocaleDateString([], { day: "2-digit", month: "short" }) || "";
+  const weekEndLabel = weekDays[weekDays.length - 1]?.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" }) || "";
+  const weekLabel = `${weekStartLabel} - ${weekEndLabel}`;
 
   return (
     <div className="resources-workspace">

@@ -822,6 +822,7 @@ export default function App() {
           {view === "meetings" ? <MeetingsHub selectedProjectId={selectedProjectId} onOpenAssistant={openAssistantWithPrompt} highlightMeetingId={pendingMeetingId} onHighlightConsumed={() => setPendingMeetingId(null)} /> : null}
           {view === "project-chat" ? (
             <ProjectCollabChat
+              key={selectedProjectId}
               selectedProjectId={selectedProjectId}
               currentUser={currentUser}
               accessToken={authTokens.access_token}

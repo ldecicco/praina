@@ -226,6 +226,9 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   const socketRef = useRef<WebSocket | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const activeProjectIdRef = useRef(selectedProjectId);
+  const contextRequestIdRef = useRef(0);
+  const messageRequestKeyRef = useRef("");
 
   const roomSeenStorageKey = useMemo(
     () => `project-chat-room-seen:${selectedProjectId}:${currentUser.id}`,
@@ -342,6 +345,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   }, [selectedRoom, uniqueUsers]);
 
   useEffect(() => {
+    activeProjectIdRef.current = selectedProjectId;
     if (!selectedProjectId) {
       setRooms([]);
       setSelectedRoomId("");
@@ -358,9 +362,13 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
       closeSocket();
       return;
     }
+    setRooms([]);
     setSelectedRoomId("");
     setMessages([]);
     setBotStreams({});
+    setLastMessageAtByRoom({});
+    setMemberships([]);
+    setDocuments([]);
     setReplyToMessage(null);
     setReactionPickerMessageId(null);
     setOnlineUserIds([]);
@@ -419,6 +427,8 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   }, [messages, botStreams]);
 
   async function loadContext(projectId: string) {
+    const requestId = contextRequestIdRef.current + 1;
+    contextRequestIdRef.current = requestId;
     try {
       setBusy(true);
       setError("");
@@ -437,23 +447,28 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
           return [room.id, response.items[0]?.created_at ?? ""] as const;
         })
       );
+      if (activeProjectIdRef.current !== projectId || contextRequestIdRef.current !== requestId) return;
       setLastMessageAtByRoom(Object.fromEntries(latestEntries.filter(([, createdAt]) => createdAt)));
-      setSelectedRoomId((current) => {
-        if (current && roomsRes.items.some((room) => room.id === current)) return current;
-        return roomsRes.items[0]?.id ?? "";
-      });
+      setSelectedRoomId(roomsRes.items[0]?.id ?? "");
     } catch (err) {
+      if (activeProjectIdRef.current !== projectId || contextRequestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : "Failed to load project chat.");
     } finally {
-      setBusy(false);
+      if (activeProjectIdRef.current === projectId && contextRequestIdRef.current === requestId) {
+        setBusy(false);
+      }
     }
   }
 
   async function loadMessages(projectId: string, roomId: string) {
+    const requestKey = `${projectId}:${roomId}`;
+    messageRequestKeyRef.current = requestKey;
     try {
       const response = await api.listRoomMessages(projectId, roomId);
+      if (messageRequestKeyRef.current !== requestKey || activeProjectIdRef.current !== projectId) return;
       setMessages(response.items);
     } catch (err) {
+      if (messageRequestKeyRef.current !== requestKey || activeProjectIdRef.current !== projectId) return;
       setError(err instanceof Error ? err.message : "Failed to load room messages.");
     }
   }

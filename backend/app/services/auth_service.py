@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -8,8 +9,11 @@ from sqlalchemy.orm import Session
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
 from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount
 from app.models.organization import TeamMember
-from app.models.project import Project
+from app.models.project import Project, ProjectKind
+from app.models.course import Course, CourseTeachingAssistant
+from app.models.teaching import TeachingProjectProfile
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
+from app.services.teaching_service import TeachingService
 
 MANAGE_ROLES = {ProjectRole.project_owner.value, ProjectRole.project_manager.value}
 SYSTEM_USER_EMAILS = {"project-bot@local", "project-bot@agenticpm.local"}
@@ -146,22 +150,35 @@ class AuthService:
         return list(rows)
 
     def list_project_memberships(self, project_id: uuid.UUID) -> list[ProjectMembership]:
-        self._get_project(project_id)
-        rows = self.db.scalars(
-            select(ProjectMembership)
-            .where(ProjectMembership.project_id == project_id)
-            .order_by(ProjectMembership.created_at.asc())
-        ).all()
-        return list(rows)
+        project = self._get_project(project_id)
+        rows = list(
+            self.db.scalars(
+                select(ProjectMembership)
+                .where(ProjectMembership.project_id == project_id)
+                .order_by(ProjectMembership.created_at.asc())
+            ).all()
+        )
+        if (getattr(project, "project_kind", ProjectKind.funded.value) or ProjectKind.funded.value) != ProjectKind.teaching.value:
+            return rows
+        return self._teaching_memberships(project_id, rows)
 
     def list_project_memberships_for_actor(self, project_id: uuid.UUID, actor_user_id: uuid.UUID) -> list[ProjectMembership]:
-        self._get_project(project_id)
+        project = self._get_project(project_id)
         actor = self.db.get(UserAccount, actor_user_id)
         if not actor:
             raise NotFoundError("Actor user not found.")
         if actor.platform_role != PlatformRole.super_admin.value:
             self._get_project_role(project_id, actor_user_id)
-        return self.list_project_memberships(project_id)
+        rows = list(
+            self.db.scalars(
+                select(ProjectMembership)
+                .where(ProjectMembership.project_id == project_id)
+                .order_by(ProjectMembership.created_at.asc())
+            ).all()
+        )
+        if (getattr(project, "project_kind", ProjectKind.funded.value) or ProjectKind.funded.value) != ProjectKind.teaching.value:
+            return rows
+        return self._teaching_memberships(project_id, rows)
 
     def list_project_memberships_with_users_for_actor(
         self, project_id: uuid.UUID, actor_user_id: uuid.UUID
@@ -284,6 +301,16 @@ class AuthService:
             raise ValidationError("Insufficient role to manage project memberships.")
 
     def _get_project_role(self, project_id: uuid.UUID, user_id: uuid.UUID) -> str:
+        project = self._get_project(project_id)
+        if (getattr(project, "project_kind", ProjectKind.funded.value) or ProjectKind.funded.value) == ProjectKind.teaching.value:
+            user = self.db.get(UserAccount, user_id)
+            teaching_service = TeachingService(self.db)
+            if user and teaching_service.can_manage_project(project_id, user_id, user.platform_role):
+                profile = teaching_service.ensure_profile(project_id)
+                course = self.db.get(Course, profile.course_id) if profile and profile.course_id else None
+                if course and course.teacher_user_id == user_id:
+                    return ProjectRole.project_owner.value
+                return ProjectRole.project_manager.value
         membership = self.db.scalar(
             select(ProjectMembership.role).where(
                 ProjectMembership.project_id == project_id,
@@ -335,3 +362,48 @@ class AuthService:
                         role=ProjectRole.partner_member.value,
                     )
                 )
+
+    def _teaching_memberships(
+        self,
+        project_id: uuid.UUID,
+        existing_rows: list[ProjectMembership],
+    ) -> list[ProjectMembership]:
+        by_user_id: dict[uuid.UUID, ProjectMembership] = {row.user_id: row for row in existing_rows}
+        profile = self.db.scalar(select(TeachingProjectProfile).where(TeachingProjectProfile.project_id == project_id))
+        if not profile or not profile.course_id:
+            return existing_rows
+
+        course = self.db.get(Course, profile.course_id)
+        if course and course.teacher_user_id and course.teacher_user_id not in by_user_id:
+            by_user_id[course.teacher_user_id] = self._synthetic_membership(
+                project_id=project_id,
+                user_id=course.teacher_user_id,
+                role=ProjectRole.project_owner.value,
+            )
+
+        assistants = self.db.scalars(
+            select(CourseTeachingAssistant).where(CourseTeachingAssistant.course_id == profile.course_id)
+        ).all()
+        for assignment in assistants:
+            if assignment.user_id not in by_user_id:
+                by_user_id[assignment.user_id] = self._synthetic_membership(
+                    project_id=project_id,
+                    user_id=assignment.user_id,
+                    role=ProjectRole.project_manager.value,
+                )
+
+        rows = list(by_user_id.values())
+        rows.sort(key=lambda item: (getattr(item, "created_at", datetime.now(timezone.utc)), str(item.user_id)))
+        return rows
+
+    def _synthetic_membership(self, *, project_id: uuid.UUID, user_id: uuid.UUID, role: str) -> ProjectMembership:
+        stamp = datetime.now(timezone.utc)
+        synthetic_id = uuid.uuid5(uuid.NAMESPACE_URL, f"teaching-membership:{project_id}:{user_id}:{role}")
+        return SimpleNamespace(
+            id=synthetic_id,
+            project_id=project_id,
+            user_id=user_id,
+            role=role,
+            created_at=stamp,
+            updated_at=stamp,
+        )

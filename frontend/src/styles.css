@@ -2929,6 +2929,20 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   margin-top: 2px;
   color: var(--brand);
   font-size: 11px;
+  overflow: hidden;
+}
+
+.chat-message-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.chat-message-avatar.user {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 
 .chat-message-body {
@@ -3816,9 +3830,17 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .pm-avatar-badge.small { width: 22px; height: 22px; font-size: 8px; }
+
+.pm-avatar-badge img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 
 /* ─── Composer ─── */
 .pm-composer {

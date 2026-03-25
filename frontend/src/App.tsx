@@ -827,7 +827,14 @@ export default function App() {
               accessToken={authTokens.access_token}
             />
           ) : null}
-          {view === "assistant" ? <ChatWorkspace selectedProjectId={selectedProjectId} project={activeProject} onNavigate={(v, id) => handleNavigate(v as View, id)} /> : null}
+          {view === "assistant" ? (
+            <ChatWorkspace
+              selectedProjectId={selectedProjectId}
+              project={activeProject}
+              currentUser={currentUser}
+              onNavigate={(v, id) => handleNavigate(v as View, id)}
+            />
+          ) : null}
           {view === "wizard" ? (
             <OnboardingWizard
               projects={projects}

@@ -67,6 +67,17 @@ function initials(name: string): string {
   return value || "U";
 }
 
+function findAvatarUrl(
+  senderUserId: string | null,
+  memberships: MembershipWithUser[],
+  currentUser: AuthUser,
+): string | null {
+  const rawUrl = senderUserId && senderUserId === currentUser.id
+    ? currentUser.avatar_url
+    : memberships.find((membership) => membership.user.id === senderUserId)?.user.avatar_url ?? null;
+  return rawUrl ? `${import.meta.env.VITE_API_BASE || ""}${rawUrl}` : null;
+}
+
 function excerpt(text: string, max = 96): string {
   const normalized = (text || "").replace(/\s+/g, " ").trim();
   if (!normalized) return "";
@@ -729,10 +740,17 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
             {messages.map((message) => {
               const own = message.sender_user_id === currentUser.id;
               const senderName = own ? "You" : message.sender_display_name;
+              const senderAvatarUrl = findAvatarUrl(message.sender_user_id, memberships, currentUser);
               const replyPreview = message.reply_to_message;
               return (
                 <article id={`pm-msg-${message.id}`} key={message.id} className={`pm-message-row ${own ? "own" : "other"}`}>
-                  {!own ? <span className="pm-avatar-badge small">{initials(senderName)}</span> : null}
+                  <span className="pm-avatar-badge small">
+                    {senderAvatarUrl ? (
+                      <img src={senderAvatarUrl} alt={senderName} />
+                    ) : (
+                      initials(senderName)
+                    )}
+                  </span>
                   <div className={`pm-message-bubble ${own ? "own" : "other"}`}>
                     <div className="pm-message-head">
                       <strong>{senderName}</strong>

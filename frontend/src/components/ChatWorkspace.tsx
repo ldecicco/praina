@@ -26,6 +26,7 @@ import { api } from "../lib/api";
 import { currentProjectMonth } from "../lib/utils";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import type {
+  AuthUser,
   AuditEvent,
   ChatConversation,
   ChatMessage,
@@ -40,6 +41,7 @@ import type {
 type Props = {
   selectedProjectId: string;
   project: Project | null;
+  currentUser: AuthUser;
   onNavigate?: (view: string, entityId?: string) => void;
 };
 
@@ -161,6 +163,17 @@ function renderMarkdown(content: string): ReactNode[] {
   return output;
 }
 
+function initials(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "");
+  const value = parts.join("");
+  return value || "U";
+}
+
 function relativeTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
@@ -182,7 +195,7 @@ function formatTimestamp(iso: string): string {
   return date.toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" });
 }
 
-export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props) {
+export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavigate }: Props) {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -755,6 +768,14 @@ export function ChatWorkspace({ selectedProjectId, project, onNavigate }: Props)
                     {message.role === "assistant" ? (
                       <div className="chat-message-avatar">
                         <FontAwesomeIcon icon={faRobot} />
+                      </div>
+                    ) : message.role === "user" ? (
+                      <div className="chat-message-avatar user">
+                        {currentUser.avatar_url ? (
+                          <img src={`${import.meta.env.VITE_API_BASE || ""}${currentUser.avatar_url}`} alt={currentUser.display_name} />
+                        ) : (
+                          <span>{initials(currentUser.display_name)}</span>
+                        )}
                       </div>
                     ) : null}
                     <div className="chat-message-body">

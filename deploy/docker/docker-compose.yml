@@ -30,6 +30,8 @@ services:
       context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    networks:
+      - arianna-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,3 +89,7 @@ volumes:
   postgres_data:
   backend_storage:
   ollama_data:
+
+networks:
+  arianna-network:
+    external: true

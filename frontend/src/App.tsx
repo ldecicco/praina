@@ -344,12 +344,8 @@ export default function App() {
     }
     if (view === "research" || view === "call" || view === "proposal" || view === "submission") {
       setPlatformSection("research");
-      return;
     }
-    if (activeProject) {
-      setPlatformSection(activeProject.project_kind === "teaching" ? "teaching" : "research");
-    }
-  }, [activeProject?.id, activeProject?.project_kind, view]);
+  }, [view]);
 
   useEffect(() => {
     function handleProjectDataChanged(event: Event) {

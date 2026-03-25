@@ -200,6 +200,8 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   const [rooms, setRooms] = useState<ProjectChatRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
+  const [lastMessageAtByRoom, setLastMessageAtByRoom] = useState<Record<string, string>>({});
+  const [seenMessageAtByRoom, setSeenMessageAtByRoom] = useState<Record<string, string>>({});
   const [memberships, setMemberships] = useState<MembershipWithUser[]>([]);
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [draft, setDraft] = useState("");
@@ -224,6 +226,11 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   const socketRef = useRef<WebSocket | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+
+  const roomSeenStorageKey = useMemo(
+    () => `project-chat-room-seen:${selectedProjectId}:${currentUser.id}`,
+    [selectedProjectId, currentUser.id]
+  );
 
   const myRole = useMemo(
     () =>
@@ -339,6 +346,8 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
       setRooms([]);
       setSelectedRoomId("");
       setMessages([]);
+      setLastMessageAtByRoom({});
+      setSeenMessageAtByRoom({});
       setMemberships([]);
       setDocuments([]);
       setBotStreams({});
@@ -354,6 +363,16 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   }, [selectedProjectId]);
 
   useEffect(() => {
+    if (!selectedProjectId) return;
+    try {
+      const raw = window.localStorage.getItem(roomSeenStorageKey);
+      setSeenMessageAtByRoom(raw ? JSON.parse(raw) as Record<string, string> : {});
+    } catch {
+      setSeenMessageAtByRoom({});
+    }
+  }, [selectedProjectId, roomSeenStorageKey]);
+
+  useEffect(() => {
     if (!selectedProjectId || !selectedRoomId) {
       setMessages([]);
       setBotStreams({});
@@ -367,6 +386,23 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
     connectSocket(selectedProjectId, selectedRoomId);
     return () => closeSocket();
   }, [selectedProjectId, selectedRoomId, accessToken]);
+
+  useEffect(() => {
+    if (!selectedProjectId || !selectedRoomId || messages.length === 0) return;
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage?.created_at) return;
+    setSeenMessageAtByRoom((prev) => {
+      const next = { ...prev, [selectedRoomId]: lastMessage.created_at };
+      try {
+        window.localStorage.setItem(roomSeenStorageKey, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    setLastMessageAtByRoom((prev) => {
+      if (prev[selectedRoomId] === lastMessage.created_at) return prev;
+      return { ...prev, [selectedRoomId]: lastMessage.created_at };
+    });
+  }, [selectedProjectId, selectedRoomId, messages, roomSeenStorageKey]);
 
   useEffect(() => {
     if (threadEndRef.current) {
@@ -387,6 +423,13 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
       setMemberships(membershipsRes.items);
       setDocuments(docsRes.items);
       setRoomMemberUserId("");
+      const latestEntries = await Promise.all(
+        roomsRes.items.map(async (room) => {
+          const response = await api.listRoomMessages(projectId, room.id, { page: 1, pageSize: 1 });
+          return [room.id, response.items[0]?.created_at ?? ""] as const;
+        })
+      );
+      setLastMessageAtByRoom(Object.fromEntries(latestEntries.filter(([, createdAt]) => createdAt)));
       setSelectedRoomId((current) => {
         if (current && roomsRes.items.some((room) => room.id === current)) return current;
         return roomsRes.items[0]?.id ?? "";
@@ -490,6 +533,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
 
         if (payload.event === "message" && payload.message) {
           const incomingMessage = payload.message;
+          setLastMessageAtByRoom((prev) => ({ ...prev, [incomingMessage.room_id]: incomingMessage.created_at }));
           setMessages((prev) => {
             if (prev.some((item) => item.id === incomingMessage.id)) return prev;
             return [...prev, incomingMessage];
@@ -682,6 +726,20 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   const shownOnlineUsers = shownUsers.filter((user) => onlineUsers.some((item) => item.id === user.id));
   const shownOfflineUsers = shownUsers.filter((user) => !shownOnlineUsers.some((item) => item.id === user.id));
 
+  const unreadByRoom = useMemo(() => {
+    const output: Record<string, number> = {};
+    rooms.forEach((room) => {
+      const latest = lastMessageAtByRoom[room.id];
+      if (!latest) {
+        output[room.id] = 0;
+        return;
+      }
+      const seen = seenMessageAtByRoom[room.id];
+      output[room.id] = !seen || new Date(latest).getTime() > new Date(seen).getTime() ? 1 : 0;
+    });
+    return output;
+  }, [lastMessageAtByRoom, rooms, seenMessageAtByRoom]);
+
   return (
     <section className="panel">
       {error ? <p className="error">{error}</p> : null}
@@ -706,6 +764,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
                   <strong>{room.name}</strong>
                   <small>{room.member_user_ids.length > 0 ? `${room.member_user_ids.length} members` : "Project room"}</small>
                 </span>
+                {unreadByRoom[room.id] ? <span className="pm-room-unread">{unreadByRoom[room.id]}</span> : null}
               </button>
             ))}
             {rooms.length === 0 ? <p className="muted-small">No rooms.</p> : null}

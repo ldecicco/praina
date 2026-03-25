@@ -3612,6 +3612,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   display: flex;
   flex-direction: column;
   gap: 0;
+  flex: 1;
 }
 
 .pm-room-copy strong {
@@ -3644,6 +3645,21 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   height: 6px;
   border-radius: 999px;
   background: var(--brand);
+  flex-shrink: 0;
+}
+
+.pm-room-unread {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 

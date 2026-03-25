@@ -1620,8 +1620,10 @@ export const api = {
     return request(`/projects/${projectId}/rooms/${roomId}/members/${userId}`, { method: "DELETE" });
   },
 
-  listRoomMessages(projectId: string, roomId: string): Promise<Paginated<ProjectChatMessage>> {
-    return request(`/projects/${projectId}/rooms/${roomId}/messages?page=1&page_size=500`);
+  listRoomMessages(projectId: string, roomId: string, options?: { page?: number; pageSize?: number }): Promise<Paginated<ProjectChatMessage>> {
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 500;
+    return request(`/projects/${projectId}/rooms/${roomId}/messages?page=${page}&page_size=${pageSize}`);
   },
 
   createRoomMessage(

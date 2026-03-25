@@ -358,6 +358,14 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
       closeSocket();
       return;
     }
+    setSelectedRoomId("");
+    setMessages([]);
+    setBotStreams({});
+    setReplyToMessage(null);
+    setReactionPickerMessageId(null);
+    setOnlineUserIds([]);
+    setError("");
+    closeSocket();
     void loadContext(selectedProjectId);
     return () => closeSocket();
   }, [selectedProjectId]);

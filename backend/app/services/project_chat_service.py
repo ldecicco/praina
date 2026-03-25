@@ -15,7 +15,7 @@ from app.models.collaboration_chat import (
     ProjectChatRoomMember,
 )
 from app.models.organization import PartnerOrganization, TeamMember
-from app.models.project import Project
+from app.models.project import Project, ProjectKind
 from app.models.course import Course, CourseMaterial, CourseTeachingAssistant
 from app.models.teaching import (
     TeachingProgressReport,
@@ -28,6 +28,7 @@ from app.models.teaching import (
 from app.models.work import Deliverable, Milestone, Task, WorkPackage, deliverable_wps, milestone_wps
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 from app.services.resources_service import ResourcesService
+from app.services.teaching_service import TeachingService
 
 MANAGE_ROOMS_ROLES = {ProjectRole.project_owner.value, ProjectRole.project_manager.value}
 READ_ROLES = {item.value for item in ProjectRole}
@@ -779,7 +780,17 @@ class ProjectChatService:
         user = self.db.get(UserAccount, user_id)
         if user and user.platform_role == PlatformRole.super_admin.value:
             return ProjectRole.project_owner.value
-        self._get_project(project_id)
+        project = self._get_project(project_id)
+        if (getattr(project, "project_kind", ProjectKind.funded.value) or ProjectKind.funded.value) == ProjectKind.teaching.value:
+            teaching_service = TeachingService(self.db)
+            if not teaching_service.can_manage_project(project_id, user_id, user.platform_role if user else PlatformRole.user.value):
+                raise NotFoundError("User is not allowed to access this teaching project.")
+            profile = teaching_service.ensure_profile(project_id)
+            if profile.course_id:
+                course = self.db.scalar(select(Course).where(Course.id == profile.course_id))
+                if course and course.teacher_user_id == user_id:
+                    return ProjectRole.project_owner.value
+            return ProjectRole.project_manager.value
         membership = self.db.scalar(
             select(ProjectMembership).where(ProjectMembership.project_id == project_id, ProjectMembership.user_id == user_id)
         )

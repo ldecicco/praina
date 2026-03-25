@@ -135,6 +135,37 @@ class EquipmentListRead(PaginatedResponse):
     items: list[EquipmentRead]
 
 
+class EquipmentMaterialCreate(BaseModel):
+    material_type: str = "manual"
+    title: str = Field(min_length=2, max_length=255)
+    external_url: str | None = Field(default=None, max_length=512)
+    notes: str | None = None
+
+
+class EquipmentMaterialUpdate(BaseModel):
+    material_type: str | None = None
+    title: str | None = Field(default=None, min_length=2, max_length=255)
+    external_url: str | None = Field(default=None, max_length=512)
+    notes: str | None = None
+
+
+class EquipmentMaterialRead(BaseModel):
+    id: str
+    equipment_id: str
+    material_type: str
+    title: str
+    external_url: str | None
+    attachment_filename: str | None
+    attachment_url: str | None
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EquipmentMaterialListRead(PaginatedResponse):
+    items: list[EquipmentMaterialRead]
+
+
 class EquipmentRequirementCreate(BaseModel):
     equipment_id: str
     priority: str = "important"

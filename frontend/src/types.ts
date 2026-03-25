@@ -93,6 +93,18 @@ export type TeachingProjectArtifact = {
   updated_at: string;
 };
 
+export type TeachingProjectBackgroundMaterial = {
+  id: string;
+  project_id: string;
+  material_type: string;
+  title: string;
+  document_key: string | null;
+  external_url: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TeachingProgressReport = {
   id: string;
   project_id: string;
@@ -152,6 +164,7 @@ export type TeachingWorkspace = {
   profile: TeachingProjectProfile;
   students: TeachingProjectStudent[];
   artifacts: TeachingProjectArtifact[];
+  background_materials: TeachingProjectBackgroundMaterial[];
   progress_reports: TeachingProgressReport[];
   milestones: TeachingProjectMilestone[];
   blockers: TeachingProjectBlocker[];
@@ -210,6 +223,19 @@ export type Equipment = {
   booking_notes: string | null;
   maintenance_notes: string | null;
   is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EquipmentMaterial = {
+  id: string;
+  equipment_id: string;
+  material_type: string;
+  title: string;
+  external_url: string | null;
+  attachment_filename: string | null;
+  attachment_url: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 };

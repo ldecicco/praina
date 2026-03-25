@@ -11,6 +11,7 @@ from app.models.teaching import (
     TeachingChunk,
     TeachingProgressReport,
     TeachingProjectArtifact,
+    TeachingProjectBackgroundMaterial,
     TeachingProjectBlocker,
     TeachingProjectProfile,
 )
@@ -27,6 +28,7 @@ class TeachingAIService:
         chunks: list[TeachingChunk] = []
         chunks.extend(self._profile_chunks(project_id))
         chunks.extend(self._artifact_chunks(project_id))
+        chunks.extend(self._background_material_chunks(project_id))
         chunks.extend(self._blocker_chunks(project_id))
         chunks.extend(self._progress_report_chunks(project_id))
         chunks.extend(self._course_material_chunks(project_id))
@@ -90,6 +92,32 @@ class TeachingAIService:
                     project_id=project_id,
                     source_type="artifact",
                     source_id=artifact.id,
+                    text="\n".join(text_parts),
+                )
+            )
+        return chunks
+
+    def _background_material_chunks(self, project_id: uuid.UUID) -> list[TeachingChunk]:
+        items = self.db.scalars(
+            select(TeachingProjectBackgroundMaterial)
+            .where(TeachingProjectBackgroundMaterial.project_id == project_id)
+            .order_by(TeachingProjectBackgroundMaterial.created_at.asc())
+        ).all()
+        chunks: list[TeachingChunk] = []
+        for item in items:
+            text_parts = [
+                f"Background Material: {item.title}",
+                f"Type: {item.material_type}",
+            ]
+            if item.external_url:
+                text_parts.append(f"URL: {item.external_url}")
+            if item.notes:
+                text_parts.append(f"Notes:\n{item.notes.strip()}")
+            chunks.extend(
+                self._make_chunks(
+                    project_id=project_id,
+                    source_type="background_material",
+                    source_id=item.id,
                     text="\n".join(text_parts),
                 )
             )

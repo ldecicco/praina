@@ -60,6 +60,7 @@ import type {
   ResearchReference,
   ResearchNote,
   Equipment,
+  EquipmentMaterial,
   EquipmentBlocker,
   EquipmentBooking,
   EquipmentConflict,
@@ -70,6 +71,7 @@ import type {
   ProjectResourcesWorkspace,
   TeachingProjectArtifact,
   TeachingProjectAssessment,
+  TeachingProjectBackgroundMaterial,
   TeachingProjectBlocker,
   TeachingProjectMilestone,
   TeachingProjectProfile,
@@ -458,6 +460,40 @@ export const api = {
     return request(`/resources/equipment/${equipmentId}`, { method: "DELETE" });
   },
 
+  listEquipmentMaterials(page = 1, pageSize = 100, equipmentId = ""): Promise<Paginated<EquipmentMaterial>> {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (equipmentId) query.set("equipment_id", equipmentId);
+    return request(`/resources/equipment-materials?${query.toString()}`);
+  },
+
+  createEquipmentMaterial(equipmentId: string, payload: {
+    material_type?: string;
+    title: string;
+    external_url?: string | null;
+    notes?: string | null;
+  }): Promise<EquipmentMaterial> {
+    return request(`/resources/equipment-materials?equipment_id=${encodeURIComponent(equipmentId)}`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateEquipmentMaterial(materialId: string, payload: {
+    material_type?: string;
+    title?: string;
+    external_url?: string | null;
+    notes?: string | null;
+  }): Promise<EquipmentMaterial> {
+    return request(`/resources/equipment-materials/${materialId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteEquipmentMaterial(materialId: string): Promise<void> {
+    return request(`/resources/equipment-materials/${materialId}`, { method: "DELETE" });
+  },
+
+  uploadEquipmentMaterialAttachment(materialId: string, file: File): Promise<EquipmentMaterial> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request(`/resources/equipment-materials/${materialId}/attachment`, { method: "POST", body: formData });
+  },
+
   listEquipmentBookings(page = 1, pageSize = 100, equipmentId = "", projectId = "", status = ""): Promise<Paginated<EquipmentBooking>> {
     const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
     if (equipmentId) query.set("equipment_id", equipmentId);
@@ -621,6 +657,30 @@ export const api = {
 
   deleteTeachingArtifact(projectId: string, artifactId: string): Promise<void> {
     return request(`/projects/${projectId}/teaching/artifacts/${artifactId}`, { method: "DELETE" });
+  },
+
+  createTeachingBackgroundMaterial(projectId: string, payload: {
+    material_type?: string;
+    title: string;
+    document_key?: string | null;
+    external_url?: string | null;
+    notes?: string | null;
+  }): Promise<TeachingProjectBackgroundMaterial> {
+    return request(`/projects/${projectId}/teaching/background-materials`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  updateTeachingBackgroundMaterial(projectId: string, materialId: string, payload: {
+    material_type?: string;
+    title?: string;
+    document_key?: string | null;
+    external_url?: string | null;
+    notes?: string | null;
+  }): Promise<TeachingProjectBackgroundMaterial> {
+    return request(`/projects/${projectId}/teaching/background-materials/${materialId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  deleteTeachingBackgroundMaterial(projectId: string, materialId: string): Promise<void> {
+    return request(`/projects/${projectId}/teaching/background-materials/${materialId}`, { method: "DELETE" });
   },
 
   createTeachingProgressReport(projectId: string, payload: {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import BinaryIO
 
 from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -9,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import ProjectMembership, ProjectRole, UserAccount
 from app.models.project import Project, ProjectKind
-from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentRequirement, Lab, LabClosure
+from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentMaterial, EquipmentRequirement, Lab, LabClosure
+from app.core.config import settings
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 from app.services.teaching_service import TeachingService
 
@@ -238,11 +241,115 @@ class ResourcesService:
         self.db.delete(item)
         self.db.commit()
 
+    def list_equipment_materials(
+        self, *, equipment_id: uuid.UUID | None, page: int, page_size: int
+    ) -> tuple[list[EquipmentMaterial], int]:
+        stmt = select(EquipmentMaterial)
+        count_stmt = select(func.count()).select_from(EquipmentMaterial)
+        if equipment_id:
+            stmt = stmt.where(EquipmentMaterial.equipment_id == equipment_id)
+            count_stmt = count_stmt.where(EquipmentMaterial.equipment_id == equipment_id)
+        total = int(self.db.scalar(count_stmt) or 0)
+        items = self.db.scalars(
+            stmt.order_by(EquipmentMaterial.created_at.asc(), EquipmentMaterial.title.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        return list(items), total
+
+    def create_equipment_material(self, *, equipment_id: uuid.UUID, **fields) -> EquipmentMaterial:
+        self.get_equipment(equipment_id)
+        item = EquipmentMaterial(
+            equipment_id=equipment_id,
+            material_type=(fields.get("material_type") or "manual").strip(),
+            title=fields["title"].strip(),
+            external_url=(fields.get("external_url") or "").strip() or None,
+            notes=fields.get("notes"),
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def update_equipment_material(self, material_id: uuid.UUID, **fields) -> EquipmentMaterial:
+        item = self.get_equipment_material(material_id)
+        if "material_type" in fields and fields["material_type"] is not None:
+            item.material_type = fields["material_type"].strip()
+        if "title" in fields and fields["title"] is not None:
+            item.title = fields["title"].strip()
+        if "external_url" in fields:
+            item.external_url = (fields["external_url"] or "").strip() or None
+        if "notes" in fields:
+            item.notes = fields["notes"]
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def attach_equipment_material_file(
+        self,
+        material_id: uuid.UUID,
+        *,
+        file_name: str,
+        content_type: str,
+        file_stream: BinaryIO,
+    ) -> EquipmentMaterial:
+        item = self.get_equipment_material(material_id)
+        self._delete_attachment_file(item)
+        safe_name = Path(file_name).name or "attachment.bin"
+        storage_path = self._equipment_material_storage_path(item.equipment_id, item.id, safe_name)
+        self._write_file(file_stream, storage_path)
+        item.attachment_path = str(storage_path)
+        item.attachment_filename = safe_name
+        item.attachment_mime_type = content_type or "application/octet-stream"
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def delete_equipment_material(self, material_id: uuid.UUID) -> None:
+        item = self.get_equipment_material(material_id)
+        self._delete_attachment_file(item)
+        self.db.delete(item)
+        self.db.commit()
+
     def get_equipment(self, equipment_id: uuid.UUID) -> Equipment:
         item = self.db.scalar(select(Equipment).where(Equipment.id == equipment_id))
         if not item:
             raise NotFoundError("Equipment not found.")
         return item
+
+    def get_equipment_material(self, material_id: uuid.UUID) -> EquipmentMaterial:
+        item = self.db.scalar(select(EquipmentMaterial).where(EquipmentMaterial.id == material_id))
+        if not item:
+            raise NotFoundError("Equipment material not found.")
+        return item
+
+    @staticmethod
+    def _write_file(file_stream: BinaryIO, target_path: Path) -> int:
+        total = 0
+        with target_path.open("wb") as output:
+            while True:
+                chunk = file_stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                total += len(chunk)
+        return total
+
+    def _equipment_material_storage_path(self, equipment_id: uuid.UUID, material_id: uuid.UUID, file_name: str) -> Path:
+        root = Path(settings.documents_storage_path)
+        if not root.is_absolute():
+            root = (Path.cwd() / root).resolve()
+        target_dir = root / "_resources" / "equipment" / str(equipment_id) / str(material_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir / file_name
+
+    @staticmethod
+    def _delete_attachment_file(item: EquipmentMaterial) -> None:
+        if not item.attachment_path:
+            return
+        path = Path(item.attachment_path)
+        if path.exists():
+            path.unlink(missing_ok=True)
 
     def list_project_requirements(self, project_id: uuid.UUID) -> list[EquipmentRequirement]:
         self._get_project(project_id)

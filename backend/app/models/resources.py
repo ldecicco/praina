@@ -60,6 +60,19 @@ class Equipment(Base, IdMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
+class EquipmentMaterial(Base, IdMixin, TimestampMixin):
+    __tablename__ = "equipment_materials"
+
+    equipment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("equipment.id", ondelete="CASCADE"), index=True)
+    material_type: Mapped[str] = mapped_column(String(32), default="manual", index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    external_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attachment_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attachment_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class EquipmentRequirement(Base, IdMixin, TimestampMixin):
     __tablename__ = "equipment_requirements"
     __table_args__ = (UniqueConstraint("project_id", "equipment_id", name="uq_equipment_requirement_project_equipment"),)

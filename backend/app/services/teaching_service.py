@@ -18,6 +18,7 @@ from app.models.teaching import (
     TeachingProgressReport,
     TeachingProjectArtifact,
     TeachingProjectAssessment,
+    TeachingProjectBackgroundMaterial,
     TeachingProjectBlocker,
     TeachingProjectHealth,
     TeachingProjectMilestone,
@@ -43,6 +44,7 @@ class TeachingService:
             "profile": profile,
             "students": self.list_students(project_id, page=1, page_size=200)[0],
             "artifacts": self.list_artifacts(project_id, page=1, page_size=200)[0],
+            "background_materials": self.list_background_materials(project_id, page=1, page_size=200)[0],
             "progress_reports": self.list_progress_reports(project_id, page=1, page_size=200)[0],
             "milestones": self.list_milestones(project_id, page=1, page_size=200)[0],
             "blockers": self.list_blockers(project_id, page=1, page_size=200)[0],
@@ -198,6 +200,68 @@ class TeachingService:
 
     def delete_artifact(self, project_id: uuid.UUID, artifact_id: uuid.UUID) -> None:
         item = self._get_artifact(project_id, artifact_id)
+        self.db.delete(item)
+        self.ai_service.rebuild_project_chunks(project_id)
+        self.db.commit()
+
+    def list_background_materials(
+        self, project_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[TeachingProjectBackgroundMaterial], int]:
+        self._get_project(project_id)
+        total = int(
+            self.db.scalar(
+                select(func.count()).select_from(TeachingProjectBackgroundMaterial).where(
+                    TeachingProjectBackgroundMaterial.project_id == project_id
+                )
+            )
+            or 0
+        )
+        items = self.db.scalars(
+            select(TeachingProjectBackgroundMaterial)
+            .where(TeachingProjectBackgroundMaterial.project_id == project_id)
+            .order_by(TeachingProjectBackgroundMaterial.created_at.asc(), TeachingProjectBackgroundMaterial.title.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        return list(items), total
+
+    def create_background_material(self, project_id: uuid.UUID, **fields) -> TeachingProjectBackgroundMaterial:
+        self._get_project(project_id)
+        item = TeachingProjectBackgroundMaterial(
+            project_id=project_id,
+            material_type=(fields.get("material_type") or "other").strip(),
+            title=fields["title"].strip(),
+            document_key=uuid.UUID(fields["document_key"]) if fields.get("document_key") else None,
+            external_url=(fields.get("external_url") or "").strip() or None,
+            notes=fields.get("notes"),
+        )
+        self.db.add(item)
+        self.ai_service.rebuild_project_chunks(project_id)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def update_background_material(
+        self, project_id: uuid.UUID, material_id: uuid.UUID, **fields
+    ) -> TeachingProjectBackgroundMaterial:
+        item = self._get_background_material(project_id, material_id)
+        if "material_type" in fields and fields["material_type"] is not None:
+            item.material_type = fields["material_type"].strip()
+        if "title" in fields and fields["title"] is not None:
+            item.title = fields["title"].strip()
+        if "document_key" in fields:
+            item.document_key = uuid.UUID(fields["document_key"]) if fields["document_key"] else None
+        if "external_url" in fields:
+            item.external_url = (fields["external_url"] or "").strip() or None
+        if "notes" in fields:
+            item.notes = fields["notes"]
+        self.ai_service.rebuild_project_chunks(project_id)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def delete_background_material(self, project_id: uuid.UUID, material_id: uuid.UUID) -> None:
+        item = self._get_background_material(project_id, material_id)
         self.db.delete(item)
         self.ai_service.rebuild_project_chunks(project_id)
         self.db.commit()
@@ -462,6 +526,19 @@ class TeachingService:
         )
         if not item:
             raise NotFoundError("Teaching progress report not found.")
+        return item
+
+    def _get_background_material(
+        self, project_id: uuid.UUID, material_id: uuid.UUID
+    ) -> TeachingProjectBackgroundMaterial:
+        item = self.db.scalar(
+            select(TeachingProjectBackgroundMaterial).where(
+                TeachingProjectBackgroundMaterial.project_id == project_id,
+                TeachingProjectBackgroundMaterial.id == material_id,
+            )
+        )
+        if not item:
+            raise NotFoundError("Background material not found.")
         return item
 
     def _get_milestone(self, project_id: uuid.UUID, milestone_id: uuid.UUID) -> TeachingProjectMilestone:

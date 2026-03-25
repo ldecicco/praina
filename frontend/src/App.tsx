@@ -387,13 +387,13 @@ export default function App() {
   }, [activeProject?.project_mode, view]);
 
   useEffect(() => {
-    if (activeProject?.project_kind === "teaching") {
+    if (platformSection === "teaching" && activeProject?.project_kind === "teaching") {
       const teachingViews = new Set<View>(["my-work", "courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "admin"]);
       if (!teachingViews.has(view)) {
         setView("courses");
       }
     }
-  }, [activeProject?.project_kind, view]);
+  }, [activeProject?.project_kind, view, platformSection]);
 
   const viewTitle: Record<View, string> = {
     "my-work": "My Work",

@@ -98,6 +98,34 @@ class TeachingProjectArtifactRead(BaseModel):
     updated_at: datetime
 
 
+class TeachingProjectBackgroundMaterialCreate(BaseModel):
+    material_type: str = "other"
+    title: str = Field(min_length=2, max_length=255)
+    document_key: str | None = None
+    external_url: str | None = Field(default=None, max_length=512)
+    notes: str | None = None
+
+
+class TeachingProjectBackgroundMaterialUpdate(BaseModel):
+    material_type: str | None = None
+    title: str | None = Field(default=None, min_length=2, max_length=255)
+    document_key: str | None = None
+    external_url: str | None = Field(default=None, max_length=512)
+    notes: str | None = None
+
+
+class TeachingProjectBackgroundMaterialRead(BaseModel):
+    id: str
+    project_id: str
+    material_type: str
+    title: str
+    document_key: str | None
+    external_url: str | None
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class TeachingProgressReportCreate(BaseModel):
     report_date: date | None = None
     meeting_date: date | None = None
@@ -234,6 +262,7 @@ class TeachingWorkspaceRead(BaseModel):
     profile: TeachingProjectProfileRead
     students: list[TeachingProjectStudentRead]
     artifacts: list[TeachingProjectArtifactRead]
+    background_materials: list[TeachingProjectBackgroundMaterialRead]
     progress_reports: list[TeachingProgressReportRead]
     milestones: list[TeachingProjectMilestoneRead]
     blockers: list[TeachingProjectBlockerRead]
@@ -246,6 +275,10 @@ class TeachingStudentListRead(PaginatedResponse):
 
 class TeachingArtifactListRead(PaginatedResponse):
     items: list[TeachingProjectArtifactRead]
+
+
+class TeachingBackgroundMaterialListRead(PaginatedResponse):
+    items: list[TeachingProjectBackgroundMaterialRead]
 
 
 class TeachingProgressReportListRead(PaginatedResponse):

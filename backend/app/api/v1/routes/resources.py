@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.auth import UserAccount
 from app.models.project import Project
-from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentRequirement, Lab, LabClosure
+from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentMaterial, EquipmentRequirement, Lab, LabClosure
 from app.schemas.resources import (
     EquipmentBlockerRead,
     EquipmentBookingCreate,
@@ -25,6 +28,10 @@ from app.schemas.resources import (
     EquipmentDowntimeRead,
     EquipmentDowntimeUpdate,
     EquipmentListRead,
+    EquipmentMaterialCreate,
+    EquipmentMaterialListRead,
+    EquipmentMaterialRead,
+    EquipmentMaterialUpdate,
     EquipmentRead,
     EquipmentRequirementCreate,
     EquipmentRequirementListRead,
@@ -247,6 +254,121 @@ def delete_equipment(
         svc.delete_equipment(equipment_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/resources/equipment-materials", response_model=EquipmentMaterialListRead)
+def list_equipment_materials(
+    equipment_id: uuid.UUID | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> EquipmentMaterialListRead:
+    svc = ResourcesService(db)
+    items, total = svc.list_equipment_materials(equipment_id=equipment_id, page=page, page_size=page_size)
+    return EquipmentMaterialListRead(
+        items=[_equipment_material_read(item) for item in items], page=page, page_size=page_size, total=total
+    )
+
+
+@router.post("/resources/equipment-materials", response_model=EquipmentMaterialRead, status_code=status.HTTP_201_CREATED)
+def create_equipment_material(
+    payload: EquipmentMaterialCreate,
+    equipment_id: uuid.UUID = Query(...),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> EquipmentMaterialRead:
+    svc = ResourcesService(db)
+    _require_equipment_manager(svc, equipment_id, current_user)
+    try:
+        item = svc.create_equipment_material(equipment_id=equipment_id, **payload.model_dump())
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return _equipment_material_read(item)
+
+
+@router.patch("/resources/equipment-materials/{material_id}", response_model=EquipmentMaterialRead)
+def update_equipment_material(
+    material_id: uuid.UUID,
+    payload: EquipmentMaterialUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> EquipmentMaterialRead:
+    svc = ResourcesService(db)
+    try:
+        item = svc.get_equipment_material(material_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _require_equipment_manager(svc, item.equipment_id, current_user)
+    try:
+        item = svc.update_equipment_material(material_id, **payload.model_dump(exclude_unset=True))
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return _equipment_material_read(item)
+
+
+@router.post("/resources/equipment-materials/{material_id}/attachment", response_model=EquipmentMaterialRead)
+def upload_equipment_material_attachment(
+    material_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> EquipmentMaterialRead:
+    svc = ResourcesService(db)
+    try:
+        item = svc.get_equipment_material(material_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _require_equipment_manager(svc, item.equipment_id, current_user)
+    try:
+        item = svc.attach_equipment_material_file(
+            material_id,
+            file_name=file.filename or "attachment.bin",
+            content_type=file.content_type or "application/octet-stream",
+            file_stream=file.file,
+        )
+    finally:
+        file.file.close()
+    return _equipment_material_read(item)
+
+
+@router.get("/resources/equipment-materials/{material_id}/file")
+def get_equipment_material_attachment(
+    material_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> FileResponse:
+    svc = ResourcesService(db)
+    try:
+        item = svc.get_equipment_material(material_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not item.attachment_path:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    full_path = Path(item.attachment_path)
+    if not full_path.is_absolute():
+        root = Path(settings.documents_storage_path)
+        if not root.is_absolute():
+            root = (Path.cwd() / root).resolve()
+        full_path = root / item.attachment_path
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="Attachment file not found.")
+    return FileResponse(str(full_path), filename=item.attachment_filename or full_path.name, media_type=item.attachment_mime_type)
+
+
+@router.delete("/resources/equipment-materials/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_equipment_material(
+    material_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> None:
+    svc = ResourcesService(db)
+    try:
+        item = svc.get_equipment_material(material_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _require_equipment_manager(svc, item.equipment_id, current_user)
+    svc.delete_equipment_material(material_id)
 
 
 @router.get("/resources/bookings", response_model=EquipmentBookingListRead)
@@ -630,6 +752,21 @@ def _requirement_read(db: Session, item: EquipmentRequirement) -> EquipmentRequi
         notes=item.notes,
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         equipment=_equipment_read(db, equipment),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _equipment_material_read(item: EquipmentMaterial) -> EquipmentMaterialRead:
+    return EquipmentMaterialRead(
+        id=str(item.id),
+        equipment_id=str(item.equipment_id),
+        material_type=item.material_type,
+        title=item.title,
+        external_url=item.external_url,
+        attachment_filename=item.attachment_filename,
+        attachment_url=f"/resources/equipment-materials/{item.id}/file" if item.attachment_path else None,
+        notes=item.notes,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

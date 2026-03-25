@@ -123,6 +123,17 @@ class TeachingProjectArtifact(Base, IdMixin, TimestampMixin):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TeachingProjectBackgroundMaterial(Base, IdMixin, TimestampMixin):
+    __tablename__ = "teaching_project_background_materials"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    material_type: Mapped[str] = mapped_column(String(32), default="other", index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    document_key: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
+    external_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class TeachingProgressReport(Base, IdMixin, TimestampMixin):
     __tablename__ = "teaching_progress_reports"
 

@@ -12,7 +12,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
-import type { AuthUser, Equipment, EquipmentBooking, EquipmentConflict, EquipmentDowntime, Lab, LabClosure, Project } from "../types";
+import type { AuthUser, Equipment, EquipmentBooking, EquipmentConflict, EquipmentDowntime, EquipmentMaterial, Lab, LabClosure, Project } from "../types";
 
 type Props = {
   currentUser: AuthUser;
@@ -20,7 +20,7 @@ type Props = {
 };
 
 type Tab = "labs" | "equipment" | "bookings" | "conflicts";
-type ModalKind = "equipment" | "lab" | "booking" | "downtime" | "lab-closure" | null;
+type ModalKind = "equipment" | "equipment-material" | "lab" | "booking" | "downtime" | "lab-closure" | null;
 const SCHEDULE_START_HOUR = 8;
 const SCHEDULE_END_HOUR = 21;
 
@@ -76,6 +76,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
   const [calendarWeekStart, setCalendarWeekStart] = useState(() => startOfWeek(new Date()));
   const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [equipmentMaterials, setEquipmentMaterials] = useState<EquipmentMaterial[]>([]);
   const [labs, setLabs] = useState<Lab[]>([]);
   const [labClosures, setLabClosures] = useState<LabClosure[]>([]);
   const [bookings, setBookings] = useState<EquipmentBooking[]>([]);
@@ -110,6 +111,13 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [equipmentDescription, setEquipmentDescription] = useState("");
   const [equipmentAccessNotes, setEquipmentAccessNotes] = useState("");
 
+  const [equipmentMaterialType, setEquipmentMaterialType] = useState("manual");
+  const [equipmentMaterialTitle, setEquipmentMaterialTitle] = useState("");
+  const [equipmentMaterialExternalUrl, setEquipmentMaterialExternalUrl] = useState("");
+  const [equipmentMaterialNotes, setEquipmentMaterialNotes] = useState("");
+  const [equipmentMaterialFile, setEquipmentMaterialFile] = useState<File | null>(null);
+  const [equipmentMaterialUploading, setEquipmentMaterialUploading] = useState(false);
+
   const [bookingEquipmentId, setBookingEquipmentId] = useState("");
   const [bookingProjectId, setBookingProjectId] = useState("");
   const [bookingStartAt, setBookingStartAt] = useState("");
@@ -139,8 +147,9 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const loadWorkspace = useCallback(async () => {
     setLoading(true);
     try {
-      const [equipmentRes, labsRes, closuresRes, bookingsRes, conflictsRes, downtimeRes, usersRes, projectsRes] = await Promise.all([
+      const [equipmentRes, materialsRes, labsRes, closuresRes, bookingsRes, conflictsRes, downtimeRes, usersRes, projectsRes] = await Promise.all([
         api.listEquipment(1, 200, "", "", ""),
+        api.listEquipmentMaterials(1, 200, ""),
         api.listLabs(1, 200),
         api.listLabClosures(1, 200, ""),
         api.listEquipmentBookings(1, 200, equipmentFilterId, "", ""),
@@ -150,6 +159,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
         api.listProjects(1, 100),
       ]);
       setEquipment(equipmentRes.items);
+      setEquipmentMaterials(materialsRes.items);
       setLabs(labsRes.items);
       setLabClosures(closuresRes.items);
       setBookings(bookingsRes.items);
@@ -210,6 +220,10 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const selectedEquipmentDowntime = useMemo(
     () => downtime.filter((item) => item.equipment_id === selectedEquipmentId),
     [downtime, selectedEquipmentId]
+  );
+  const selectedEquipmentMaterials = useMemo(
+    () => equipmentMaterials.filter((item) => item.equipment_id === selectedEquipmentId),
+    [equipmentMaterials, selectedEquipmentId]
   );
   const selectedEquipmentConflicts = useMemo(
     () => conflicts.filter((item) => item.equipment_id === selectedEquipmentId),
@@ -289,6 +303,11 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     setEquipmentUsageMode("exclusive");
     setEquipmentDescription("");
     setEquipmentAccessNotes("");
+    setEquipmentMaterialType("manual");
+    setEquipmentMaterialTitle("");
+    setEquipmentMaterialExternalUrl("");
+    setEquipmentMaterialNotes("");
+    setEquipmentMaterialFile(null);
     setBookingEquipmentId("");
     setBookingProjectId("");
     setBookingStartAt("");
@@ -327,6 +346,19 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     setEquipmentUsageMode(item.usage_mode);
     setEquipmentDescription(item.description || "");
     setEquipmentAccessNotes(item.access_notes || "");
+  }
+
+  function openEquipmentMaterialModal(item?: EquipmentMaterial) {
+    resetForms();
+    setModal("equipment-material");
+    if (selectedEquipmentId) setBookingEquipmentId(selectedEquipmentId);
+    if (!item) return;
+    setEditingId(item.id);
+    setBookingEquipmentId(item.equipment_id);
+    setEquipmentMaterialType(item.material_type);
+    setEquipmentMaterialTitle(item.title);
+    setEquipmentMaterialExternalUrl(item.external_url || "");
+    setEquipmentMaterialNotes(item.notes || "");
   }
 
   function openBookingModal(item?: EquipmentBooking) {
@@ -401,6 +433,32 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save equipment.");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEquipmentMaterial() {
+    if (!bookingEquipmentId || !equipmentMaterialTitle.trim()) return;
+    try {
+      setBusy(true);
+      const payload = {
+        material_type: equipmentMaterialType,
+        title: equipmentMaterialTitle.trim(),
+        external_url: equipmentMaterialExternalUrl.trim() || null,
+        notes: equipmentMaterialNotes.trim() || null,
+      };
+      const item = editingId ? await api.updateEquipmentMaterial(editingId, payload) : await api.createEquipmentMaterial(bookingEquipmentId, payload);
+      if (equipmentMaterialFile) {
+        setEquipmentMaterialUploading(true);
+        await api.uploadEquipmentMaterialAttachment(item.id, equipmentMaterialFile);
+      }
+      setModal(null);
+      setStatus("Saved.");
+      await loadWorkspace();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save equipment material.");
+    } finally {
+      setEquipmentMaterialUploading(false);
       setBusy(false);
     }
   }
@@ -512,6 +570,20 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
       await loadWorkspace();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete equipment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteEquipmentMaterialRow(materialId: string) {
+    if (!window.confirm("Delete this material?")) return;
+    try {
+      setBusy(true);
+      await api.deleteEquipmentMaterial(materialId);
+      setStatus("Deleted.");
+      await loadWorkspace();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete equipment material.");
     } finally {
       setBusy(false);
     }
@@ -949,6 +1021,61 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
               {selectedEquipmentUpcomingBookings.length === 0 ? <span className="resources-empty compact">No upcoming bookings</span> : null}
             </div>
           </div>
+
+          <div className="resources-schedule-footer">
+            <div className="resources-footer-head">
+              <strong>Materials</strong>
+              {(isSuperAdmin || (selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id) || (selectedEquipment.lab?.responsible_user_id && selectedEquipment.lab.responsible_user_id === currentUser.id)) ? (
+                <button type="button" className="ghost icon-text-button small" onClick={() => openEquipmentMaterialModal()}>
+                  <FontAwesomeIcon icon={faPlus} /> Add
+                </button>
+              ) : null}
+            </div>
+            <div className="simple-table-wrap">
+              <table className="simple-table compact-table">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Link</th>
+                    <th>Notes</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedEquipmentMaterials.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.title}</strong></td>
+                      <td><span className="chip small">{item.material_type}</span></td>
+                      <td>
+                        {item.attachment_url ? (
+                          <a href={`${import.meta.env.VITE_API_BASE || ""}${item.attachment_url}`} target="_blank" rel="noreferrer" className="teaching-material-link">
+                            {item.attachment_filename || "file"}
+                          </a>
+                        ) : item.external_url ? (
+                          <a href={item.external_url} target="_blank" rel="noreferrer" className="teaching-material-link">open</a>
+                        ) : "-"}
+                      </td>
+                      <td>{item.notes || "-"}</td>
+                      <td className="teaching-row-actions">
+                        {(isSuperAdmin || (selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id) || (selectedEquipment.lab?.responsible_user_id && selectedEquipment.lab.responsible_user_id === currentUser.id)) ? (
+                          <>
+                            <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentMaterialModal(item)}>
+                              <FontAwesomeIcon icon={faPenToSquare} />
+                            </button>
+                            <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentMaterialRow(item.id)}>
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                  {selectedEquipmentMaterials.length === 0 ? <tr><td colSpan={5}>No materials</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -1252,6 +1379,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
             <div className="modal-head">
               <h3>
                 {modal === "equipment" ? (editingId ? "Edit Equipment" : "Add Equipment")
+                  : modal === "equipment-material" ? (editingId ? "Edit Material" : "Add Material")
                   : modal === "lab" ? (editingId ? "Edit Lab" : "Add Lab")
                   : modal === "booking" ? (editingId ? "Edit Booking" : "Add Booking")
                   : modal === "lab-closure" ? (editingId ? "Edit Lab Closure" : "Close Lab")
@@ -1262,7 +1390,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                   type="button"
                   className="meetings-new-btn"
                   disabled={busy}
-                  onClick={() => void (modal === "equipment" ? saveEquipment() : modal === "lab" ? saveLab() : modal === "booking" ? saveBooking() : modal === "lab-closure" ? saveLabClosure() : saveDowntime())}
+                  onClick={() => void (modal === "equipment" ? saveEquipment() : modal === "equipment-material" ? saveEquipmentMaterial() : modal === "lab" ? saveLab() : modal === "booking" ? saveBooking() : modal === "lab-closure" ? saveLabClosure() : saveDowntime())}
                 >
                   {busy ? "Saving..." : "Save"}
                 </button>
@@ -1331,6 +1459,60 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                 <label className="full-span">
                   Access Notes
                   <textarea rows={3} value={equipmentAccessNotes} onChange={(event) => setEquipmentAccessNotes(event.target.value)} />
+                </label>
+              </div>
+            ) : null}
+
+            {modal === "equipment-material" ? (
+              <div className="form-grid">
+                <label>
+                  Equipment
+                  <select value={bookingEquipmentId} onChange={(event) => setBookingEquipmentId(event.target.value)} disabled={Boolean(selectedEquipmentId)}>
+                    <option value="">Select</option>
+                    {equipment.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Type
+                  <select value={equipmentMaterialType} onChange={(event) => setEquipmentMaterialType(event.target.value)}>
+                    <option value="manual">manual</option>
+                    <option value="safety">safety</option>
+                    <option value="quickstart">quickstart</option>
+                    <option value="maintenance">maintenance</option>
+                    <option value="website">website</option>
+                    <option value="video">video</option>
+                    <option value="other">other</option>
+                  </select>
+                </label>
+                <label className="full-span">
+                  Title
+                  <input value={equipmentMaterialTitle} onChange={(event) => setEquipmentMaterialTitle(event.target.value)} />
+                </label>
+                <label className="full-span">
+                  URL
+                  <input value={equipmentMaterialExternalUrl} onChange={(event) => setEquipmentMaterialExternalUrl(event.target.value)} placeholder="https://..." />
+                </label>
+                <label className="full-span">
+                  File
+                  <div className="teaching-upload-row">
+                    <input type="file" onChange={(event) => setEquipmentMaterialFile(event.target.files?.[0] || null)} />
+                    {editingId && selectedEquipmentMaterials.find((item) => item.id === editingId)?.attachment_url ? (
+                      <a
+                        href={`${import.meta.env.VITE_API_BASE || ""}${selectedEquipmentMaterials.find((item) => item.id === editingId)?.attachment_url}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="teaching-material-link"
+                      >
+                        {selectedEquipmentMaterials.find((item) => item.id === editingId)?.attachment_filename || "file"}
+                      </a>
+                    ) : null}
+                  </div>
+                </label>
+                <label className="full-span">
+                  Notes
+                  <textarea rows={4} value={equipmentMaterialNotes} onChange={(event) => setEquipmentMaterialNotes(event.target.value)} />
                 </label>
               </div>
             ) : null}

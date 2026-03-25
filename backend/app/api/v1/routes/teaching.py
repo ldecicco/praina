@@ -11,12 +11,16 @@ from app.models.auth import UserAccount
 from app.models.course import Course
 from app.schemas.teaching import (
     TeachingArtifactListRead,
+    TeachingBackgroundMaterialListRead,
     TeachingProgressReportListRead,
     TeachingProjectArtifactCreate,
     TeachingProjectArtifactRead,
     TeachingProjectArtifactUpdate,
     TeachingProjectAssessmentRead,
     TeachingProjectAssessmentUpsert,
+    TeachingProjectBackgroundMaterialCreate,
+    TeachingProjectBackgroundMaterialRead,
+    TeachingProjectBackgroundMaterialUpdate,
     TeachingProjectBlockerCreate,
     TeachingProjectBlockerRead,
     TeachingProjectBlockerUpdate,
@@ -64,6 +68,7 @@ def get_teaching_workspace(
         profile=_profile_read(db, workspace["profile"]),
         students=[_student_read(item) for item in workspace["students"]],
         artifacts=[_artifact_read(item) for item in workspace["artifacts"]],
+        background_materials=[_background_material_read(item) for item in workspace["background_materials"]],
         progress_reports=[_report_read(svc, item) for item in workspace["progress_reports"]],
         milestones=[_milestone_read(item) for item in workspace["milestones"]],
         blockers=[_blocker_read(item) for item in workspace["blockers"]],
@@ -221,6 +226,84 @@ def delete_teaching_artifact(
     _require_teaching_manager(svc, project_id, current_user)
     try:
         svc.delete_artifact(project_id, artifact_id)
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+@router.get("/{project_id}/teaching/background-materials", response_model=TeachingBackgroundMaterialListRead)
+def list_teaching_background_materials(
+    project_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeachingBackgroundMaterialListRead:
+    svc = TeachingService(db)
+    _require_teaching_viewer(svc, project_id, current_user)
+    try:
+        items, total = svc.list_background_materials(project_id, page=page, page_size=page_size)
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return TeachingBackgroundMaterialListRead(
+        items=[_background_material_read(item) for item in items], page=page, page_size=page_size, total=total
+    )
+
+
+@router.post(
+    "/{project_id}/teaching/background-materials",
+    response_model=TeachingProjectBackgroundMaterialRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_teaching_background_material(
+    project_id: uuid.UUID,
+    payload: TeachingProjectBackgroundMaterialCreate,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeachingProjectBackgroundMaterialRead:
+    svc = TeachingService(db)
+    _require_teaching_manager(svc, project_id, current_user)
+    try:
+        item = svc.create_background_material(project_id, **payload.model_dump())
+    except (NotFoundError, ValidationError, ValueError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _background_material_read(item)
+
+
+@router.patch(
+    "/{project_id}/teaching/background-materials/{material_id}",
+    response_model=TeachingProjectBackgroundMaterialRead,
+)
+def update_teaching_background_material(
+    project_id: uuid.UUID,
+    material_id: uuid.UUID,
+    payload: TeachingProjectBackgroundMaterialUpdate,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeachingProjectBackgroundMaterialRead:
+    svc = TeachingService(db)
+    _require_teaching_manager(svc, project_id, current_user)
+    try:
+        item = svc.update_background_material(project_id, material_id, **payload.model_dump(exclude_unset=True))
+    except (NotFoundError, ValidationError, ValueError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _background_material_read(item)
+
+
+@router.delete("/{project_id}/teaching/background-materials/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_teaching_background_material(
+    project_id: uuid.UUID,
+    material_id: uuid.UUID,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    svc = TeachingService(db)
+    _require_teaching_manager(svc, project_id, current_user)
+    try:
+        svc.delete_background_material(project_id, material_id)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -526,6 +609,20 @@ def _artifact_read(item) -> TeachingProjectArtifactRead:
         external_url=item.external_url,
         notes=item.notes,
         submitted_at=item.submitted_at,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _background_material_read(item) -> TeachingProjectBackgroundMaterialRead:
+    return TeachingProjectBackgroundMaterialRead(
+        id=str(item.id),
+        project_id=str(item.project_id),
+        material_type=item.material_type,
+        title=item.title,
+        document_key=str(item.document_key) if item.document_key else None,
+        external_url=item.external_url,
+        notes=item.notes,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

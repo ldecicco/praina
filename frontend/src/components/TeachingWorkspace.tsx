@@ -39,12 +39,13 @@ type Props = {
   onOpenAssistant: (prompt: string) => void;
 };
 
-type Tab = "overview" | "artifacts" | "progress" | "assessment";
+type Tab = "overview" | "background" | "artifacts" | "progress" | "assessment";
 type EntityModal =
   | "project"
   | "objectives"
   | "specifications"
   | "student"
+  | "background"
   | "artifact"
   | "milestone"
   | "blocker"
@@ -75,6 +76,7 @@ function modalTitle(modal: EntityModal, editingId: string | null): string {
   if (modal === "project") return "Edit Project";
   if (modal === "objectives") return "Edit Functional Objectives";
   if (modal === "specifications") return "Edit Specifications";
+  if (modal === "background") return editingId ? "Edit Background" : "Add Background";
   return editingId ? "Edit" : "Add";
 }
 
@@ -111,6 +113,14 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
 
   const [studentName, setStudentName] = useState("");
   const [studentEmail, setStudentEmail] = useState("");
+
+  const [backgroundMaterialType, setBackgroundMaterialType] = useState("paper");
+  const [backgroundMaterialTitle, setBackgroundMaterialTitle] = useState("");
+  const [backgroundMaterialDocumentKey, setBackgroundMaterialDocumentKey] = useState("");
+  const [backgroundMaterialExternalUrl, setBackgroundMaterialExternalUrl] = useState("");
+  const [backgroundMaterialNotes, setBackgroundMaterialNotes] = useState("");
+  const [backgroundUploadFile, setBackgroundUploadFile] = useState<File | null>(null);
+  const [backgroundUploading, setBackgroundUploading] = useState(false);
 
   const [artifactType, setArtifactType] = useState("report");
   const [artifactLabel, setArtifactLabel] = useState("");
@@ -213,6 +223,12 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     setEditingId(null);
     setStudentName("");
     setStudentEmail("");
+    setBackgroundMaterialType("paper");
+    setBackgroundMaterialTitle("");
+    setBackgroundMaterialDocumentKey("");
+    setBackgroundMaterialExternalUrl("");
+    setBackgroundMaterialNotes("");
+    setBackgroundUploadFile(null);
     setArtifactType("report");
     setArtifactLabel("");
     setArtifactRequired(true);
@@ -259,6 +275,15 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
       if (!item) return;
       setStudentName(item.full_name);
       setStudentEmail(item.email || "");
+    }
+    if (kind === "background") {
+      const item = workspace.background_materials.find((entry) => entry.id === id);
+      if (!item) return;
+      setBackgroundMaterialType(item.material_type);
+      setBackgroundMaterialTitle(item.title);
+      setBackgroundMaterialDocumentKey(item.document_key || "");
+      setBackgroundMaterialExternalUrl(item.external_url || "");
+      setBackgroundMaterialNotes(item.notes || "");
     }
     if (kind === "artifact") {
       const item = workspace.artifacts.find((entry) => entry.id === id);
@@ -381,6 +406,28 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     }
   }
 
+  async function handleBackgroundUpload() {
+    if (!selectedProjectId || !backgroundUploadFile) return;
+    try {
+      setBackgroundUploading(true);
+      const uploaded = await api.uploadDocument(selectedProjectId, {
+        file: backgroundUploadFile,
+        scope: "project",
+        title: backgroundMaterialTitle.trim() || backgroundUploadFile.name,
+        metadata_json: JSON.stringify({ category: "teaching_background_material" }),
+      });
+      await refreshDocuments(selectedProjectId);
+      setBackgroundMaterialDocumentKey(uploaded.document_key);
+      setBackgroundUploadFile(null);
+      setStatus("Uploaded.");
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload background material.");
+    } finally {
+      setBackgroundUploading(false);
+    }
+  }
+
   async function handleReportUpload() {
     if (!selectedProjectId || !reportUploadFile) return;
     try {
@@ -471,6 +518,17 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
           await api.createTeachingStudent(selectedProjectId, { full_name: studentName, email: studentEmail || null });
         }
       }
+      if (modal === "background") {
+        const payload = {
+          material_type: backgroundMaterialType,
+          title: backgroundMaterialTitle,
+          document_key: backgroundMaterialDocumentKey || null,
+          external_url: backgroundMaterialExternalUrl || null,
+          notes: backgroundMaterialNotes || null,
+        };
+        if (editingId) await api.updateTeachingBackgroundMaterial(selectedProjectId, editingId, payload);
+        else await api.createTeachingBackgroundMaterial(selectedProjectId, payload);
+      }
       if (modal === "artifact") {
         const payload = {
           artifact_type: artifactType,
@@ -540,6 +598,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     if (!selectedProjectId) return;
     const labels: Record<string, string> = {
       student: "student",
+      background: "background material",
       artifact: "artifact",
       milestone: "milestone",
       blocker: "blocker",
@@ -548,6 +607,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     if (!window.confirm(`Delete this ${labels[kind] || "item"}?`)) return;
     try {
       if (kind === "student") await api.deleteTeachingStudent(selectedProjectId, id);
+      if (kind === "background") await api.deleteTeachingBackgroundMaterial(selectedProjectId, id);
       if (kind === "artifact") await api.deleteTeachingArtifact(selectedProjectId, id);
       if (kind === "milestone") await api.deleteTeachingMilestone(selectedProjectId, id);
       if (kind === "blocker") await api.deleteTeachingBlocker(selectedProjectId, id);
@@ -649,6 +709,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
 
   const profile = workspace?.profile ?? null;
   const openBlockers = workspace?.blockers.filter((item) => item.status !== "resolved").length ?? 0;
+  const backgroundCount = workspace?.background_materials.length ?? 0;
   const missingArtifacts = workspace?.artifacts.filter((item) => item.required && item.status === "missing").length ?? 0;
   const latestReport = workspace?.progress_reports[0] ?? null;
   const selectedCourse = courses.find((course) => course.id === courseId) || null;
@@ -729,6 +790,9 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
       <div className="delivery-tabs">
         <button type="button" className={`delivery-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
           Overview
+        </button>
+        <button type="button" className={`delivery-tab ${tab === "background" ? "active" : ""}`} onClick={() => setTab("background")}>
+          Background <span className="delivery-tab-count">{backgroundCount}</span>
         </button>
         <button type="button" className={`delivery-tab ${tab === "artifacts" ? "active" : ""}`} onClick={() => setTab("artifacts")}>
           Artifacts <span className="delivery-tab-count">{missingArtifacts}</span>
@@ -966,6 +1030,45 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                   </tr>
                 ))}
                 {workspace.artifacts.filter((item) => (!artifactTypeFilter || item.artifact_type === artifactTypeFilter) && (!artifactStatusFilter || item.status === artifactStatusFilter)).length === 0 ? <tr><td colSpan={6}>{workspace.artifacts.length === 0 ? "No artifacts" : "No matching artifacts"}</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {!loading && workspace && tab === "background" ? (
+        <div className="card teaching-card">
+          <div className="proposal-card-head">
+            <strong>Background</strong>
+            <button type="button" className="meetings-new-btn" onClick={() => openModal("background")}>
+              <FontAwesomeIcon icon={faPlus} /> Add
+            </button>
+          </div>
+          <div className="simple-table-wrap">
+            <table className="simple-table compact-table">
+              <thead><tr><th>Title</th><th>Type</th><th>Link</th><th>Notes</th><th /></tr></thead>
+              <tbody>
+                {workspace.background_materials.map((item) => (
+                  <tr key={item.id}>
+                    <td><strong>{item.title}</strong></td>
+                    <td><span className="chip small">{item.material_type}</span></td>
+                    <td>
+                      {item.external_url ? (
+                        <a href={item.external_url} target="_blank" rel="noreferrer" className="teaching-material-link" title={item.external_url}>
+                          <FontAwesomeIcon icon={faArrowUpRightFromSquare} /> open
+                        </a>
+                      ) : item.document_key ? (
+                        <span className="chip small"><FontAwesomeIcon icon={faPaperclip} /> {documentMap.get(item.document_key)?.title || item.document_key.slice(0, 8)}</span>
+                      ) : "-"}
+                    </td>
+                    <td>{item.notes || "-"}</td>
+                    <td className="teaching-row-actions">
+                      <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("background", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
+                      <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("background", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                    </td>
+                  </tr>
+                ))}
+                {workspace.background_materials.length === 0 ? <tr><td colSpan={5}>No background material</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -1235,6 +1338,53 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                 <label>
                   Email
                   <input value={studentEmail} onChange={(event) => setStudentEmail(event.target.value)} />
+                </label>
+              </div>
+            ) : null}
+
+            {modal === "background" ? (
+              <div className="form-grid">
+                <label>
+                  Type
+                  <select value={backgroundMaterialType} onChange={(event) => setBackgroundMaterialType(event.target.value)}>
+                    <option value="paper">paper</option>
+                    <option value="website">website</option>
+                    <option value="video">video</option>
+                    <option value="repository">repository</option>
+                    <option value="dataset">dataset</option>
+                    <option value="document">document</option>
+                    <option value="other">other</option>
+                  </select>
+                </label>
+                <label>
+                  Title
+                  <input value={backgroundMaterialTitle} onChange={(event) => setBackgroundMaterialTitle(event.target.value)} />
+                </label>
+                <label className="full-span">
+                  Document
+                  <select value={backgroundMaterialDocumentKey} onChange={(event) => setBackgroundMaterialDocumentKey(event.target.value)}>
+                    <option value="">Select</option>
+                    {activeDocuments.map((item) => (
+                      <option key={item.document_key} value={item.document_key}>{item.title}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="full-span">
+                  Upload File
+                  <div className="teaching-upload-row">
+                    <input type="file" onChange={(event) => setBackgroundUploadFile(event.target.files?.[0] || null)} />
+                    <button type="button" className="ghost" onClick={() => void handleBackgroundUpload()} disabled={!backgroundUploadFile || backgroundUploading}>
+                      {backgroundUploading ? "Uploading..." : "Upload"}
+                    </button>
+                  </div>
+                </label>
+                <label className="full-span">
+                  URL
+                  <input value={backgroundMaterialExternalUrl} onChange={(event) => setBackgroundMaterialExternalUrl(event.target.value)} />
+                </label>
+                <label className="full-span">
+                  Notes
+                  <textarea rows={4} value={backgroundMaterialNotes} onChange={(event) => setBackgroundMaterialNotes(event.target.value)} />
                 </label>
               </div>
             ) : null}

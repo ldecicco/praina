@@ -136,6 +136,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [labRoom, setLabRoom] = useState("");
   const [labNotes, setLabNotes] = useState("");
   const [labResponsibleUserId, setLabResponsibleUserId] = useState("");
+  const [labStaffUserId, setLabStaffUserId] = useState("");
+  const [labStaffRole, setLabStaffRole] = useState("staff");
   const [closureLabId, setClosureLabId] = useState("");
   const [closureStartAt, setClosureStartAt] = useState("");
   const [closureEndAt, setClosureEndAt] = useState("");
@@ -205,6 +207,31 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const selectedEquipment = equipment.find((item) => item.id === selectedEquipmentId) ?? null;
   const selectedLabId = labFilterId || labs[0]?.id || "";
   const selectedLab = labs.find((item) => item.id === selectedLabId) ?? null;
+  const canManageSelectedLab = useMemo(() => {
+    if (!selectedLab) return false;
+    if (isSuperAdmin) return true;
+    if (selectedLab.responsible_user_id === currentUser.id) return true;
+    return selectedLab.staff.some((item) => item.user_id === currentUser.id && item.role === "manager");
+  }, [currentUser.id, isSuperAdmin, selectedLab]);
+  const manageableLabIds = useMemo(() => {
+    if (isSuperAdmin) return new Set(labs.map((item) => item.id));
+    return new Set(
+      labs
+        .filter((item) => item.responsible_user_id === currentUser.id || item.staff.some((staff) => staff.user_id === currentUser.id))
+        .map((item) => item.id)
+    );
+  }, [currentUser.id, isSuperAdmin, labs]);
+  const canCreateEquipment = isSuperAdmin || manageableLabIds.size > 0;
+  const manageableLabs = useMemo(
+    () => (isSuperAdmin ? labs : labs.filter((item) => manageableLabIds.has(item.id))),
+    [isSuperAdmin, labs, manageableLabIds]
+  );
+  const canManageSelectedEquipment = useMemo(() => {
+    if (!selectedEquipment) return false;
+    if (isSuperAdmin) return true;
+    if (selectedEquipment.owner_user_id === currentUser.id) return true;
+    return !!(selectedEquipment.lab_id && manageableLabIds.has(selectedEquipment.lab_id));
+  }, [currentUser.id, isSuperAdmin, manageableLabIds, selectedEquipment]);
   const selectedLabEquipment = useMemo(
     () => equipment.filter((item) => item.lab_id === selectedLabId).sort((left, right) => left.name.localeCompare(right.name)),
     [equipment, selectedLabId]
@@ -324,6 +351,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     setLabRoom("");
     setLabNotes("");
     setLabResponsibleUserId("");
+    setLabStaffUserId("");
+    setLabStaffRole("staff");
     setClosureLabId("");
     setClosureStartAt("");
     setClosureEndAt("");
@@ -334,7 +363,13 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   function openEquipmentModal(item?: Equipment) {
     resetForms();
     setModal("equipment");
-    if (!item) return;
+    if (!item) {
+      if (!isSuperAdmin) {
+        const defaultLabId = selectedLab && manageableLabIds.has(selectedLab.id) ? selectedLab.id : manageableLabs[0]?.id || "";
+        setEquipmentLabId(defaultLabId);
+      }
+      return;
+    }
     setEditingId(item.id);
     setEquipmentName(item.name);
     setEquipmentCategory(item.category || "");
@@ -481,6 +516,36 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
       await loadWorkspace();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save lab.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addLabStaffMember() {
+    if (!selectedLab || !labStaffUserId) return;
+    try {
+      setBusy(true);
+      await api.addLabStaff(selectedLab.id, { user_id: labStaffUserId, role: isSuperAdmin ? labStaffRole : "staff" });
+      setLabStaffUserId("");
+      setLabStaffRole("staff");
+      setStatus("Saved.");
+      await loadWorkspace();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add lab staff.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeLabStaffMember(userId: string) {
+    if (!selectedLab || !window.confirm("Remove this user from the lab?")) return;
+    try {
+      setBusy(true);
+      await api.removeLabStaff(selectedLab.id, userId);
+      setStatus("Deleted.");
+      await loadWorkspace();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove lab staff.");
     } finally {
       setBusy(false);
     }
@@ -720,19 +785,21 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
           )}
         </div>
         <div className="resources-summary-actions">
-          {tab === "equipment" && isSuperAdmin ? (
+          {tab === "equipment" && canCreateEquipment ? (
             <button type="button" className="meetings-new-btn" onClick={() => openEquipmentModal()}>
               <FontAwesomeIcon icon={faPlus} /> Add Equipment
             </button>
           ) : null}
-          {tab === "labs" && isSuperAdmin ? (
+          {tab === "labs" && (isSuperAdmin || canManageSelectedLab) ? (
             <>
-              <button type="button" className="ghost icon-text-button" onClick={() => openLabClosureModal()}>
+              <button type="button" className="ghost icon-text-button" onClick={() => openLabClosureModal(selectedLab || undefined)}>
                 <FontAwesomeIcon icon={faClockRotateLeft} /> Close Lab
               </button>
-              <button type="button" className="meetings-new-btn" onClick={() => openLabModal()}>
-                <FontAwesomeIcon icon={faPlus} /> Add Lab
-              </button>
+              {isSuperAdmin ? (
+                <button type="button" className="meetings-new-btn" onClick={() => openLabModal()}>
+                  <FontAwesomeIcon icon={faPlus} /> Add Lab
+                </button>
+              ) : null}
             </>
           ) : null}
           {tab === "bookings" ? (
@@ -832,248 +899,285 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
       {!loading && tab === "equipment" && equipment.length === 0 ? (
         <div className="teaching-empty-state">
           <p>No equipment registered yet.</p>
-          {isSuperAdmin ? (
+          {canCreateEquipment ? (
             <button type="button" className="meetings-new-btn" onClick={() => openEquipmentModal()}>
               <FontAwesomeIcon icon={faPlus} /> Add First Equipment
             </button>
           ) : (
-            <p style={{ color: "var(--text-secondary)", fontSize: 12 }}>Ask an admin to add equipment.</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: 12 }}>No equipment access.</p>
           )}
         </div>
       ) : null}
 
       {!loading && tab === "equipment" && selectedEquipment ? (
-        <div className="card resources-card">
-          <div className="resources-schedule-shell">
-            <div className="resources-schedule-topbar">
-              <div className="setup-summary-stats resources-equip-stats">
-                <span>{selectedEquipment.location || "No location"}</span>
-                <span className="setup-summary-sep" />
-                <span>{selectedEquipment.lab?.name || "No lab"}</span>
-                <span>{selectedEquipment.owner?.display_name || "No owner"}</span>
-                <span className="setup-summary-sep" />
+        <div className="resources-equipment-layout">
+          <div className="card resources-card resources-inventory-rail">
+            <div className="resources-footer-head">
+              <strong>Equipment</strong>
+              <span className="delivery-tab-count">{filteredEquipment.filter((item) => !equipmentLabFilter || item.lab_id === equipmentLabFilter).length}</span>
+            </div>
+            <div className="resources-inventory-list">
+              {filteredEquipment
+                .filter((item) => !equipmentLabFilter || item.lab_id === equipmentLabFilter)
+                .map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`resources-inventory-row ${item.id === selectedEquipmentId ? "active" : ""}`}
+                    onClick={() => setSelectedEquipmentId(item.id)}
+                  >
+                    <div className="resources-inventory-title">
+                      <strong>{item.name}</strong>
+                      <span className={`resources-status-dot ${item.status}`} />
+                    </div>
+                    <div className="resources-subline">{item.lab?.name || item.category || item.model || "-"}</div>
+                  </button>
+                ))}
+            </div>
+          </div>
+
+          <div className="card resources-card">
+            <div className="resources-entity-head">
+              <div className="resources-entity-primary">
+                <h3>{selectedEquipment.name}</h3>
+                <div className="resources-entity-meta">
+                  <span>{selectedEquipment.lab?.name || "No lab"}</span>
+                  <span className="setup-summary-sep" />
+                  <span>{selectedEquipment.location || "No location"}</span>
+                  <span className="setup-summary-sep" />
+                  <span>{selectedEquipment.owner?.display_name || "No owner"}</span>
+                </div>
+              </div>
+              <div className="resources-card-actions">
                 <span className="chip small">{selectedEquipment.status}</span>
-                <span className="setup-summary-sep" />
                 <span className="chip small">{selectedEquipment.usage_mode}</span>
-                <span className="setup-summary-sep" />
-                <span>Next free: <strong>{nextFreeSlotLabel}</strong></span>
-                {selectedEquipmentConflicts.length > 0 ? (
-                  <>
-                    <span className="setup-summary-sep" />
-                    <span className="danger-text">{selectedEquipmentConflicts.length} conflicts</span>
-                  </>
-                ) : null}
-              </div>
-              <div className="resources-card-actions">
-                <button type="button" className="ghost icon-text-button small" onClick={() => openDowntimeModal(selectedEquipment)}>
-                  <FontAwesomeIcon icon={faClockRotateLeft} /> Downtime
-                </button>
-                {isSuperAdmin ? (
-                  <>
-                    <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentModal(selectedEquipment)}>
-                      <FontAwesomeIcon icon={faPenToSquare} />
-                    </button>
-                    <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentRow(selectedEquipment.id)}>
-                      <FontAwesomeIcon icon={faTrash} />
-                    </button>
-                  </>
-                ) : null}
+                {selectedEquipmentConflicts.length > 0 ? <span className="danger-text">{selectedEquipmentConflicts.length} conflicts</span> : null}
               </div>
             </div>
 
-            <div className="resources-schedule-toolbar">
-              <div className="resources-calendar-nav">
-                <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart((current) => addDays(current, -7))}>
-                  Prev
-                </button>
-                <span className="resources-week-label">{weekLabel}</span>
-                <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart((current) => addDays(current, 7))}>
-                  Next
-                </button>
-                <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart(startOfWeek(new Date()))}>
-                  Today
-                </button>
-                <button type="button" className={`ghost icon-text-button small ${showWeekends ? "active" : ""}`} onClick={() => setShowWeekends((v) => !v)}>
-                  {showWeekends ? "Mon–Sun" : "Mon–Fri"}
-                </button>
-              </div>
-              <div className="resources-card-actions">
-                <button type="button" className="meetings-new-btn" onClick={() => openBookingModal()}>
-                  <FontAwesomeIcon icon={faCalendarPlus} /> Book
-                </button>
-              </div>
+            <div className="resources-entity-strip">
+              <span>Next Free <strong>{nextFreeSlotLabel}</strong></span>
+              <span className="setup-summary-sep" />
+              <span>Bookings <strong>{selectedEquipmentBookings.filter((b) => ["requested", "approved", "active"].includes(b.status)).length}</strong></span>
+              <span className="setup-summary-sep" />
+              <span>Downtime <strong>{selectedEquipmentDowntime.filter((d) => new Date(d.end_at) >= new Date()).length}</strong></span>
             </div>
-          </div>
 
-          <div className="resources-schedule-legend">
-            <span><span className="resources-legend-dot approved" /> Approved</span>
-            <span><span className="resources-legend-dot requested" /> Requested</span>
-            <span><span className="resources-legend-dot downtime" /> Downtime</span>
-          </div>
+            <div className="resources-schedule-shell">
+              <div className="resources-schedule-toolbar">
+                <div className="resources-calendar-nav">
+                  <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart((current) => addDays(current, -7))}>
+                    Prev
+                  </button>
+                  <span className="resources-week-label">{weekLabel}</span>
+                  <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart((current) => addDays(current, 7))}>
+                    Next
+                  </button>
+                  <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart(startOfWeek(new Date()))}>
+                    Today
+                  </button>
+                  <button type="button" className={`ghost icon-text-button small ${showWeekends ? "active" : ""}`} onClick={() => setShowWeekends((v) => !v)}>
+                    {showWeekends ? "Mon–Sun" : "Mon–Fri"}
+                  </button>
+                </div>
+                <div className="resources-card-actions">
+                  <button type="button" className="meetings-new-btn" onClick={() => openBookingModal()}>
+                    <FontAwesomeIcon icon={faCalendarPlus} /> Book
+                  </button>
+                </div>
+              </div>
 
-          <div className="resources-schedule-grid-wrap">
-            <div className="resources-schedule-grid">
-              <div className="resources-schedule-time-col">
-                <div className="resources-schedule-corner" />
-                {scheduleHours.map((hour) => (
-                  <div key={hour} className="resources-schedule-time-cell">
-                    {String(hour).padStart(2, "0")}:00
+              {(canManageSelectedEquipment || (selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id)) ? (
+                <div className="resources-utility-row">
+                  <button type="button" className="ghost icon-text-button small" onClick={() => openDowntimeModal(selectedEquipment)}>
+                    <FontAwesomeIcon icon={faClockRotateLeft} /> Downtime
+                  </button>
+                  {canManageSelectedEquipment ? (
+                    <>
+                      <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentModal(selectedEquipment)}>
+                        <FontAwesomeIcon icon={faPenToSquare} />
+                      </button>
+                      <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentRow(selectedEquipment.id)}>
+                        <FontAwesomeIcon icon={faTrash} />
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="resources-schedule-legend">
+              <span><span className="resources-legend-dot approved" /> Approved</span>
+              <span><span className="resources-legend-dot requested" /> Requested</span>
+              <span><span className="resources-legend-dot downtime" /> Downtime</span>
+            </div>
+
+            <div className="resources-schedule-grid-wrap">
+              <div className="resources-schedule-grid">
+                <div className="resources-schedule-time-col">
+                  <div className="resources-schedule-corner" />
+                  {scheduleHours.map((hour) => (
+                    <div key={hour} className="resources-schedule-time-cell">
+                      {String(hour).padStart(2, "0")}:00
+                    </div>
+                  ))}
+                </div>
+                {weekDays.map((day) => (
+                  <div key={day.toISOString()} className="resources-schedule-day-col">
+                    <div className={`resources-schedule-day-head ${sameDay(day, new Date()) ? "today" : ""}`}>
+                      <strong>{day.toLocaleDateString([], { weekday: "short" })}</strong>
+                      <span>{day.toLocaleDateString([], { day: "2-digit", month: "short" })}</span>
+                    </div>
+                    <div className="resources-schedule-day-body">
+                      {scheduleHours.map((hour) => (
+                        <button
+                          key={`${day.toISOString()}-${hour}`}
+                          type="button"
+                          className="resources-schedule-slot"
+                          onClick={() => openBookingFromSlot(day, hour)}
+                          title={`Book ${selectedEquipment.name} at ${String(hour).padStart(2, "0")}:00`}
+                        />
+                      ))}
+                      {selectedEquipmentDowntime
+                        .filter((item) => {
+                          const itemStart = new Date(item.start_at);
+                          const itemEnd = new Date(item.end_at);
+                          const dayStart = new Date(day);
+                          dayStart.setHours(SCHEDULE_START_HOUR, 0, 0, 0);
+                          const dayEnd = new Date(day);
+                          dayEnd.setHours(SCHEDULE_END_HOUR, 0, 0, 0);
+                          return itemStart < dayEnd && itemEnd > dayStart;
+                        })
+                        .map((item) => {
+                          const itemStart = new Date(item.start_at);
+                          const itemEnd = new Date(item.end_at);
+                          const topHours = Math.max(SCHEDULE_START_HOUR, itemStart.getHours() + itemStart.getMinutes() / 60) - SCHEDULE_START_HOUR;
+                          const bottomHours = Math.min(SCHEDULE_END_HOUR, itemEnd.getHours() + itemEnd.getMinutes() / 60) - SCHEDULE_START_HOUR;
+                          return (
+                            <div
+                              key={item.id}
+                              className="resources-schedule-block downtime"
+                              style={{ top: `${topHours * 38}px`, height: `${Math.max(18, (bottomHours - topHours) * 38)}px` }}
+                              title={`${item.reason}: ${formatRange(item.start_at, item.end_at)}`}
+                            >
+                              <strong>{item.reason}</strong>
+                            </div>
+                          );
+                        })}
+                      {selectedEquipmentBookings
+                        .filter((item) => {
+                          const itemStart = new Date(item.start_at);
+                          const itemEnd = new Date(item.end_at);
+                          const dayStart = new Date(day);
+                          dayStart.setHours(SCHEDULE_START_HOUR, 0, 0, 0);
+                          const dayEnd = new Date(day);
+                          dayEnd.setHours(SCHEDULE_END_HOUR, 0, 0, 0);
+                          return itemStart < dayEnd && itemEnd > dayStart;
+                        })
+                        .map((item) => {
+                          const itemStart = new Date(item.start_at);
+                          const itemEnd = new Date(item.end_at);
+                          const topHours = Math.max(SCHEDULE_START_HOUR, itemStart.getHours() + itemStart.getMinutes() / 60) - SCHEDULE_START_HOUR;
+                          const bottomHours = Math.min(SCHEDULE_END_HOUR, itemEnd.getHours() + itemEnd.getMinutes() / 60) - SCHEDULE_START_HOUR;
+                          const project = projectMap.get(item.project_id);
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className={`resources-schedule-block ${item.status === "requested" ? "requested" : item.status === "cancelled" ? "cancelled" : "approved"}`}
+                              style={{ top: `${topHours * 38}px`, height: `${Math.max(18, (bottomHours - topHours) * 38)}px` }}
+                              title={`${project?.code || item.project_id}: ${item.status}`}
+                              onClick={() => openBookingModal(item)}
+                            >
+                              <strong>{project?.code || item.project_id.slice(0, 8)}</strong>
+                              <span>{item.status}</span>
+                            </button>
+                          );
+                        })}
+                    </div>
                   </div>
                 ))}
               </div>
-              {weekDays.map((day) => (
-                <div key={day.toISOString()} className="resources-schedule-day-col">
-                  <div className={`resources-schedule-day-head ${sameDay(day, new Date()) ? "today" : ""}`}>
-                    <strong>{day.toLocaleDateString([], { weekday: "short" })}</strong>
-                    <span>{day.toLocaleDateString([], { day: "2-digit", month: "short" })}</span>
-                  </div>
-                  <div className="resources-schedule-day-body">
-                    {scheduleHours.map((hour) => (
-                      <button
-                        key={`${day.toISOString()}-${hour}`}
-                        type="button"
-                        className="resources-schedule-slot"
-                        onClick={() => openBookingFromSlot(day, hour)}
-                        title={`Book ${selectedEquipment.name} at ${String(hour).padStart(2, "0")}:00`}
-                      />
-                    ))}
-                    {selectedEquipmentDowntime
-                      .filter((item) => {
-                        const itemStart = new Date(item.start_at);
-                        const itemEnd = new Date(item.end_at);
-                        const dayStart = new Date(day);
-                        dayStart.setHours(SCHEDULE_START_HOUR, 0, 0, 0);
-                        const dayEnd = new Date(day);
-                        dayEnd.setHours(SCHEDULE_END_HOUR, 0, 0, 0);
-                        return itemStart < dayEnd && itemEnd > dayStart;
-                      })
-                      .map((item) => {
-                        const itemStart = new Date(item.start_at);
-                        const itemEnd = new Date(item.end_at);
-                        const topHours = Math.max(SCHEDULE_START_HOUR, itemStart.getHours() + itemStart.getMinutes() / 60) - SCHEDULE_START_HOUR;
-                        const bottomHours = Math.min(SCHEDULE_END_HOUR, itemEnd.getHours() + itemEnd.getMinutes() / 60) - SCHEDULE_START_HOUR;
-                        return (
-                          <div
-                            key={item.id}
-                            className="resources-schedule-block downtime"
-                            style={{ top: `${topHours * 42}px`, height: `${Math.max(20, (bottomHours - topHours) * 42)}px` }}
-                            title={`${item.reason}: ${formatRange(item.start_at, item.end_at)}`}
-                          >
-                            <strong>{item.reason}</strong>
-                          </div>
-                        );
-                      })}
-                    {selectedEquipmentBookings
-                      .filter((item) => {
-                        const itemStart = new Date(item.start_at);
-                        const itemEnd = new Date(item.end_at);
-                        const dayStart = new Date(day);
-                        dayStart.setHours(SCHEDULE_START_HOUR, 0, 0, 0);
-                        const dayEnd = new Date(day);
-                        dayEnd.setHours(SCHEDULE_END_HOUR, 0, 0, 0);
-                        return itemStart < dayEnd && itemEnd > dayStart;
-                      })
-                      .map((item) => {
-                        const itemStart = new Date(item.start_at);
-                        const itemEnd = new Date(item.end_at);
-                        const topHours = Math.max(SCHEDULE_START_HOUR, itemStart.getHours() + itemStart.getMinutes() / 60) - SCHEDULE_START_HOUR;
-                        const bottomHours = Math.min(SCHEDULE_END_HOUR, itemEnd.getHours() + itemEnd.getMinutes() / 60) - SCHEDULE_START_HOUR;
-                        const project = projectMap.get(item.project_id);
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            className={`resources-schedule-block ${item.status === "requested" ? "requested" : item.status === "cancelled" ? "cancelled" : "approved"}`}
-                            style={{ top: `${topHours * 42}px`, height: `${Math.max(20, (bottomHours - topHours) * 42)}px` }}
-                            title={`${project?.code || item.project_id}: ${item.status}`}
-                            onClick={() => openBookingModal(item)}
-                          >
-                            <strong>{project?.code || item.project_id.slice(0, 8)}</strong>
-                            <span>{item.status}</span>
-                          </button>
-                        );
-                      })}
-                  </div>
+            </div>
+
+            <div className="resources-detail-sections">
+              <div className="resources-schedule-footer">
+                <div className="resources-footer-head">
+                  <strong>Upcoming</strong>
+                  {selectedEquipmentBookings.length > 4 ? (
+                    <button type="button" className="ghost icon-text-button small" onClick={switchToBookingsFiltered}>
+                      View all <FontAwesomeIcon icon={faArrowRight} />
+                    </button>
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="resources-upcoming-strip">
+                  {selectedEquipmentUpcomingBookings.map((item) => {
+                    const project = projectMap.get(item.project_id);
+                    return (
+                      <button key={item.id} type="button" className="resources-upcoming-row" onClick={() => openBookingModal(item)}>
+                        <strong>{project?.code || item.project_id.slice(0, 8)}</strong>
+                        <span>{formatRange(item.start_at, item.end_at)}</span>
+                      </button>
+                    );
+                  })}
+                  {selectedEquipmentUpcomingBookings.length === 0 ? <span className="resources-empty compact">No upcoming bookings</span> : null}
+                </div>
+              </div>
 
-          <div className="resources-schedule-footer">
-            <div className="resources-footer-head">
-              <strong>Upcoming</strong>
-              {selectedEquipmentBookings.length > 4 ? (
-                <button type="button" className="ghost icon-text-button small" onClick={switchToBookingsFiltered}>
-                  View all <FontAwesomeIcon icon={faArrowRight} />
-                </button>
-              ) : null}
-            </div>
-            <div className="resources-upcoming-strip">
-              {selectedEquipmentUpcomingBookings.map((item) => {
-                const project = projectMap.get(item.project_id);
-                return (
-                  <button key={item.id} type="button" className="resources-upcoming-row" onClick={() => openBookingModal(item)}>
-                    <strong>{project?.code || item.project_id.slice(0, 8)}</strong>
-                    <span>{formatRange(item.start_at, item.end_at)}</span>
-                  </button>
-                );
-              })}
-              {selectedEquipmentUpcomingBookings.length === 0 ? <span className="resources-empty compact">No upcoming bookings</span> : null}
-            </div>
-          </div>
-
-          <div className="resources-schedule-footer">
-            <div className="resources-footer-head">
-              <strong>Materials</strong>
-              {(isSuperAdmin || (selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id) || (selectedEquipment.lab?.responsible_user_id && selectedEquipment.lab.responsible_user_id === currentUser.id)) ? (
-                <button type="button" className="ghost icon-text-button small" onClick={() => openEquipmentMaterialModal()}>
-                  <FontAwesomeIcon icon={faPlus} /> Add
-                </button>
-              ) : null}
-            </div>
-            <div className="simple-table-wrap">
-              <table className="simple-table compact-table">
-                <thead>
-                  <tr>
-                    <th>Title</th>
-                    <th>Type</th>
-                    <th>Link</th>
-                    <th>Notes</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedEquipmentMaterials.map((item) => (
-                    <tr key={item.id}>
-                      <td><strong>{item.title}</strong></td>
-                      <td><span className="chip small">{item.material_type}</span></td>
-                      <td>
-                        {item.attachment_url ? (
-                          <a href={`${import.meta.env.VITE_API_BASE || ""}${item.attachment_url}`} target="_blank" rel="noreferrer" className="teaching-material-link">
-                            {item.attachment_filename || "file"}
-                          </a>
-                        ) : item.external_url ? (
-                          <a href={item.external_url} target="_blank" rel="noreferrer" className="teaching-material-link">open</a>
-                        ) : "-"}
-                      </td>
-                      <td>{item.notes || "-"}</td>
-                      <td className="teaching-row-actions">
-                        {(isSuperAdmin || (selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id) || (selectedEquipment.lab?.responsible_user_id && selectedEquipment.lab.responsible_user_id === currentUser.id)) ? (
-                          <>
-                            <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentMaterialModal(item)}>
-                              <FontAwesomeIcon icon={faPenToSquare} />
-                            </button>
-                            <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentMaterialRow(item.id)}>
-                              <FontAwesomeIcon icon={faTrash} />
-                            </button>
-                          </>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
-                  {selectedEquipmentMaterials.length === 0 ? <tr><td colSpan={5}>No materials</td></tr> : null}
-                </tbody>
-              </table>
+              <div className="resources-schedule-footer">
+                <div className="resources-footer-head">
+                  <strong>Materials</strong>
+                  {((selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id) || (selectedEquipment.lab_id && manageableLabIds.has(selectedEquipment.lab_id)) || isSuperAdmin) ? (
+                    <button type="button" className="ghost icon-text-button small" onClick={() => openEquipmentMaterialModal()}>
+                      <FontAwesomeIcon icon={faPlus} /> Add
+                    </button>
+                  ) : null}
+                </div>
+                <div className="simple-table-wrap">
+                  <table className="simple-table compact-table">
+                    <thead>
+                      <tr>
+                        <th>Title</th>
+                        <th>Type</th>
+                        <th>Link</th>
+                        <th>Notes</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedEquipmentMaterials.map((item) => (
+                        <tr key={item.id}>
+                          <td><strong>{item.title}</strong></td>
+                          <td><span className="chip small">{item.material_type}</span></td>
+                          <td>
+                            {item.attachment_url ? (
+                              <a href={`${import.meta.env.VITE_API_BASE || ""}${item.attachment_url}`} target="_blank" rel="noreferrer" className="teaching-material-link">
+                                {item.attachment_filename || "file"}
+                              </a>
+                            ) : item.external_url ? (
+                              <a href={item.external_url} target="_blank" rel="noreferrer" className="teaching-material-link">open</a>
+                            ) : "-"}
+                          </td>
+                          <td>{item.notes || "-"}</td>
+                          <td className="teaching-row-actions">
+                            {((selectedEquipment.owner_user_id && selectedEquipment.owner_user_id === currentUser.id) || (selectedEquipment.lab_id && manageableLabIds.has(selectedEquipment.lab_id)) || isSuperAdmin) ? (
+                              <>
+                                <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentMaterialModal(item)}>
+                                  <FontAwesomeIcon icon={faPenToSquare} />
+                                </button>
+                                <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentMaterialRow(item.id)}>
+                                  <FontAwesomeIcon icon={faTrash} />
+                                </button>
+                              </>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                      {selectedEquipmentMaterials.length === 0 ? <tr><td colSpan={5}>No materials</td></tr> : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1087,7 +1191,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
               <FontAwesomeIcon icon={faPlus} /> Add First Lab
             </button>
           ) : (
-            <p style={{ color: "var(--text-secondary)", fontSize: 12 }}>Ask an admin to add labs.</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: 12 }}>No labs.</p>
           )}
         </div>
       ) : null}
@@ -1102,6 +1206,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                     <span>{[selectedLab.building, selectedLab.room].filter(Boolean).join(" · ") || "No room"}</span>
                     <span className="setup-summary-sep" />
                     <span>{selectedLab.responsible?.display_name || "No responsible"}</span>
+                    <span className="setup-summary-sep" />
+                    <span>{selectedLab.staff.length} staff</span>
                   </div>
                   <div className="resources-card-actions">
                     <button type="button" className="ghost icon-text-button small" onClick={() => setCalendarWeekStart((current) => addDays(current, -7))}>
@@ -1117,6 +1223,16 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                     <button type="button" className={`ghost icon-text-button small ${showWeekends ? "active" : ""}`} onClick={() => setShowWeekends((v) => !v)}>
                       {showWeekends ? "Mon–Sun" : "Mon–Fri"}
                     </button>
+                    {canManageSelectedLab ? (
+                      <>
+                        <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openLabModal(selectedLab)}>
+                          <FontAwesomeIcon icon={faPenToSquare} />
+                        </button>
+                        <button type="button" className="ghost icon-text-button small" onClick={() => openLabClosureModal(selectedLab)}>
+                          Close
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -1191,6 +1307,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                   <tr>
                     <th>Lab</th>
                     <th>Responsible</th>
+                    <th>Staff</th>
                     <th>Equipment</th>
                     <th />
                   </tr>
@@ -1203,29 +1320,94 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                         <div className="resources-subline">{[item.building, item.room].filter(Boolean).join(" · ") || "-"}</div>
                       </td>
                       <td>{item.responsible?.display_name || "-"}</td>
+                      <td>{item.staff.length}</td>
                       <td>{item.equipment_count}</td>
                       <td className="teaching-row-actions">
-                        {isSuperAdmin ? (
+                        {(isSuperAdmin || item.responsible_user_id === currentUser.id || item.staff.some((staff) => staff.user_id === currentUser.id && staff.role === "manager")) ? (
                           <>
                             <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openLabModal(item)}>
                               <FontAwesomeIcon icon={faPenToSquare} />
                             </button>
-                            <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteLabRow(item.id)}>
-                              <FontAwesomeIcon icon={faTrash} />
-                            </button>
                             <button type="button" className="ghost icon-text-button small" onClick={() => openLabClosureModal(item)}>
                               Close
                             </button>
+                            {isSuperAdmin ? (
+                              <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteLabRow(item.id)}>
+                                <FontAwesomeIcon icon={faTrash} />
+                              </button>
+                            ) : null}
                           </>
                         ) : null}
                       </td>
                     </tr>
                   ))}
-                  {labs.length === 0 ? <tr><td colSpan={4}>No labs</td></tr> : null}
+                  {labs.length === 0 ? <tr><td colSpan={5}>No labs</td></tr> : null}
                 </tbody>
               </table>
             </div>
-            {selectedLabClosures.length > 0 || isSuperAdmin ? (
+            {selectedLab ? (
+              <>
+                <div className="resources-footer-head" style={{ marginTop: 8 }}>
+                  <strong>Staff</strong>
+                  <span className="delivery-tab-count">{selectedLab.staff.length}</span>
+                </div>
+                {(canManageSelectedLab || isSuperAdmin) ? (
+                  <div className="resources-inline-form">
+                    <select value={labStaffUserId} onChange={(event) => setLabStaffUserId(event.target.value)}>
+                      <option value="">Select user</option>
+                      {users
+                        .filter(
+                          (item) =>
+                            item.id !== selectedLab.responsible_user_id &&
+                            !selectedLab.staff.some((staff) => staff.user_id === item.id)
+                        )
+                        .map((item) => (
+                          <option key={item.id} value={item.id}>{item.display_name}</option>
+                        ))}
+                    </select>
+                    {isSuperAdmin ? (
+                      <select value={labStaffRole} onChange={(event) => setLabStaffRole(event.target.value)}>
+                        <option value="staff">staff</option>
+                        <option value="manager">manager</option>
+                      </select>
+                    ) : null}
+                    <button type="button" className="ghost icon-text-button small" disabled={!labStaffUserId || busy} onClick={() => void addLabStaffMember()}>
+                      <FontAwesomeIcon icon={faPlus} /> Add
+                    </button>
+                  </div>
+                ) : null}
+                <div className="simple-table-wrap">
+                  <table className="simple-table compact-table">
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Role</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedLab.staff.map((item) => (
+                        <tr key={item.id}>
+                          <td><strong>{item.user.display_name}</strong></td>
+                          <td><span className="chip small">{item.role}</span></td>
+                          <td className="teaching-row-actions">
+                            {(isSuperAdmin || canManageSelectedLab) && (!(!isSuperAdmin && item.role === "manager")) ? (
+                              <button type="button" className="ghost docs-action-btn danger-text" title="Remove" onClick={() => void removeLabStaffMember(item.user_id)}>
+                                <FontAwesomeIcon icon={faTrash} />
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                      {selectedLab.staff.length === 0 ? (
+                        <tr><td colSpan={3}>No staff</td></tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : null}
+            {selectedLabClosures.length > 0 || isSuperAdmin || canManageSelectedLab ? (
               <>
                 <div className="resources-footer-head" style={{ marginTop: 8 }}>
                   <strong>Closures</strong>
@@ -1250,7 +1432,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                           <td>{item.reason}</td>
                           <td>{item.cancelled_booking_count}</td>
                           <td className="teaching-row-actions">
-                            {isSuperAdmin ? (
+                            {(isSuperAdmin || canManageSelectedLab) ? (
                               <>
                                 <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openLabClosureModal(item)}>
                                   <FontAwesomeIcon icon={faPenToSquare} />
@@ -1422,7 +1604,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                   Lab
                   <select value={equipmentLabId} onChange={(event) => setEquipmentLabId(event.target.value)}>
                     <option value="">Unassigned</option>
-                    {labs.map((item) => (
+                    {(isSuperAdmin ? labs : manageableLabs).map((item) => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
                   </select>

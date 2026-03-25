@@ -20,6 +20,7 @@ import {
 import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import type {
+  BibliographyReference,
   DocumentListItem,
   Member,
   MeetingRecord,
@@ -48,6 +49,7 @@ type CollectionModalMode = "create" | "edit";
 type ReferenceModalMode = "create" | "edit";
 type NoteModalMode = "create" | "edit";
 type ReferenceModalTab = "manual" | "bibtex" | "pdf" | "document";
+type BibliographyModalMode = "create" | "edit";
 
 function csvToList(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -115,12 +117,19 @@ function parseSynthesisPayload(value: string | null): {
   }
 }
 
-export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: string }) {
+export function ResearchWorkspace({
+  selectedProjectId,
+  bibliographyOnly = false,
+}: {
+  selectedProjectId: string;
+  bibliographyOnly?: boolean;
+}) {
   const [collections, setCollections] = useState<ResearchCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
   const [collectionDetail, setCollectionDetail] = useState<ResearchCollectionDetail | null>(null);
 
   const [references, setReferences] = useState<ResearchReference[]>([]);
+  const [bibliography, setBibliography] = useState<BibliographyReference[]>([]);
   const [notes, setNotes] = useState<ResearchNote[]>([]);
   const [allReferences, setAllReferences] = useState<ResearchReference[]>([]);
   const [projectDocuments, setProjectDocuments] = useState<DocumentListItem[]>([]);
@@ -142,12 +151,16 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
   const [referenceModalMode, setReferenceModalMode] = useState<ReferenceModalMode>("create");
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteModalMode, setNoteModalMode] = useState<NoteModalMode>("create");
+  const [bibliographyModalOpen, setBibliographyModalOpen] = useState(false);
+  const [bibliographyPickerOpen, setBibliographyPickerOpen] = useState(false);
+  const [bibliographyModalMode, setBibliographyModalMode] = useState<BibliographyModalMode>("create");
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [wbsModalOpen, setWbsModalOpen] = useState(false);
 
   const [editingCollectionId, setEditingCollectionId] = useState<string | null>(null);
   const [editingReferenceId, setEditingReferenceId] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingBibliographyId, setEditingBibliographyId] = useState<string | null>(null);
 
   const [collectionTitle, setCollectionTitle] = useState("");
   const [collectionDescription, setCollectionDescription] = useState("");
@@ -194,8 +207,21 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
   const [summarizingId, setSummarizingId] = useState<string | null>(null);
 
   const [refSearch, setRefSearch] = useState("");
+  const [bibliographySearch, setBibliographySearch] = useState("");
+  const [bibliographyVisibilityFilter, setBibliographyVisibilityFilter] = useState("");
   const [refStatusFilter, setRefStatusFilter] = useState("");
   const [noteTypeFilter, setNoteTypeFilter] = useState("");
+  const [bibliographyTitle, setBibliographyTitle] = useState("");
+  const [bibliographyAuthors, setBibliographyAuthors] = useState("");
+  const [bibliographyYear, setBibliographyYear] = useState("");
+  const [bibliographyVenue, setBibliographyVenue] = useState("");
+  const [bibliographyDoi, setBibliographyDoi] = useState("");
+  const [bibliographyUrl, setBibliographyUrl] = useState("");
+  const [bibliographyAbstract, setBibliographyAbstract] = useState("");
+  const [bibliographyVisibility, setBibliographyVisibility] = useState("shared");
+  const [bibliographyBibtexInput, setBibliographyBibtexInput] = useState("");
+  const [bibliographyBibtexResult, setBibliographyBibtexResult] = useState<{ created: number; errors: string[] } | null>(null);
+  const [bibliographyAttachmentFile, setBibliographyAttachmentFile] = useState<File | null>(null);
 
   const activeCollections = collections.filter((item) => item.status === "active");
   const archivedCollections = collections.filter((item) => item.status !== "active");
@@ -236,6 +262,16 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
     setDeliverables(deliverablesRes.items);
   }
 
+  async function loadBibliography(projectId = selectedProjectId) {
+    if (!projectId && !bibliographyOnly) return;
+    const response = await api.listGlobalBibliography({
+      q: bibliographySearch || undefined,
+      visibility: bibliographyVisibilityFilter || undefined,
+      page_size: 100,
+    });
+    setBibliography(response.items);
+  }
+
   async function loadCollectionDetail(collectionId: string, projectId = selectedProjectId) {
     if (!projectId || !collectionId) return;
     const detail = await api.getResearchCollection(projectId, collectionId);
@@ -273,10 +309,22 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
   }
 
   useEffect(() => {
+    if (bibliographyOnly) {
+      setLoading(true);
+      setError("");
+      setStatus("");
+      Promise.all([loadBibliography(selectedProjectId)])
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Failed to load bibliography");
+        })
+        .finally(() => setLoading(false));
+      return;
+    }
     if (!selectedProjectId) {
       setCollections([]);
       setCollectionDetail(null);
       setReferences([]);
+      setBibliography([]);
       setNotes([]);
       setAllReferences([]);
       setProjectDocuments([]);
@@ -298,6 +346,7 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
       loadCollections(selectedProjectId),
       loadMembers(selectedProjectId),
       loadSupportData(selectedProjectId),
+      loadBibliography(selectedProjectId),
       loadReferences(null, selectedProjectId),
       loadNotes(null, selectedProjectId),
     ])
@@ -305,18 +354,30 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
         setError(err instanceof Error ? err.message : "Failed to load research workspace");
       })
       .finally(() => setLoading(false));
-  }, [selectedProjectId]);
+  }, [selectedProjectId, bibliographyOnly]);
 
   useEffect(() => {
+    if (bibliographyOnly) return;
     if (!selectedProjectId) return;
     refreshWorkspace(selectedProjectId, selectedCollectionId).catch((err) => {
       setError(err instanceof Error ? err.message : "Failed to refresh research workspace");
     });
-  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteTypeFilter]);
+  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteTypeFilter, bibliographyOnly]);
+
+  useEffect(() => {
+    if (!selectedProjectId && !bibliographyOnly) return;
+    loadBibliography(selectedProjectId).catch((err) => {
+      setError(err instanceof Error ? err.message : "Failed to load bibliography");
+    });
+  }, [selectedProjectId, bibliographySearch, bibliographyVisibilityFilter, bibliographyOnly]);
 
   const stableLoad = useCallback(() => {
+    if (bibliographyOnly) {
+      void loadBibliography();
+      return;
+    }
     void refreshWorkspace();
-  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteTypeFilter]);
+  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteTypeFilter, bibliographySearch, bibliographyVisibilityFilter, bibliographyOnly]);
   useAutoRefresh(stableLoad);
 
   function resetCollectionForm() {
@@ -359,10 +420,48 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
     setEditingNoteId(null);
   }
 
+  function resetBibliographyForm() {
+    setBibliographyTitle("");
+    setBibliographyAuthors("");
+    setBibliographyYear("");
+    setBibliographyVenue("");
+    setBibliographyDoi("");
+    setBibliographyUrl("");
+    setBibliographyAbstract("");
+    setBibliographyVisibility("shared");
+    setBibliographyBibtexInput("");
+    setBibliographyBibtexResult(null);
+    setBibliographyAttachmentFile(null);
+    setEditingBibliographyId(null);
+  }
+
   function openCreateCollectionModal() {
     setCollectionModalMode("create");
     resetCollectionForm();
     setCollectionModalOpen(true);
+  }
+
+  function openCreateBibliographyModal() {
+    setBibliographyModalMode("create");
+    resetBibliographyForm();
+    setBibliographyModalOpen(true);
+  }
+
+  function openEditBibliographyModal(item: BibliographyReference) {
+    setBibliographyModalMode("edit");
+    setEditingBibliographyId(item.id);
+    setBibliographyTitle(item.title);
+    setBibliographyAuthors(item.authors.join(", "));
+    setBibliographyYear(item.year ? String(item.year) : "");
+    setBibliographyVenue(item.venue || "");
+    setBibliographyDoi(item.doi || "");
+    setBibliographyUrl(item.url || "");
+    setBibliographyAbstract(item.abstract || "");
+    setBibliographyVisibility(item.visibility || "shared");
+    setBibliographyBibtexInput(item.bibtex_raw || "");
+    setBibliographyBibtexResult(null);
+    setBibliographyAttachmentFile(null);
+    setBibliographyModalOpen(true);
   }
 
   function openEditCollectionModal() {
@@ -389,6 +488,14 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
     resetReferenceForm(selectedCollectionId);
     setReferenceModalTab(tabName);
     setReferenceModalOpen(true);
+  }
+
+  function openBibliographyPicker() {
+    if (!selectedCollectionId) {
+      setError("Select a collection first.");
+      return;
+    }
+    setBibliographyPickerOpen(true);
   }
 
   function openEditReferenceModal(reference: ResearchReference) {
@@ -716,6 +823,119 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
     }
   }
 
+  function buildBibliographyPayload(overrides?: Partial<Record<string, unknown>>) {
+    return {
+      title: bibliographyTitle.trim(),
+      authors: csvToList(bibliographyAuthors),
+      year: bibliographyYear ? Number(bibliographyYear) : undefined,
+      venue: bibliographyVenue.trim() || undefined,
+      doi: bibliographyDoi.trim() || undefined,
+      url: bibliographyUrl.trim() || undefined,
+      abstract: bibliographyAbstract.trim() || undefined,
+      visibility: bibliographyVisibility,
+      ...overrides,
+    };
+  }
+
+  async function handleSaveBibliography() {
+    if (!selectedProjectId || !bibliographyTitle.trim()) return;
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      const payload = buildBibliographyPayload({ bibtex_raw: bibliographyBibtexInput.trim() || undefined });
+      const item =
+        bibliographyModalMode === "create"
+          ? await api.createGlobalBibliography(payload)
+          : await api.updateGlobalBibliography(editingBibliographyId!, payload);
+      if (bibliographyAttachmentFile) {
+        if (!selectedProjectId) throw new Error("Select a project before attaching a PDF.");
+        await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
+      }
+      await loadBibliography();
+      setBibliographyModalOpen(false);
+      resetBibliographyForm();
+      setStatus(bibliographyModalMode === "create" ? "Paper added." : "Paper updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save paper");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleImportBibliographyBibtex() {
+    if (!selectedProjectId || !bibliographyBibtexInput.trim()) return;
+    setSaving(true);
+    setError("");
+    setStatus("");
+    setBibliographyBibtexResult(null);
+    try {
+      const result = await api.importGlobalBibliographyBibtex(bibliographyBibtexInput.trim(), bibliographyVisibility);
+      if (bibliographyAttachmentFile && result.created.length === 1) {
+        if (!selectedProjectId) throw new Error("Select a project before attaching a PDF.");
+        await api.uploadGlobalBibliographyAttachment(result.created[0].id, selectedProjectId, bibliographyAttachmentFile);
+      }
+      setBibliographyBibtexResult({ created: result.created.length, errors: result.errors });
+      await loadBibliography();
+      if (bibliographyAttachmentFile && result.created.length > 1) {
+        setStatus("BibTeX imported. PDF was not attached because multiple papers were created.");
+      } else {
+        setStatus(result.created.length > 0 ? "BibTeX imported." : "No papers imported.");
+      }
+      if (result.errors.length === 0) {
+        setBibliographyModalOpen(false);
+        resetBibliographyForm();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "BibTeX import failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleLinkBibliography(item: BibliographyReference) {
+    if (!selectedProjectId || !selectedCollectionId) {
+      setError("Select a collection first.");
+      return;
+    }
+    try {
+      await api.linkBibliographyReference(selectedProjectId, {
+        bibliography_reference_id: item.id,
+        collection_id: selectedCollectionId,
+        reading_status: "unread",
+      });
+      await refreshResearchDataAfterReferenceChange(selectedCollectionId);
+      await loadBibliography();
+      setBibliographyPickerOpen(false);
+      setStatus("Paper linked.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to link paper");
+    }
+  }
+
+  async function handleDeleteBibliography(id: string) {
+    if (!selectedProjectId || !confirm("Delete this paper?")) return;
+    try {
+      await api.deleteGlobalBibliography(id);
+      await loadBibliography();
+      setStatus("Paper deleted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete paper");
+    }
+  }
+
+  async function handleOpenBibliographyAttachment(item: BibliographyReference) {
+    if (!selectedProjectId) return;
+    try {
+      const blob = await api.getGlobalBibliographyAttachment(item.id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to open paper PDF");
+    }
+  }
+
   async function handleSaveNote() {
     if (!selectedProjectId || !noteTitle.trim() || !noteContent.trim() || !noteCollectionId) return;
     setSaving(true);
@@ -851,30 +1071,40 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
     }
   }
 
-  if (!selectedProjectId) return <p className="empty-message">Select a project to manage research.</p>;
+  if (!selectedProjectId && !bibliographyOnly) return <p className="empty-message">Select a project to manage research.</p>;
   if (loading) return <p className="muted-small">Loading...</p>;
 
   return (
     <>
       <div className="setup-summary-bar">
         <div className="setup-summary-stats">
-          <span>{collections.length} collections</span>
-          <span className="setup-summary-sep" />
-          <span>{references.length} references</span>
-          <span className="setup-summary-sep" />
-          <span>{readCount} read</span>
-          <span className="setup-summary-sep" />
-          <span>{notes.length} notes</span>
+          {!bibliographyOnly ? (
+            <>
+              <span>{collections.length} collections</span>
+              <span className="setup-summary-sep" />
+            </>
+          ) : null}
+          <span>{bibliography.length} papers</span>
+          {!bibliographyOnly ? (
+            <>
+              <span className="setup-summary-sep" />
+              <span>{references.length} references</span>
+              <span className="setup-summary-sep" />
+              <span>{readCount} read</span>
+              <span className="setup-summary-sep" />
+              <span>{notes.length} notes</span>
+            </>
+          ) : null}
         </div>
-        <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
-          <FontAwesomeIcon icon={faPlus} /> New Collection
+        <button type="button" className="meetings-new-btn" onClick={bibliographyOnly ? openCreateBibliographyModal : openCreateCollectionModal}>
+          <FontAwesomeIcon icon={faPlus} /> {bibliographyOnly ? "Add Paper" : "New Collection"}
         </button>
       </div>
 
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="muted-small">{status}</p> : null}
 
-      <div className="meetings-toolbar">
+      {!bibliographyOnly ? <div className="meetings-toolbar">
         <div className="meetings-filter-group research-collection-strip">
           <button
             type="button"
@@ -914,9 +1144,9 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
               ))
             : null}
         </div>
-      </div>
+      </div> : null}
 
-      {collectionDetail && selectedCollection ? (
+      {!bibliographyOnly && collectionDetail && selectedCollection ? (
         <div className="research-collection-header">
           <div className="research-collection-title-row">
             <strong>{collectionDetail.title}</strong>
@@ -955,7 +1185,7 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
         </div>
       ) : null}
 
-      <div className="delivery-tabs">
+      {!bibliographyOnly ? <div className="delivery-tabs">
         <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
           References <span className="delivery-tab-count">{references.length}</span>
         </button>
@@ -966,14 +1196,24 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
           Overview
         </button>
         {tab === "references" ? (
-          <button
-            type="button"
-            className="meetings-new-btn delivery-tab-action"
-            onClick={() => openCreateReferenceModal("manual")}
-            disabled={!selectedCollectionId}
-          >
-            <FontAwesomeIcon icon={faPlus} /> Add Reference
-          </button>
+          <>
+            <button
+              type="button"
+              className="meetings-new-btn delivery-tab-action"
+              onClick={openBibliographyPicker}
+              disabled={!selectedCollectionId}
+            >
+              <FontAwesomeIcon icon={faFileImport} /> Import
+            </button>
+            <button
+              type="button"
+              className="meetings-new-btn delivery-tab-action"
+              onClick={() => openCreateReferenceModal("manual")}
+              disabled={!selectedCollectionId}
+            >
+              <FontAwesomeIcon icon={faPlus} /> Add Reference
+            </button>
+          </>
         ) : null}
         {tab === "notes" ? (
           <button
@@ -986,16 +1226,20 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
           </button>
         ) : null}
       </div>
+      : null}
 
-      {tab === "references" ? renderReferencesTab() : null}
-      {tab === "notes" ? renderNotesTab() : null}
-      {tab === "overview" ? renderOverviewTab() : null}
+      {tab === "references" && !bibliographyOnly ? renderReferencesTab() : null}
+      {bibliographyOnly ? renderBibliographyTab() : null}
+      {tab === "notes" && !bibliographyOnly ? renderNotesTab() : null}
+      {tab === "overview" && !bibliographyOnly ? renderOverviewTab() : null}
 
-      {collectionModalOpen ? renderCollectionModal() : null}
-      {referenceModalOpen ? renderReferenceModal() : null}
-      {noteModalOpen ? renderNoteModal() : null}
-      {memberModalOpen ? renderMemberModal() : null}
-      {wbsModalOpen ? renderWbsModal() : null}
+      {!bibliographyOnly && collectionModalOpen ? renderCollectionModal() : null}
+      {!bibliographyOnly && referenceModalOpen ? renderReferenceModal() : null}
+      {bibliographyModalOpen ? renderBibliographyModal() : null}
+      {!bibliographyOnly && bibliographyPickerOpen ? renderBibliographyPickerModal() : null}
+      {!bibliographyOnly && noteModalOpen ? renderNoteModal() : null}
+      {!bibliographyOnly && memberModalOpen ? renderMemberModal() : null}
+      {!bibliographyOnly && wbsModalOpen ? renderWbsModal() : null}
     </>
   );
 
@@ -1120,6 +1364,192 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
           </div>
         )}
       </>
+    );
+  }
+
+  function renderBibliographyTab() {
+    return (
+      <>
+        <div className="meetings-toolbar">
+          <div className="meetings-filter-group">
+            <select value={bibliographyVisibilityFilter} onChange={(event) => setBibliographyVisibilityFilter(event.target.value)}>
+              <option value="">All visibility</option>
+              <option value="shared">Shared</option>
+              <option value="private">Private</option>
+            </select>
+            <input
+              className="meetings-search"
+              type="text"
+              placeholder="Search papers"
+              value={bibliographySearch}
+              onChange={(event) => setBibliographySearch(event.target.value)}
+            />
+          </div>
+        </div>
+
+        {bibliography.length === 0 ? (
+          <p className="empty-message">No papers.</p>
+        ) : (
+          <div className="simple-table-wrap">
+            <table className="simple-table compact-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Visibility</th>
+                  <th>Links</th>
+                  <th>File</th>
+                  <th className="col-icon" />
+                  <th className="col-icon" />
+                  <th className="col-icon" />
+                </tr>
+              </thead>
+              <tbody>
+                {bibliography.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <strong>{item.title}</strong>
+                      <span className="muted-small research-inline-meta">{item.authors.join(", ") || "-"}</span>
+                      {item.venue || item.year ? (
+                        <span className="muted-small research-inline-meta">
+                          {[item.venue, item.year].filter(Boolean).join(" · ")}
+                        </span>
+                      ) : null}
+                      {item.doi ? <span className="muted-small research-inline-meta">DOI: {item.doi}</span> : null}
+                    </td>
+                    <td>
+                      <span className="chip small">{item.visibility}</span>
+                    </td>
+                    <td>{item.linked_project_count}</td>
+                    <td>
+                      {item.attachment_url ? (
+                        <button
+                          type="button"
+                          className="ghost research-file-link"
+                          onClick={() => void handleOpenBibliographyAttachment(item)}
+                        >
+                          {item.attachment_filename || "Open"}
+                        </button>
+                      ) : (
+                        <span className="muted-small">-</span>
+                      )}
+                    </td>
+                    <td className="col-icon">
+                      <button
+                        type="button"
+                        className="ghost docs-action-btn"
+                        title="Link"
+                        onClick={() => void handleLinkBibliography(item)}
+                        disabled={!selectedCollectionId}
+                      >
+                        <FontAwesomeIcon icon={faLink} />
+                      </button>
+                    </td>
+                    <td className="col-icon">
+                      <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEditBibliographyModal(item)}>
+                        <FontAwesomeIcon icon={faPen} />
+                      </button>
+                    </td>
+                    <td className="col-icon">
+                      <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => void handleDeleteBibliography(item.id)}>
+                        <FontAwesomeIcon icon={faTrash} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function renderBibliographyPickerModal() {
+    return (
+      <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setBibliographyPickerOpen(false)}>
+        <div className="modal-card settings-modal-card" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-head">
+            <h3>Import</h3>
+            <div className="modal-head-actions">
+              <button type="button" className="ghost docs-action-btn" onClick={() => setBibliographyPickerOpen(false)} title="Close">
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+          </div>
+          <div className="meetings-toolbar">
+            <div className="meetings-filter-group">
+              <select value={bibliographyVisibilityFilter} onChange={(event) => setBibliographyVisibilityFilter(event.target.value)}>
+                <option value="">All visibility</option>
+                <option value="shared">Shared</option>
+                <option value="private">Private</option>
+              </select>
+              <input
+                className="meetings-search"
+                type="text"
+                placeholder="Search papers"
+                value={bibliographySearch}
+                onChange={(event) => setBibliographySearch(event.target.value)}
+              />
+            </div>
+          </div>
+          {bibliography.length === 0 ? (
+            <p className="empty-message">No papers.</p>
+          ) : (
+            <div className="simple-table-wrap">
+              <table className="simple-table compact-table">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Visibility</th>
+                    <th>File</th>
+                    <th className="col-icon" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {bibliography.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.title}</strong>
+                        <span className="muted-small research-inline-meta">{item.authors.join(", ") || "-"}</span>
+                        {item.venue || item.year ? (
+                          <span className="muted-small research-inline-meta">
+                            {[item.venue, item.year].filter(Boolean).join(" · ")}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className="chip small">{item.visibility}</span>
+                      </td>
+                      <td>
+                        {item.attachment_url ? (
+                          <button
+                            type="button"
+                            className="ghost research-file-link"
+                            onClick={() => void handleOpenBibliographyAttachment(item)}
+                          >
+                            {item.attachment_filename || "Open"}
+                          </button>
+                        ) : (
+                          <span className="muted-small">-</span>
+                        )}
+                      </td>
+                      <td className="col-icon">
+                        <button
+                          type="button"
+                          className="meetings-new-btn"
+                          onClick={() => void handleLinkBibliography(item)}
+                        >
+                          <FontAwesomeIcon icon={faLink} /> Link
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -1673,6 +2103,87 @@ export function ResearchWorkspace({ selectedProjectId }: { selectedProjectId: st
               </button>
             ) : null}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderBibliographyModal() {
+    return (
+      <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setBibliographyModalOpen(false)}>
+        <div className="modal-card settings-modal-card" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-head">
+            <h3>{bibliographyModalMode === "create" ? "Paper" : "Edit Paper"}</h3>
+            <div className="modal-head-actions">
+              <button
+                type="button"
+                disabled={(!bibliographyTitle.trim() && !bibliographyBibtexInput.trim()) || saving}
+                onClick={() => void (bibliographyBibtexInput.trim() ? handleImportBibliographyBibtex() : handleSaveBibliography())}
+              >
+                {saving ? (bibliographyBibtexInput.trim() ? "Importing..." : "Saving...") : bibliographyModalMode === "create" ? "Add" : "Save"}
+              </button>
+              <button type="button" className="ghost docs-action-btn" onClick={() => setBibliographyModalOpen(false)} title="Close">
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label>
+              Visibility
+              <select value={bibliographyVisibility} onChange={(event) => setBibliographyVisibility(event.target.value)}>
+                <option value="shared">Shared</option>
+                <option value="private">Private</option>
+              </select>
+            </label>
+            <label>
+              PDF
+              <input type="file" accept="application/pdf" onChange={(event) => setBibliographyAttachmentFile(event.target.files?.[0] || null)} />
+            </label>
+            <label className="full-span">
+              BibTeX
+              <textarea value={bibliographyBibtexInput} onChange={(event) => setBibliographyBibtexInput(event.target.value)} rows={10} autoFocus={bibliographyModalMode === "create"} />
+            </label>
+            <label className="full-span">
+              Title
+              <input value={bibliographyTitle} onChange={(event) => setBibliographyTitle(event.target.value)} />
+            </label>
+            <label className="full-span">
+              Authors
+              <input value={bibliographyAuthors} onChange={(event) => setBibliographyAuthors(event.target.value)} />
+            </label>
+            <label>
+              Year
+              <input type="number" value={bibliographyYear} onChange={(event) => setBibliographyYear(event.target.value)} />
+            </label>
+            <label>
+              DOI
+              <input value={bibliographyDoi} onChange={(event) => setBibliographyDoi(event.target.value)} />
+            </label>
+            <label className="full-span">
+              Venue
+              <input value={bibliographyVenue} onChange={(event) => setBibliographyVenue(event.target.value)} />
+            </label>
+            <label className="full-span">
+              URL
+              <input value={bibliographyUrl} onChange={(event) => setBibliographyUrl(event.target.value)} />
+            </label>
+            <label className="full-span">
+              Abstract
+              <textarea value={bibliographyAbstract} onChange={(event) => setBibliographyAbstract(event.target.value)} rows={6} />
+            </label>
+          </div>
+
+          {bibliographyBibtexResult ? (
+            <div className="research-bibtex-result">
+              {bibliographyBibtexResult.created > 0 ? <span className="chip small">{bibliographyBibtexResult.created} imported</span> : null}
+              {bibliographyBibtexResult.errors.map((item, index) => (
+                <span key={`${item}-${index}`} className="chip small research-bibtex-error">
+                  {item}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     );

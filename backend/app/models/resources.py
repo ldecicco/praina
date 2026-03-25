@@ -23,6 +23,15 @@ class Lab(Base, IdMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
+class LabStaffAssignment(Base, IdMixin, TimestampMixin):
+    __tablename__ = "lab_staff_assignments"
+    __table_args__ = (UniqueConstraint("lab_id", "user_id", name="uq_lab_staff_assignment_lab_user"),)
+
+    lab_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(32), default="staff", index=True)
+
+
 class LabClosure(Base, IdMixin, TimestampMixin):
     __tablename__ = "lab_closures"
 

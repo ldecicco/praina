@@ -53,6 +53,11 @@ class OutputStatus(str, enum.Enum):
     published = "published"
 
 
+class BibliographyVisibility(str, enum.Enum):
+    private = "private"
+    shared = "shared"
+
+
 # ── Junction tables (plain Table) ─────────────────────────────────────
 
 research_collection_wps = Table(
@@ -136,6 +141,9 @@ class ResearchReference(Base, IdMixin, TimestampMixin):
     __tablename__ = "research_references"
 
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    bibliography_reference_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("bibliography_references.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
     collection_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("research_collections.id", ondelete="SET NULL"), nullable=True, index=True,
     )
@@ -156,6 +164,34 @@ class ResearchReference(Base, IdMixin, TimestampMixin):
     )
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_summary_at: Mapped[uuid.UUID | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BibliographyReference(Base, IdMixin, TimestampMixin):
+    __tablename__ = "bibliography_references"
+
+    source_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    document_key: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    authors: Mapped[list | None] = mapped_column(JSONB, default=list)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    venue: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    doi: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bibtex_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attachment_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attachment_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    visibility: Mapped[BibliographyVisibility] = mapped_column(
+        Enum(BibliographyVisibility, name="bibliography_visibility"),
+        default=BibliographyVisibility.shared,
+        index=True,
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class ResearchNote(Base, IdMixin, TimestampMixin):

@@ -177,6 +177,16 @@ export type ResourceOwner = {
   email: string;
 };
 
+export type LabStaffAssignment = {
+  id: string;
+  lab_id: string;
+  user_id: string;
+  role: string;
+  user: ResourceOwner;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Lab = {
   id: string;
   name: string;
@@ -185,6 +195,7 @@ export type Lab = {
   notes: string | null;
   responsible_user_id: string | null;
   responsible: ResourceOwner | null;
+  staff: LabStaffAssignment[];
   is_active: boolean;
   equipment_count: number;
   created_at: string;
@@ -1152,6 +1163,7 @@ export type ResearchCollectionMember = {
 export type ResearchReference = {
   id: string;
   project_id: string;
+  bibliography_reference_id: string | null;
   collection_id: string | null;
   title: string;
   authors: string[];
@@ -1162,12 +1174,34 @@ export type ResearchReference = {
   abstract: string | null;
   document_key: string | null;
   tags: string[];
+  bibliography_visibility: string | null;
+  bibliography_attachment_filename: string | null;
+  bibliography_attachment_url: string | null;
   reading_status: string;
   added_by_member_id: string | null;
   ai_summary: string | null;
   ai_summary_at: string | null;
   note_count: number;
   annotation_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BibliographyReference = {
+  id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  venue: string | null;
+  doi: string | null;
+  url: string | null;
+  abstract: string | null;
+  bibtex_raw: string | null;
+  visibility: string;
+  created_by_user_id: string | null;
+  attachment_filename: string | null;
+  attachment_url: string | null;
+  linked_project_count: number;
   created_at: string;
   updated_at: string;
 };

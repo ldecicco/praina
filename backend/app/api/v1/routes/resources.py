@@ -13,7 +13,7 @@ from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.auth import UserAccount
 from app.models.project import Project
-from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentMaterial, EquipmentRequirement, Lab, LabClosure
+from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentMaterial, EquipmentRequirement, Lab, LabClosure, LabStaffAssignment
 from app.schemas.resources import (
     EquipmentBlockerRead,
     EquipmentBookingCreate,
@@ -43,6 +43,8 @@ from app.schemas.resources import (
     LabClosureRead,
     LabCreate,
     LabListRead,
+    LabStaffCreate,
+    LabStaffRead,
     LabRead,
     LabUpdate,
     ProjectResourcesWorkspaceRead,
@@ -103,6 +105,47 @@ def create_lab(
     return _lab_read(db, svc, item)
 
 
+@router.post("/resources/labs/{lab_id}/staff", response_model=LabRead)
+def add_lab_staff(
+    lab_id: uuid.UUID,
+    payload: LabStaffCreate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> LabRead:
+    svc = ResourcesService(db)
+    _require_lab_staff_manager(svc, lab_id, current_user)
+    if current_user.platform_role != "super_admin" and (payload.role or "staff").strip().lower() == "manager":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super_admin can assign lab managers.")
+    try:
+        svc.add_lab_staff(lab_id, user_id=payload.user_id, role=payload.role)
+    except (NotFoundError, ValidationError, ConflictError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 409 if isinstance(exc, ConflictError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _lab_read(db, svc, svc.get_lab(lab_id))
+
+
+@router.delete("/resources/labs/{lab_id}/staff/{user_id}", response_model=LabRead)
+def remove_lab_staff(
+    lab_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> LabRead:
+    svc = ResourcesService(db)
+    _require_lab_staff_manager(svc, lab_id, current_user)
+    try:
+        assignment = svc.get_lab_staff_assignment(lab_id, user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if current_user.platform_role != "super_admin" and assignment.role == "manager":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super_admin can remove lab managers.")
+    try:
+        svc.remove_lab_staff(lab_id, user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _lab_read(db, svc, svc.get_lab(lab_id))
+
+
 @router.patch("/resources/labs/{lab_id}", response_model=LabRead)
 def update_lab(
     lab_id: uuid.UUID,
@@ -110,8 +153,8 @@ def update_lab(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> LabRead:
-    _require_super_admin(current_user)
     svc = ResourcesService(db)
+    _require_lab_manager(svc, lab_id, current_user)
     try:
         item = svc.update_lab(lab_id, **payload.model_dump(exclude_unset=True))
     except (NotFoundError, ValidationError) as exc:
@@ -152,8 +195,8 @@ def create_lab_closure(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> LabClosureRead:
-    _require_super_admin(current_user)
     svc = ResourcesService(db)
+    _require_lab_closure_manager(svc, uuid.UUID(payload.lab_id), current_user)
     try:
         item, cancelled_bookings = svc.create_lab_closure(created_by_user_id=current_user.id, **payload.model_dump())
     except (NotFoundError, ValidationError) as exc:
@@ -178,8 +221,15 @@ def update_lab_closure(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> LabClosureRead:
-    _require_super_admin(current_user)
     svc = ResourcesService(db)
+    try:
+        current = svc.get_lab_closure(closure_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    target_lab_id = uuid.UUID(payload.lab_id)
+    _require_lab_closure_manager(svc, current.lab_id, current_user)
+    if target_lab_id != current.lab_id:
+        _require_lab_closure_manager(svc, target_lab_id, current_user)
     try:
         item, cancelled_bookings = svc.update_lab_closure(closure_id, updated_by_user_id=current_user.id, **payload.model_dump())
     except (NotFoundError, ValidationError) as exc:
@@ -203,12 +253,13 @@ def delete_lab_closure(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> None:
-    _require_super_admin(current_user)
     svc = ResourcesService(db)
     try:
-        svc.delete_lab_closure(closure_id)
+        item = svc.get_lab_closure(closure_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _require_lab_closure_manager(svc, item.lab_id, current_user)
+    svc.delete_lab_closure(closure_id)
 
 
 @router.post("/resources/equipment", response_model=EquipmentRead, status_code=status.HTTP_201_CREATED)
@@ -217,8 +268,9 @@ def create_equipment(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> EquipmentRead:
-    _require_super_admin(current_user)
     svc = ResourcesService(db)
+    lab_id = uuid.UUID(payload.lab_id) if payload.lab_id else None
+    _require_equipment_create_manager(svc, lab_id, current_user)
     try:
         item = svc.create_equipment(created_by_user_id=current_user.id, **payload.model_dump())
     except (NotFoundError, ValidationError) as exc:
@@ -235,8 +287,11 @@ def update_equipment(
 ) -> EquipmentRead:
     svc = ResourcesService(db)
     _require_equipment_manager(svc, equipment_id, current_user)
+    patch = payload.model_dump(exclude_unset=True)
+    if "lab_id" in patch and patch["lab_id"]:
+        _require_equipment_create_manager(svc, uuid.UUID(patch["lab_id"]), current_user)
     try:
-        item = svc.update_equipment(equipment_id, **payload.model_dump(exclude_unset=True))
+        item = svc.update_equipment(equipment_id, **patch)
     except (NotFoundError, ValidationError) as exc:
         raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
     return _equipment_read(db, item)
@@ -248,9 +303,9 @@ def delete_equipment(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> None:
-    _require_super_admin(current_user)
     svc = ResourcesService(db)
     try:
+        _require_equipment_manager(svc, equipment_id, current_user)
         svc.delete_equipment(equipment_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -635,13 +690,48 @@ def _require_super_admin(current_user: UserAccount) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super_admin can manage equipment inventory.")
 
 
+def _require_lab_manager(svc: ResourcesService, lab_id: uuid.UUID, current_user: UserAccount) -> None:
+    try:
+        allowed = svc.can_manage_lab(lab_id, current_user.id, current_user.platform_role)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only lab managers can manage this lab.")
+
+
+def _require_lab_staff_manager(svc: ResourcesService, lab_id: uuid.UUID, current_user: UserAccount) -> None:
+    try:
+        allowed = svc.can_manage_lab_staff(lab_id, current_user.id, current_user.platform_role)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only lab managers can manage lab staff.")
+
+
+def _require_lab_closure_manager(svc: ResourcesService, lab_id: uuid.UUID, current_user: UserAccount) -> None:
+    _require_lab_manager(svc, lab_id, current_user)
+
+
+def _require_equipment_create_manager(svc: ResourcesService, lab_id: uuid.UUID | None, current_user: UserAccount) -> None:
+    if current_user.platform_role == "super_admin":
+        return
+    if not lab_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super_admin can create unassigned equipment.")
+    try:
+        allowed = svc.can_manage_lab_equipment(lab_id, current_user.id, current_user.platform_role)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only lab staff can manage equipment in this lab.")
+
+
 def _require_equipment_manager(svc: ResourcesService, equipment_id: uuid.UUID, current_user: UserAccount) -> None:
     try:
         allowed = svc.can_manage_equipment(equipment_id, current_user.id, current_user.platform_role)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the equipment owner can manage this equipment.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the equipment owner or lab staff can manage this equipment.")
 
 
 def _require_project_resource_viewer(svc: ResourcesService, project_id: uuid.UUID, current_user: UserAccount) -> None:
@@ -709,6 +799,7 @@ def _equipment_read(db: Session, item: Equipment) -> EquipmentRead:
 
 def _lab_read(db: Session, svc: ResourcesService, item: Lab) -> LabRead:
     responsible = db.get(UserAccount, item.responsible_user_id) if item.responsible_user_id else None
+    staff = svc.list_lab_staff(item.id)
     return LabRead(
         id=str(item.id),
         name=item.name,
@@ -717,8 +808,22 @@ def _lab_read(db: Session, svc: ResourcesService, item: Lab) -> LabRead:
         notes=item.notes,
         responsible_user_id=str(item.responsible_user_id) if item.responsible_user_id else None,
         responsible=_user_read(responsible),
+        staff=[_lab_staff_read(db, row) for row in staff],
         is_active=item.is_active,
         equipment_count=svc.lab_equipment_count(item.id),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _lab_staff_read(db: Session, item: LabStaffAssignment) -> LabStaffRead:
+    user = db.get(UserAccount, item.user_id)
+    return LabStaffRead(
+        id=str(item.id),
+        lab_id=str(item.lab_id),
+        user_id=str(item.user_id),
+        role=item.role,
+        user=_user_read(user),
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

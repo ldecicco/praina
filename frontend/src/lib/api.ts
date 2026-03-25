@@ -54,6 +54,7 @@ import type {
   DashboardHealthSnapshot,
   DashboardScopeOptions,
   SearchResponse,
+  BibliographyReference,
   ResearchCollection,
   ResearchCollectionDetail,
   ResearchCollectionMember,
@@ -129,6 +130,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const headers = new Headers(init?.headers ?? undefined);
+  if (authToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers,
+    ...init,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    try {
+      const parsed = JSON.parse(errorBody) as { detail?: unknown };
+      throw new Error(formatApiErrorDetail(parsed.detail) || errorBody || `API request failed: ${response.status}`);
+    } catch {
+      throw new Error(errorBody || `API request failed: ${response.status}`);
+    }
+  }
+
+  return response.blob();
 }
 
 function formatApiErrorDetail(detail: unknown): string {
@@ -380,6 +405,14 @@ export const api = {
 
   deleteLab(labId: string): Promise<void> {
     return request(`/resources/labs/${labId}`, { method: "DELETE" });
+  },
+
+  addLabStaff(labId: string, payload: { user_id: string; role?: string }): Promise<Lab> {
+    return request(`/resources/labs/${labId}/staff`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  removeLabStaff(labId: string, userId: string): Promise<Lab> {
+    return request(`/resources/labs/${labId}/staff/${userId}`, { method: "DELETE" });
   },
 
   listLabClosures(page = 1, pageSize = 100, labId = ""): Promise<Paginated<LabClosure>> {
@@ -2119,6 +2152,79 @@ export const api = {
   },
   updateReferenceStatus(projectId: string, refId: string, readingStatus: string): Promise<ResearchReference> {
     return request(`/projects/${projectId}/research/references/${refId}/status`, { method: "PUT", body: JSON.stringify({ reading_status: readingStatus }) });
+  },
+  listBibliographyReferences(
+    projectId: string,
+    opts?: { q?: string; visibility?: string; page?: number; page_size?: number }
+  ): Promise<{ items: BibliographyReference[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.q) q.set("q", opts.q);
+    if (opts?.visibility) q.set("visibility", opts.visibility);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/${projectId}/research/bibliography?${q}`);
+  },
+  createBibliographyReference(projectId: string, data: Record<string, unknown>): Promise<BibliographyReference> {
+    return request(`/projects/${projectId}/research/bibliography`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateBibliographyReference(projectId: string, bibliographyReferenceId: string, data: Record<string, unknown>): Promise<BibliographyReference> {
+    return request(`/projects/${projectId}/research/bibliography/${bibliographyReferenceId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteBibliographyReference(projectId: string, bibliographyReferenceId: string): Promise<void> {
+    return request(`/projects/${projectId}/research/bibliography/${bibliographyReferenceId}`, { method: "DELETE" });
+  },
+  importBibliographyBibtex(projectId: string, bibtex: string, visibility = "shared"): Promise<{ created: BibliographyReference[]; errors: string[] }> {
+    return request(`/projects/${projectId}/research/bibliography/import-bibtex`, {
+      method: "POST",
+      body: JSON.stringify({ bibtex, visibility }),
+    });
+  },
+  linkBibliographyReference(
+    projectId: string,
+    payload: { bibliography_reference_id: string; collection_id?: string | null; reading_status?: string }
+  ): Promise<ResearchReference> {
+    return request(`/projects/${projectId}/research/bibliography/link`, { method: "POST", body: JSON.stringify(payload) });
+  },
+  uploadBibliographyAttachment(projectId: string, bibliographyReferenceId: string, file: File): Promise<BibliographyReference> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request(`/projects/${projectId}/research/bibliography/${bibliographyReferenceId}/attachment`, { method: "POST", body: formData });
+  },
+  getBibliographyAttachment(projectId: string, bibliographyReferenceId: string): Promise<Blob> {
+    return requestBlob(`/projects/${projectId}/research/bibliography/${bibliographyReferenceId}/file`);
+  },
+  listGlobalBibliography(
+    opts?: { q?: string; visibility?: string; page?: number; page_size?: number }
+  ): Promise<{ items: BibliographyReference[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.q) q.set("q", opts.q);
+    if (opts?.visibility) q.set("visibility", opts.visibility);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/bibliography?${q}`);
+  },
+  createGlobalBibliography(data: Record<string, unknown>): Promise<BibliographyReference> {
+    return request("/bibliography", { method: "POST", body: JSON.stringify(data) });
+  },
+  updateGlobalBibliography(bibliographyReferenceId: string, data: Record<string, unknown>): Promise<BibliographyReference> {
+    return request(`/bibliography/${bibliographyReferenceId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteGlobalBibliography(bibliographyReferenceId: string): Promise<void> {
+    return request(`/bibliography/${bibliographyReferenceId}`, { method: "DELETE" });
+  },
+  importGlobalBibliographyBibtex(bibtex: string, visibility = "shared"): Promise<{ created: BibliographyReference[]; errors: string[] }> {
+    return request("/bibliography/import-bibtex", {
+      method: "POST",
+      body: JSON.stringify({ bibtex, visibility }),
+    });
+  },
+  uploadGlobalBibliographyAttachment(bibliographyReferenceId: string, sourceProjectId: string, file: File): Promise<BibliographyReference> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request(`/bibliography/${bibliographyReferenceId}/attachment?source_project_id=${sourceProjectId}`, { method: "POST", body: formData });
+  },
+  getGlobalBibliographyAttachment(bibliographyReferenceId: string): Promise<Blob> {
+    return requestBlob(`/bibliography/${bibliographyReferenceId}/file`);
   },
 
   listResearchNotes(projectId: string, opts?: { collection_id?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {

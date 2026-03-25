@@ -13,6 +13,21 @@ class ResourceOwnerRead(BaseModel):
     email: str
 
 
+class LabStaffRead(BaseModel):
+    id: str
+    lab_id: str
+    user_id: str
+    role: str
+    user: ResourceOwnerRead
+    created_at: datetime
+    updated_at: datetime
+
+
+class LabStaffCreate(BaseModel):
+    user_id: str
+    role: str = "staff"
+
+
 class LabCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     building: str | None = Field(default=None, max_length=255)
@@ -39,6 +54,7 @@ class LabRead(BaseModel):
     notes: str | None
     responsible_user_id: str | None
     responsible: ResourceOwnerRead | None = None
+    staff: list[LabStaffRead] = Field(default_factory=list)
     is_active: bool
     equipment_count: int = 0
     created_at: datetime

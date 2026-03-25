@@ -128,6 +128,7 @@ class ReferenceCreate(BaseModel):
     document_key: str | None = None
     tags: list[str] = Field(default_factory=list)
     reading_status: str = "unread"
+    bibliography_visibility: str = "shared"
 
 
 class ReferenceUpdate(BaseModel):
@@ -142,11 +143,13 @@ class ReferenceUpdate(BaseModel):
     document_key: str | None = None
     tags: list[str] | None = None
     reading_status: str | None = None
+    bibliography_visibility: str | None = None
 
 
 class ReferenceRead(BaseModel):
     id: str
     project_id: str
+    bibliography_reference_id: str | None = None
     collection_id: str | None = None
     title: str
     authors: list[str] = Field(default_factory=list)
@@ -157,6 +160,9 @@ class ReferenceRead(BaseModel):
     abstract: str | None = None
     document_key: str | None = None
     tags: list[str] = Field(default_factory=list)
+    bibliography_visibility: str | None = None
+    bibliography_attachment_filename: str | None = None
+    bibliography_attachment_url: str | None = None
     reading_status: str
     added_by_member_id: str | None = None
     ai_summary: str | None = None
@@ -169,6 +175,61 @@ class ReferenceRead(BaseModel):
 
 class ReferenceListRead(PaginatedResponse):
     items: list[ReferenceRead] = Field(default_factory=list)
+
+
+class BibliographyReferenceCreate(BaseModel):
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    venue: str | None = None
+    doi: str | None = None
+    url: str | None = None
+    abstract: str | None = None
+    bibtex_raw: str | None = None
+    visibility: str = "shared"
+
+
+class BibliographyReferenceUpdate(BaseModel):
+    title: str | None = None
+    authors: list[str] | None = None
+    year: int | None = None
+    venue: str | None = None
+    doi: str | None = None
+    url: str | None = None
+    abstract: str | None = None
+    bibtex_raw: str | None = None
+    visibility: str | None = None
+
+
+class BibliographyReferenceRead(BaseModel):
+    id: str
+    source_project_id: str | None = None
+    document_key: str | None = None
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    venue: str | None = None
+    doi: str | None = None
+    url: str | None = None
+    abstract: str | None = None
+    bibtex_raw: str | None = None
+    visibility: str
+    created_by_user_id: str | None = None
+    attachment_filename: str | None = None
+    attachment_url: str | None = None
+    linked_project_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class BibliographyReferenceListRead(PaginatedResponse):
+    items: list[BibliographyReferenceRead] = Field(default_factory=list)
+
+
+class BibliographyLinkPayload(BaseModel):
+    bibliography_reference_id: str
+    collection_id: str | None = None
+    reading_status: str = "unread"
 
 
 class ReferenceMovePayload(BaseModel):
@@ -246,8 +307,14 @@ class ReferenceMetadataRead(BaseModel):
 class BibtexImportPayload(BaseModel):
     bibtex: str
     collection_id: str | None = None
+    visibility: str = "shared"
 
 
 class BibtexImportRead(BaseModel):
     created: list[ReferenceRead] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class BibliographyBibtexImportRead(BaseModel):
+    created: list[BibliographyReferenceRead] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)

@@ -547,6 +547,39 @@ body {
   font-size: 11px;
 }
 
+.resources-inline-form {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.resources-inline-form select {
+  min-width: 0;
+}
+
+.resources-inline-form select:first-child {
+  flex: 1 1 280px;
+}
+
+.resources-inline-form select:not(:first-child) {
+  flex: 0 0 120px;
+}
+
+.resources-inline-form button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 900px) {
+  .resources-inline-form {
+    flex-wrap: wrap;
+  }
+
+  .resources-inline-form select:first-child {
+    flex-basis: 100%;
+  }
+}
+
 .resources-lab-calendar-wrap {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -635,8 +668,7 @@ body {
   background: var(--brand-subtle);
 }
 .resources-labs-tables {
-  max-height: 340px;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .resources-lab-pill {
@@ -7401,6 +7433,17 @@ tr.row-selected {
 .research-inline-meta {
   display: block;
   margin-top: 2px;
+}
+
+.research-file-link {
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+}
+
+.research-file-link:hover {
+  color: var(--text-bright);
 }
 
 .research-chip-group {

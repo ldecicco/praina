@@ -11,7 +11,17 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import ProjectMembership, ProjectRole, UserAccount
 from app.models.project import Project, ProjectKind
-from app.models.resources import Equipment, EquipmentBlocker, EquipmentBooking, EquipmentDowntime, EquipmentMaterial, EquipmentRequirement, Lab, LabClosure
+from app.models.resources import (
+    Equipment,
+    EquipmentBlocker,
+    EquipmentBooking,
+    EquipmentDowntime,
+    EquipmentMaterial,
+    EquipmentRequirement,
+    Lab,
+    LabClosure,
+    LabStaffAssignment,
+)
 from app.core.config import settings
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 from app.services.teaching_service import TeachingService
@@ -87,6 +97,46 @@ class ResourcesService:
         self.db.commit()
         self.db.refresh(item)
         return item
+
+    def list_lab_staff(self, lab_id: uuid.UUID) -> list[LabStaffAssignment]:
+        self.get_lab(lab_id)
+        return list(
+            self.db.scalars(
+                select(LabStaffAssignment)
+                .where(LabStaffAssignment.lab_id == lab_id)
+                .order_by(LabStaffAssignment.role.asc(), LabStaffAssignment.created_at.asc())
+            ).all()
+        )
+
+    def get_lab_staff_assignment(self, lab_id: uuid.UUID, user_id: uuid.UUID) -> LabStaffAssignment:
+        item = self.db.scalar(
+            select(LabStaffAssignment).where(
+                LabStaffAssignment.lab_id == lab_id,
+                LabStaffAssignment.user_id == user_id,
+            )
+        )
+        if not item:
+            raise NotFoundError("Lab staff assignment not found.")
+        return item
+
+    def add_lab_staff(self, lab_id: uuid.UUID, *, user_id: str | uuid.UUID, role: str = "staff") -> LabStaffAssignment:
+        self.get_lab(lab_id)
+        normalized_user_id = self._normalize_user_id(user_id)
+        normalized_role = self._normalize_lab_staff_role(role)
+        assignment = LabStaffAssignment(lab_id=lab_id, user_id=normalized_user_id, role=normalized_role)
+        self.db.add(assignment)
+        try:
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ConflictError("User is already assigned to this lab.") from exc
+        self.db.refresh(assignment)
+        return assignment
+
+    def remove_lab_staff(self, lab_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        item = self.get_lab_staff_assignment(lab_id, user_id)
+        self.db.delete(item)
+        self.db.commit()
 
     def update_lab(self, lab_id: uuid.UUID, **fields) -> Lab:
         item = self.get_lab(lab_id)
@@ -730,9 +780,43 @@ class ResourcesService:
         if equipment.owner_user_id and equipment.owner_user_id == user_id:
             return True
         if equipment.lab_id:
-            lab = self.get_lab(equipment.lab_id)
-            return bool(lab.responsible_user_id and lab.responsible_user_id == user_id)
+            return self.can_manage_lab_equipment(equipment.lab_id, user_id, platform_role)
         return False
+
+    def can_manage_lab(self, lab_id: uuid.UUID, user_id: uuid.UUID, platform_role: str) -> bool:
+        if platform_role == "super_admin":
+            return True
+        lab = self.get_lab(lab_id)
+        if lab.responsible_user_id and lab.responsible_user_id == user_id:
+            return True
+        return self.db.scalar(
+            select(func.count())
+            .select_from(LabStaffAssignment)
+            .where(
+                LabStaffAssignment.lab_id == lab_id,
+                LabStaffAssignment.user_id == user_id,
+                LabStaffAssignment.role == "manager",
+            )
+        ) > 0
+
+    def can_manage_lab_staff(self, lab_id: uuid.UUID, user_id: uuid.UUID, platform_role: str) -> bool:
+        return self.can_manage_lab(lab_id, user_id, platform_role)
+
+    def can_manage_lab_equipment(self, lab_id: uuid.UUID, user_id: uuid.UUID, platform_role: str) -> bool:
+        if platform_role == "super_admin":
+            return True
+        lab = self.get_lab(lab_id)
+        if lab.responsible_user_id and lab.responsible_user_id == user_id:
+            return True
+        return self.db.scalar(
+            select(func.count())
+            .select_from(LabStaffAssignment)
+            .where(
+                LabStaffAssignment.lab_id == lab_id,
+                LabStaffAssignment.user_id == user_id,
+                LabStaffAssignment.role.in_(("manager", "staff")),
+            )
+        ) > 0
 
     def can_access_resources(self, user: UserAccount) -> bool:
         return bool(user.platform_role == "super_admin" or user.can_access_research or user.can_access_teaching)
@@ -924,6 +1008,13 @@ class ResourcesService:
         lab_id = value if isinstance(value, uuid.UUID) else uuid.UUID(value)
         self.get_lab(lab_id)
         return lab_id
+
+    @staticmethod
+    def _normalize_lab_staff_role(value: str | None) -> str:
+        role = (value or "staff").strip().lower()
+        if role not in {"manager", "staff"}:
+            raise ValidationError("Lab staff role must be `manager` or `staff`.")
+        return role
 
     def _apply_lab_closure_effects(self, closure: LabClosure, *, created_by_user_id: uuid.UUID | None) -> list[EquipmentBooking]:
         lab = self.get_lab(closure.lab_id)

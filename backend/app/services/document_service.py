@@ -315,6 +315,43 @@ class DocumentService:
         self.db.refresh(document)
         return document
 
+    def clone_document_to_project(
+        self,
+        *,
+        source_project_id: uuid.UUID,
+        source_document_key: uuid.UUID,
+        target_project_id: uuid.UUID,
+        title: str | None = None,
+        metadata_json: dict | None = None,
+    ) -> ProjectDocument:
+        self._get_project(source_project_id)
+        self._get_project(target_project_id)
+        source_latest = self.db.scalar(
+            select(ProjectDocument)
+            .where(
+                ProjectDocument.project_id == source_project_id,
+                ProjectDocument.document_key == source_document_key,
+            )
+            .order_by(ProjectDocument.version.desc())
+            .limit(1)
+        )
+        if not source_latest:
+            raise NotFoundError("Source document not found.")
+
+        with Path(source_latest.storage_uri).open("rb") as file_stream:
+            payload = DocumentUploadPayload(
+                scope=DocumentScope.project,
+                title=(title or source_latest.title).strip()[:255],
+                metadata_json=metadata_json if metadata_json is not None else (source_latest.metadata_json or {}),
+            )
+            return self.create_document(
+                project_id=target_project_id,
+                payload=payload,
+                file_name=source_latest.original_filename,
+                content_type=source_latest.mime_type,
+                file_stream=file_stream,
+            )
+
     @staticmethod
     def _extract_google_doc_id(url: str) -> str:
         match = re.search(r"/document/d/([a-zA-Z0-9_-]+)", url)

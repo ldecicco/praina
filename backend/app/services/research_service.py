@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
+from typing import BinaryIO
 
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.meeting import MeetingRecord
+from app.models.auth import UserAccount
+from app.models.document import DocumentScope
 from app.models.organization import PartnerOrganization, TeamMember
 from app.models.project import Project
 from app.models.research import (
+    BibliographyReference,
+    BibliographyVisibility,
     CollectionMemberRole,
     OutputStatus,
     CollectionStatus,
@@ -28,6 +35,9 @@ from app.models.research import (
     research_note_references,
 )
 from app.services.onboarding_service import NotFoundError, ValidationError
+from app.services.document_service import DocumentService
+from app.services.document_ingestion_service import DocumentIngestionService
+from app.schemas.document import DocumentUploadPayload
 
 
 class ResearchService:
@@ -72,6 +82,12 @@ class ResearchService:
         except ValueError as exc:
             raise ValidationError("Invalid note type.") from exc
 
+    def _bibliography_visibility(self, value: str) -> BibliographyVisibility:
+        try:
+            return BibliographyVisibility(value)
+        except ValueError as exc:
+            raise ValidationError("Invalid bibliography visibility.") from exc
+
     # ── collection counts ──────────────────────────────────────────────
 
     def _reference_count(self, collection_id: uuid.UUID) -> int:
@@ -111,6 +127,15 @@ class ResearchService:
             self.db.scalar(
                 select(func.count()).select_from(ResearchAnnotation).where(
                     ResearchAnnotation.reference_id == reference_id
+                )
+            ) or 0
+        )
+
+    def bibliography_link_count(self, bibliography_reference_id: uuid.UUID) -> int:
+        return int(
+            self.db.scalar(
+                select(func.count()).select_from(ResearchReference).where(
+                    ResearchReference.bibliography_reference_id == bibliography_reference_id
                 )
             ) or 0
         )
@@ -508,11 +533,26 @@ class ResearchService:
         document_key: uuid.UUID | None = None,
         tags: list[str] | None = None,
         reading_status: str = "unread",
+        bibliography_visibility: str = "shared",
         added_by_member_id: uuid.UUID | None = None,
+        created_by_user_id: uuid.UUID | None = None,
     ) -> ResearchReference:
         self._get_project(project_id)
+        bibliography = self.create_bibliography_reference(
+            title=title,
+            authors=authors or [],
+            year=year,
+            venue=venue,
+            doi=doi,
+            url=url,
+            abstract=abstract,
+            bibtex_raw=None,
+            visibility=bibliography_visibility,
+            created_by_user_id=created_by_user_id,
+        )
         item = ResearchReference(
             project_id=project_id,
+            bibliography_reference_id=bibliography.id,
             title=title[:512].strip(),
             collection_id=collection_id,
             authors=authors or [],
@@ -547,6 +587,7 @@ class ResearchService:
         document_key: str | None = None,
         tags: list[str] | None = None,
         reading_status: str | None = None,
+        bibliography_visibility: str | None = None,
     ) -> ResearchReference:
         item = self.get_reference(project_id, reference_id)
         if title is not None:
@@ -571,6 +612,17 @@ class ResearchService:
             item.tags = tags
         if reading_status is not None:
             item.reading_status = self._reading_status(reading_status)
+        if item.bibliography_reference_id:
+            bibliography = self.get_bibliography_reference(item.bibliography_reference_id)
+            bibliography.title = item.title
+            bibliography.authors = item.authors or []
+            bibliography.year = item.year
+            bibliography.venue = item.venue
+            bibliography.doi = item.doi
+            bibliography.url = item.url
+            bibliography.abstract = item.abstract
+            if bibliography_visibility is not None:
+                bibliography.visibility = self._bibliography_visibility(bibliography_visibility)
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -605,6 +657,272 @@ class ResearchService:
         self.db.commit()
         self.db.refresh(item)
         return item
+
+    def list_bibliography(
+        self,
+        user_id: uuid.UUID,
+        *,
+        search: str | None = None,
+        visibility: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[BibliographyReference], int]:
+        stmt = select(BibliographyReference).where(
+            (BibliographyReference.visibility == BibliographyVisibility.shared)
+            | ((BibliographyReference.visibility == BibliographyVisibility.private) & (BibliographyReference.created_by_user_id == user_id))
+        )
+        if visibility:
+            stmt = stmt.where(BibliographyReference.visibility == self._bibliography_visibility(visibility))
+        if search:
+            pattern = f"%{search}%"
+            stmt = stmt.where(BibliographyReference.title.ilike(pattern))
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(BibliographyReference.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            ).all()
+        )
+        return items, total
+
+    def get_bibliography_reference(self, bibliography_reference_id: uuid.UUID) -> BibliographyReference:
+        item = self.db.get(BibliographyReference, bibliography_reference_id)
+        if not item:
+            raise NotFoundError("Bibliography reference not found.")
+        return item
+
+    def create_bibliography_reference(
+        self,
+        *,
+        title: str,
+        authors: list[str] | None = None,
+        year: int | None = None,
+        venue: str | None = None,
+        doi: str | None = None,
+        url: str | None = None,
+        abstract: str | None = None,
+        bibtex_raw: str | None = None,
+        visibility: str = "shared",
+        created_by_user_id: uuid.UUID | None = None,
+    ) -> BibliographyReference:
+        existing = self._find_existing_bibliography_reference(doi=doi, title=title, created_by_user_id=created_by_user_id)
+        if existing:
+            if not existing.abstract and abstract:
+                existing.abstract = abstract.strip()
+            if not existing.url and url:
+                existing.url = url.strip()
+            if not existing.venue and venue:
+                existing.venue = venue.strip()
+            if not existing.year and year:
+                existing.year = year
+            if (not existing.authors) and authors:
+                existing.authors = authors
+            if bibliography_raw := (bibtex_raw or "").strip():
+                existing.bibtex_raw = bibliography_raw
+            self.db.commit()
+            self.db.refresh(existing)
+            return existing
+        item = BibliographyReference(
+            title=title[:512].strip(),
+            authors=authors or [],
+            year=year,
+            venue=(venue or "").strip() or None,
+            doi=(doi or "").strip() or None,
+            url=(url or "").strip() or None,
+            abstract=(abstract or "").strip() or None,
+            bibtex_raw=(bibtex_raw or "").strip() or None,
+            visibility=self._bibliography_visibility(visibility),
+            created_by_user_id=created_by_user_id,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def update_bibliography_reference(
+        self,
+        bibliography_reference_id: uuid.UUID,
+        *,
+        title: str | None = None,
+        authors: list[str] | None = None,
+        year: int | None = None,
+        venue: str | None = None,
+        doi: str | None = None,
+        url: str | None = None,
+        abstract: str | None = None,
+        bibtex_raw: str | None = None,
+        visibility: str | None = None,
+    ) -> BibliographyReference:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        if title is not None:
+            item.title = title[:512].strip()
+        if authors is not None:
+            item.authors = authors
+        if year is not None:
+            item.year = year
+        if venue is not None:
+            item.venue = venue.strip() or None
+        if doi is not None:
+            item.doi = doi.strip() or None
+        if url is not None:
+            item.url = url.strip() or None
+        if abstract is not None:
+            item.abstract = abstract.strip() or None
+        if bibtex_raw is not None:
+            item.bibtex_raw = bibtex_raw.strip() or None
+        if visibility is not None:
+            item.visibility = self._bibliography_visibility(visibility)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def delete_bibliography_reference(self, bibliography_reference_id: uuid.UUID) -> None:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        self._delete_bibliography_attachment(item)
+        self.db.delete(item)
+        self.db.commit()
+
+    def link_bibliography_reference(
+        self,
+        project_id: uuid.UUID,
+        *,
+        bibliography_reference_id: uuid.UUID,
+        collection_id: uuid.UUID | None = None,
+        reading_status: str = "unread",
+        added_by_member_id: uuid.UUID | None = None,
+    ) -> ResearchReference:
+        self._get_project(project_id)
+        bibliography = self.get_bibliography_reference(bibliography_reference_id)
+        existing = self.db.scalar(
+            select(ResearchReference).where(
+                ResearchReference.project_id == project_id,
+                ResearchReference.collection_id == collection_id,
+                ResearchReference.bibliography_reference_id == bibliography_reference_id,
+            )
+        )
+        if existing:
+            return existing
+        linked_document_key = None
+        if bibliography.document_key and bibliography.source_project_id:
+            if bibliography.source_project_id == project_id:
+                linked_document_key = bibliography.document_key
+            else:
+                cloned = DocumentService(self.db).clone_document_to_project(
+                    source_project_id=bibliography.source_project_id,
+                    source_document_key=bibliography.document_key,
+                    target_project_id=project_id,
+                    title=bibliography.title,
+                    metadata_json={
+                        "category": "bibliography_reference",
+                        "bibliography_reference_id": str(bibliography.id),
+                    },
+                )
+                DocumentIngestionService(self.db).reindex_document(project_id, cloned.id)
+                linked_document_key = cloned.document_key
+        item = ResearchReference(
+            project_id=project_id,
+            bibliography_reference_id=bibliography_reference_id,
+            collection_id=collection_id,
+            title=bibliography.title,
+            authors=bibliography.authors or [],
+            year=bibliography.year,
+            venue=bibliography.venue,
+            doi=bibliography.doi,
+            url=bibliography.url,
+            abstract=bibliography.abstract,
+            document_key=linked_document_key,
+            tags=[],
+            reading_status=self._reading_status(reading_status),
+            added_by_member_id=added_by_member_id,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def attach_bibliography_file(
+        self,
+        project_id: uuid.UUID,
+        bibliography_reference_id: uuid.UUID,
+        *,
+        file_name: str,
+        content_type: str,
+        file_stream: BinaryIO,
+    ) -> BibliographyReference:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        document = DocumentService(self.db).create_document(
+            project_id=project_id,
+            payload=DocumentUploadPayload(
+                scope=DocumentScope.project,
+                title=item.title[:255],
+                metadata_json={
+                    "category": "bibliography_reference",
+                    "bibliography_reference_id": str(item.id),
+                },
+            ),
+            file_name=file_name,
+            content_type=content_type,
+            file_stream=file_stream,
+        )
+        DocumentIngestionService(self.db).reindex_document(project_id, document.id)
+        item.source_project_id = project_id
+        item.document_key = document.document_key
+        item.attachment_path = document.storage_uri
+        item.attachment_filename = document.original_filename
+        item.attachment_mime_type = document.mime_type
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def _find_existing_bibliography_reference(
+        self,
+        *,
+        doi: str | None,
+        title: str,
+        created_by_user_id: uuid.UUID | None,
+    ) -> BibliographyReference | None:
+        if doi and doi.strip():
+            existing = self.db.scalar(
+                select(BibliographyReference).where(BibliographyReference.doi == doi.strip())
+            )
+            if existing:
+                return existing
+        normalized_title = title.strip().lower()
+        if not normalized_title:
+            return None
+        rows = self.db.scalars(select(BibliographyReference).where(BibliographyReference.title.ilike(title.strip()))).all()
+        for item in rows:
+            if item.title.strip().lower() == normalized_title:
+                if item.visibility == BibliographyVisibility.shared or item.created_by_user_id == created_by_user_id:
+                    return item
+        return None
+
+    @staticmethod
+    def _write_file(file_stream: BinaryIO, target_path: Path) -> int:
+        total = 0
+        with target_path.open("wb") as output:
+            while True:
+                chunk = file_stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                total += len(chunk)
+        return total
+
+    def _bibliography_storage_path(self, bibliography_reference_id: uuid.UUID, file_name: str) -> Path:
+        root = Path(settings.documents_storage_path)
+        if not root.is_absolute():
+            root = (Path.cwd() / root).resolve()
+        target_dir = root / "_bibliography" / str(bibliography_reference_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir / file_name
+
+    @staticmethod
+    def _delete_bibliography_attachment(item: BibliographyReference) -> None:
+        if not item.attachment_path:
+            return
+        path = Path(item.attachment_path)
+        if path.exists():
+            path.unlink(missing_ok=True)
 
     # ══════════════════════════════════════════════════════════════════
     # Notes

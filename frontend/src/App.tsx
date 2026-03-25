@@ -56,7 +56,7 @@ import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
 import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief } from "./types";
 
-type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources";
+type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
 const ASSISTANT_PENDING_PROMPT_KEY = "assistant_pending_prompt";
 const ACTIVE_PROJECT_KEY = "active_project_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
@@ -77,9 +77,10 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   inbox: "dashboard",
   research_collection: "research",
   research_reference: "research",
-  research_note: "research",
-  resource_booking: "resources",
-};
+    research_note: "research",
+    resource_booking: "resources",
+    bibliography_reference: "bibliography",
+  };
 
 export default function App() {
   const [platformSection, setPlatformSection] = useState<"research" | "teaching">("research");
@@ -280,7 +281,7 @@ export default function App() {
     } else if (targetView === "meetings" && entityId) {
       setPendingMeetingId(entityId);
     }
-    if (targetView !== "courses" && targetView !== "resources") {
+    if (targetView !== "courses" && targetView !== "resources" && targetView !== "bibliography") {
       const sectionProjects = projects.filter((project) =>
         platformSection === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
       );
@@ -375,7 +376,7 @@ export default function App() {
   // Redirect to dashboard if on an execution-only view while in proposal mode
   useEffect(() => {
     if (activeProject?.project_mode === "proposal") {
-      const proposalViews = new Set<View>(["my-work", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "resources", "admin"]);
+      const proposalViews = new Set<View>(["my-work", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "resources", "bibliography", "admin"]);
       if (!proposalViews.has(view)) {
         setView("dashboard");
       }
@@ -384,7 +385,7 @@ export default function App() {
 
   useEffect(() => {
     if (platformSection === "teaching" && activeProject?.project_kind === "teaching") {
-      const teachingViews = new Set<View>(["my-work", "courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "admin"]);
+      const teachingViews = new Set<View>(["my-work", "courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "bibliography", "admin"]);
       if (!teachingViews.has(view)) {
         setView("courses");
       }
@@ -408,6 +409,7 @@ export default function App() {
     planning: "Timeline",
     todos: "Todos",
     search: "Search",
+    bibliography: "Bibliography",
     research: "Research",
     teaching: "Teaching",
     courses: "Courses",
@@ -447,6 +449,9 @@ export default function App() {
     { id: "todos", label: "Todos", icon: faSquareCheck },
     { id: "search", label: "Search", icon: faSearch },
   ];
+  const sharedNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
+    { id: "bibliography", label: "Bibliography", icon: faBook },
+  ];
 
   const isProposalMode = activeProject?.project_mode === "proposal";
   const isTeachingProject = activeProject?.project_kind === "teaching";
@@ -470,6 +475,10 @@ export default function App() {
               label: "Teaching",
               items: teachingNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || TEACHING_MODE_VIEWS.has(item.id)),
             },
+            {
+              label: "Library",
+              items: sharedNavItems,
+            },
           ]
         : []
       : canAccessResearch
@@ -477,6 +486,10 @@ export default function App() {
             {
               label: "Research",
               items: researchNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
+            },
+            {
+              label: "Library",
+              items: sharedNavItems,
             },
           ]
         : [];
@@ -829,6 +842,7 @@ export default function App() {
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
           {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} /> : null}
+          {view === "bibliography" ? <ResearchWorkspace selectedProjectId={selectedProjectId} bibliographyOnly /> : null}
           {view === "resources" ? (
             <ResourcesWorkspace
               currentUser={currentUser}

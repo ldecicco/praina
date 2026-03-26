@@ -514,7 +514,7 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
         return;
       }
       const [validationRes, deliverablesRes, risksRes, documentsRes, activityRes] = await Promise.all([
-        api.validateProject(projectId),
+        api.validateProject(projectId, { includeLlm: false }),
         api.listDeliverables(projectId),
         api.listRisks(projectId),
         api.listDocuments(projectId),

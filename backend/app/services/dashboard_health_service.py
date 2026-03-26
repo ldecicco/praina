@@ -57,7 +57,7 @@ class DashboardHealthService:
         try:
             from app.agents.validation_agent import ValidationAgent
 
-            report = ValidationAgent().run(project_id, self.db)
+            report = ValidationAgent().run(project_id, self.db, include_llm=False)
             validation_errors = [
                 self._issue_dict(
                     source="validation",

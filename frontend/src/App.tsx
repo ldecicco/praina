@@ -50,7 +50,7 @@ import { TeachingWorkspace } from "./components/TeachingWorkspace";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { ProjectSettingsModal } from "./components/ProjectSettingsModal";
 import { UserProfileModal } from "./components/UserProfileModal";
-import { api, PROJECT_DATA_CHANGED_EVENT } from "./lib/api";
+import { api, AUTH_EXPIRED_EVENT, PROJECT_DATA_CHANGED_EVENT } from "./lib/api";
 import { currentProjectMonth } from "./lib/utils";
 import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
@@ -234,6 +234,15 @@ export default function App() {
       window.sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
     }
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onAuthExpired = () => {
+      handleLogout();
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+  }, []);
 
   function handleProjectCreated(project: Project) {
     setSelectedProjectId(project.id);

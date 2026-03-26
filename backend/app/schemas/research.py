@@ -205,6 +205,11 @@ class BibliographyReferenceUpdate(BaseModel):
     visibility: str | None = None
 
 
+class BibliographySemanticEvidenceRead(BaseModel):
+    text: str
+    similarity: float | None = None
+
+
 class BibliographyReferenceRead(BaseModel):
     id: str
     source_project_id: str | None = None
@@ -222,9 +227,11 @@ class BibliographyReferenceRead(BaseModel):
     created_by_user_id: str | None = None
     attachment_filename: str | None = None
     attachment_url: str | None = None
+    document_status: str | None = None
     linked_project_count: int = 0
     note_count: int = 0
     reading_status: str = "unread"
+    semantic_evidence: list[BibliographySemanticEvidenceRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -427,4 +434,16 @@ class BibtexImportRead(BaseModel):
 
 class BibliographyBibtexImportRead(BaseModel):
     created: list[BibliographyReferenceRead] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class BibliographyIdentifierImportPayload(BaseModel):
+    identifiers: str
+    visibility: str = "shared"
+    source_project_id: str | None = None
+
+
+class BibliographyIdentifierImportRead(BaseModel):
+    created: list[BibliographyReferenceRead] = Field(default_factory=list)
+    reused: list[BibliographyReferenceRead] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)

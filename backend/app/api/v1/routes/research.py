@@ -23,6 +23,8 @@ from app.schemas.research import (
     BibliographyDuplicateCheckPayload,
     BibliographyDuplicateCheckRead,
     BibliographyDuplicateMatchRead,
+    BibliographyIdentifierImportPayload,
+    BibliographyIdentifierImportRead,
     BibliographyCollectionBulkResearchLinkPayload,
     BibliographyCollectionBulkTeachingLinkPayload,
     BibliographyCollectionCreate,
@@ -40,6 +42,7 @@ from app.schemas.research import (
     BibliographyReferenceCreate,
     BibliographyReferenceListRead,
     BibliographyReferenceRead,
+    BibliographySemanticEvidenceRead,
     BibliographyReferenceUpdate,
     BibliographyTagListRead,
     BibliographyTagRead,
@@ -969,14 +972,21 @@ def search_global_bibliography_semantic(
 ) -> BibliographyReferenceListRead:
     """Semantic search over bibliography references using vector embeddings."""
     svc = ResearchService(db)
-    items = svc.search_bibliography_semantic(current_user.id, q, visibility=visibility, top_k=top_k)
+    results = svc.search_bibliography_semantic_with_evidence(current_user.id, q, visibility=visibility, top_k=top_k)
+    items = [item for item, _ in results]
     ref_ids = [item.id for item in items]
     note_counts = svc.bibliography_note_counts(ref_ids)
     reading_statuses = svc.get_bibliography_reading_statuses(current_user.id, ref_ids)
     return BibliographyReferenceListRead(
         items=[
-            _bibliography_read_global(svc, item, note_counts=note_counts, reading_statuses=reading_statuses)
-            for item in items
+            _bibliography_read_global(
+                svc,
+                item,
+                note_counts=note_counts,
+                reading_statuses=reading_statuses,
+                semantic_evidence=evidence,
+            )
+            for item, evidence in results
         ],
         page=1,
         page_size=top_k,
@@ -1164,6 +1174,29 @@ def import_global_bibliography_bibtex(
     return BibliographyBibtexImportRead(created=created, errors=errors)
 
 
+@bibliography_router.post("/import-identifiers", response_model=BibliographyIdentifierImportRead)
+def import_global_bibliography_identifiers(
+    payload: BibliographyIdentifierImportPayload,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyIdentifierImportRead:
+    svc = ResearchService(db)
+    try:
+        created, reused, errors = svc.import_bibliography_identifiers(
+            identifiers=payload.identifiers,
+            visibility=payload.visibility,
+            created_by_user_id=current_user.id,
+            source_project_id=uuid.UUID(payload.source_project_id) if payload.source_project_id else None,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BibliographyIdentifierImportRead(
+        created=[_bibliography_read_global(svc, item) for item in created],
+        reused=[_bibliography_read_global(svc, item) for item in reused],
+        errors=errors,
+    )
+
+
 @bibliography_router.post("/{bibliography_reference_id}/attachment", response_model=BibliographyReferenceRead)
 async def upload_global_bibliography_attachment(
     bibliography_reference_id: uuid.UUID,
@@ -1185,6 +1218,24 @@ async def upload_global_bibliography_attachment(
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     finally:
         await file.close()
+    return _bibliography_read_global(svc, item)
+
+
+@bibliography_router.post("/{bibliography_reference_id}/ingest", response_model=BibliographyReferenceRead)
+def ingest_global_bibliography_attachment(
+    bibliography_reference_id: uuid.UUID,
+    source_project_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> BibliographyReferenceRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.ensure_bibliography_document_ingested(
+            bibliography_reference_id,
+            source_project_id=source_project_id,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     return _bibliography_read_global(svc, item)
 
 
@@ -1691,6 +1742,7 @@ def _bibliography_read(svc: ResearchService, project_id: uuid.UUID, item: Biblio
         visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         attachment_filename=item.attachment_filename,
+        document_status=svc.bibliography_document_status(item.id),
         attachment_url=(
             f"/projects/{project_id}/research/bibliography/{item.id}/file"
             if item.attachment_path
@@ -1708,6 +1760,7 @@ def _bibliography_read_global(
     *,
     note_counts: dict | None = None,
     reading_statuses: dict | None = None,
+    semantic_evidence: list[dict] | None = None,
 ) -> BibliographyReferenceRead:
     return BibliographyReferenceRead(
         id=str(item.id),
@@ -1725,10 +1778,19 @@ def _bibliography_read_global(
         visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         attachment_filename=item.attachment_filename,
+        document_status=svc.bibliography_document_status(item.id),
         attachment_url=(f"/bibliography/{item.id}/file" if (item.document_key or item.attachment_path) else None),
         linked_project_count=svc.bibliography_link_count(item.id),
         note_count=note_counts.get(item.id, 0) if note_counts else svc.bibliography_note_count(item.id),
         reading_status=reading_statuses.get(item.id, "unread") if reading_statuses else "unread",
+        semantic_evidence=[
+            BibliographySemanticEvidenceRead(
+                text=str(entry.get("text") or ""),
+                similarity=float(entry["similarity"]) if entry.get("similarity") is not None else None,
+            )
+            for entry in (semantic_evidence or [])
+            if str(entry.get("text") or "").strip()
+        ],
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

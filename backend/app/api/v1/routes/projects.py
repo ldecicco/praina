@@ -905,11 +905,15 @@ def get_assignment_matrix(
 
 
 @router.post("/{project_id}/validate", response_model=ValidationResultRead)
-def validate_project(project_id: uuid.UUID, db: Session = Depends(get_db)) -> ValidationResultRead:
+def validate_project(
+    project_id: uuid.UUID,
+    include_llm: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> ValidationResultRead:
     from app.agents.validation_agent import ValidationAgent
 
     try:
-        report = ValidationAgent().run(project_id, db)
+        report = ValidationAgent().run(project_id, db, include_llm=include_llm)
     except NotFoundError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

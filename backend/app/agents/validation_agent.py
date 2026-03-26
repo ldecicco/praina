@@ -34,7 +34,7 @@ class ValidationAgent:
     def __init__(self) -> None:
         self._llm = ChatActionExtractionAgent()
 
-    def run(self, project_id: uuid.UUID, db: Session) -> ValidationReport:
+    def run(self, project_id: uuid.UUID, db: Session, *, include_llm: bool = True) -> ValidationReport:
         pid = str(project_id)
         report = ValidationReport(project_id=pid)
 
@@ -64,11 +64,12 @@ class ValidationAgent:
                 report.warnings.append(issue)
 
         # --- LLM advisory warnings (best-effort) ---
-        try:
-            llm_warnings = self._llm_review(project_id, db, report)
-            report.warnings.extend(llm_warnings)
-        except Exception as exc:
-            logger.warning("LLM validation review failed for project %s: %s", project_id, exc)
+        if include_llm:
+            try:
+                llm_warnings = self._llm_review(project_id, db, report)
+                report.warnings.extend(llm_warnings)
+            except Exception as exc:
+                logger.warning("LLM validation review failed for project %s: %s", project_id, exc)
 
         report.is_valid = len(report.errors) == 0
         return report

@@ -1193,6 +1193,8 @@ export type ResearchReference = {
 
 export type BibliographyReference = {
   id: string;
+  source_project_id: string | null;
+  document_key: string | null;
   title: string;
   authors: string[];
   year: number | null;
@@ -1206,16 +1208,29 @@ export type BibliographyReference = {
   created_by_user_id: string | null;
   attachment_filename: string | null;
   attachment_url: string | null;
+  document_status: string | null;
   linked_project_count: number;
   note_count: number;
   reading_status: string;
+  semantic_evidence: BibliographySemanticEvidence[];
   created_at: string;
   updated_at: string;
+};
+
+export type BibliographySemanticEvidence = {
+  text: string;
+  similarity: number | null;
 };
 
 export type BibliographyDuplicateMatch = {
   match_reason: string;
   reference: BibliographyReference;
+};
+
+export type BibliographyIdentifierImportResult = {
+  created: BibliographyReference[];
+  reused: BibliographyReference[];
+  errors: string[];
 };
 
 export type BibliographyCollection = {

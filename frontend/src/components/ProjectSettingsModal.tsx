@@ -144,7 +144,7 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
     try {
       setBusy(true);
       setError("");
-      const result = await api.validateProject(project.id);
+      const result = await api.validateProject(project.id, { includeLlm: true });
       setValidation(result);
       setStatus(result.valid ? "Validation passed." : "");
     } catch (err) {
@@ -162,7 +162,7 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
       const result = await api.activateProject(project.id);
       onProjectUpdated({ ...project, status: result.status, baseline_version: result.baseline_version });
       setStatus(`Project activated. Baseline v${result.baseline_version}.`);
-      const validationResult = await api.validateProject(project.id);
+      const validationResult = await api.validateProject(project.id, { includeLlm: true });
       setValidation(validationResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to activate project.");

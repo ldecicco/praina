@@ -59,6 +59,7 @@ import type {
   BibliographyReference,
   BibliographyCollection,
   BibliographyTag,
+  BibliographyIdentifierImportResult,
   ResearchCollection,
   ResearchCollectionDetail,
   ResearchCollectionMember,
@@ -92,10 +93,16 @@ if (!API_BASE) {
 
 let authToken: string | null = null;
 export const PROJECT_DATA_CHANGED_EVENT = "project-data-changed";
+export const AUTH_EXPIRED_EVENT = "auth-expired";
 
 function emitProjectChanged(projectId: string) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(PROJECT_DATA_CHANGED_EVENT, { detail: { projectId } }));
+}
+
+function emitAuthExpired(message: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { message } }));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -115,12 +122,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const errorBody = await response.text();
+    let parsed: unknown = null;
     try {
-      const parsed = JSON.parse(errorBody) as { detail?: unknown };
-      throw new Error(formatApiErrorDetail(parsed.detail) || errorBody || `API request failed: ${response.status}`);
+      parsed = JSON.parse(errorBody);
     } catch {
-      throw new Error(errorBody || `API request failed: ${response.status}`);
+      parsed = null;
     }
+    const message = formatApiErrorResponse(parsed) || errorBody || `API request failed: ${response.status}`;
+    if (response.status === 401 && authToken) {
+      emitAuthExpired(message);
+    }
+    throw new Error(message);
   }
 
   const method = (init?.method || "GET").toUpperCase();
@@ -149,19 +161,35 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
 
   if (!response.ok) {
     const errorBody = await response.text();
+    let parsed: unknown = null;
     try {
-      const parsed = JSON.parse(errorBody) as { detail?: unknown };
-      throw new Error(formatApiErrorDetail(parsed.detail) || errorBody || `API request failed: ${response.status}`);
+      parsed = JSON.parse(errorBody);
     } catch {
-      throw new Error(errorBody || `API request failed: ${response.status}`);
+      parsed = null;
     }
+    const message = formatApiErrorResponse(parsed) || errorBody || `API request failed: ${response.status}`;
+    if (response.status === 401 && authToken) {
+      emitAuthExpired(message);
+    }
+    throw new Error(message);
   }
 
   return response.blob();
 }
 
+function formatApiErrorResponse(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "";
+  const detail = "detail" in payload ? (payload as { detail?: unknown }).detail : undefined;
+  const message = "message" in payload ? (payload as { message?: unknown }).message : undefined;
+  return formatApiErrorDetail(detail) || (typeof message === "string" ? message : "");
+}
+
 function formatApiErrorDetail(detail: unknown): string {
   if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
   if (Array.isArray(detail)) {
     const messages = detail
       .map((item) => (item && typeof item === "object" && "msg" in item ? String((item as { msg?: unknown }).msg || "") : ""))
@@ -1116,8 +1144,11 @@ export const api = {
     return request(`/projects/${projectId}/deliverables/${entityId}/restore`, { method: "POST" });
   },
 
-  validateProject(projectId: string): Promise<ProjectValidationResult> {
-    return request(`/projects/${projectId}/validate`, { method: "POST" });
+  validateProject(projectId: string, options?: { includeLlm?: boolean }): Promise<ProjectValidationResult> {
+    const query = new URLSearchParams();
+    if (typeof options?.includeLlm === "boolean") query.set("include_llm", String(options.includeLlm));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request(`/projects/${projectId}/validate${suffix}`, { method: "POST" });
   },
 
   activateProject(projectId: string): Promise<ProjectActivationResult> {
@@ -2254,6 +2285,14 @@ export const api = {
       body: JSON.stringify({ bibtex, visibility }),
     });
   },
+  importGlobalBibliographyIdentifiers(
+    data: { identifiers: string; visibility?: string; source_project_id?: string | null }
+  ): Promise<BibliographyIdentifierImportResult> {
+    return request("/bibliography/import-identifiers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
   checkGlobalBibliographyDuplicates(data: { title: string; doi?: string | null }): Promise<{ matches: BibliographyDuplicateMatch[] }> {
     return request("/bibliography/check-duplicates", {
       method: "POST",
@@ -2264,6 +2303,15 @@ export const api = {
     const formData = new FormData();
     formData.append("file", file);
     return request(`/bibliography/${bibliographyReferenceId}/attachment?source_project_id=${sourceProjectId}`, { method: "POST", body: formData });
+  },
+  ingestGlobalBibliographyAttachment(
+    bibliographyReferenceId: string,
+    sourceProjectId?: string | null,
+  ): Promise<BibliographyReference> {
+    const query = new URLSearchParams();
+    if (sourceProjectId) query.set("source_project_id", sourceProjectId);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request(`/bibliography/${bibliographyReferenceId}/ingest${suffix}`, { method: "POST" });
   },
   getGlobalBibliographyAttachment(bibliographyReferenceId: string): Promise<Blob> {
     return requestBlob(`/bibliography/${bibliographyReferenceId}/file`);

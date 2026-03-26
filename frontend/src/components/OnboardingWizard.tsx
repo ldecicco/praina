@@ -624,7 +624,7 @@ export function OnboardingWizard({ projects, selectedProjectId, canCreateProject
     if (!selectedProjectId) return;
     try {
       setBusy(true); setError("");
-      const result = await api.validateProject(selectedProjectId);
+      const result = await api.validateProject(selectedProjectId, { includeLlm: true });
       setValidationResult(result);
       if (result.valid) setStatus("Validation passed.");
     } catch (err) { setError(err instanceof Error ? err.message : "Validation failed."); } finally { setBusy(false); }
@@ -639,7 +639,7 @@ export function OnboardingWizard({ projects, selectedProjectId, canCreateProject
         onProjectUpdated({ ...selectedProject, status: result.status, baseline_version: result.baseline_version });
       }
       setStatus(`Activated. Baseline v${result.baseline_version}.`);
-      const validation = await api.validateProject(selectedProjectId);
+      const validation = await api.validateProject(selectedProjectId, { includeLlm: true });
       setValidationResult(validation);
     } catch (err) { setError(err instanceof Error ? err.message : "Activation failed."); } finally { setBusy(false); }
   }

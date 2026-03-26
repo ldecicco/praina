@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import re
 import uuid
+import io
+from xml.etree import ElementTree as ET
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import quote
 
 import logging
+import httpx
 
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import ProgrammingError
@@ -16,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.meeting import MeetingRecord
 from app.models.auth import UserAccount
-from app.models.document import DocumentScope
+from app.models.document import DocumentChunk, DocumentScope, DocumentStatus, ProjectDocument
 from app.models.organization import PartnerOrganization, TeamMember
 from app.models.project import Project, ProjectKind
 from app.models.research import (
@@ -51,6 +55,7 @@ from app.services.document_ingestion_service import DocumentIngestionService
 from app.schemas.document import DocumentUploadPayload
 
 logger = logging.getLogger(__name__)
+ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
 
 class DuplicateBibliographyError(ValidationError):
@@ -69,6 +74,10 @@ def _bibliography_embedding_text(item: BibliographyReference) -> str:
     if item.abstract:
         parts.append(item.abstract)
     return "\n".join(parts)
+
+
+def _tokenize_query_terms(value: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]+", (value or "").lower()) if len(token) > 1}
 
 
 class ResearchService:
@@ -1106,6 +1115,245 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def import_bibliography_identifiers(
+        self,
+        *,
+        identifiers: str,
+        visibility: str,
+        created_by_user_id: uuid.UUID | None,
+        source_project_id: uuid.UUID | None = None,
+    ) -> tuple[list[BibliographyReference], list[BibliographyReference], list[str]]:
+        tokens = self._parse_bibliography_identifier_tokens(identifiers)
+        if not tokens:
+            raise ValidationError("No valid DOI or arXiv identifiers found.")
+
+        created: list[BibliographyReference] = []
+        reused: list[BibliographyReference] = []
+        errors: list[str] = []
+
+        for token in tokens:
+            try:
+                if token["kind"] == "doi":
+                    metadata = self._fetch_doi_metadata(token["value"])
+                    item, created_new = self._create_or_reuse_bibliography_reference(
+                        title=metadata["title"],
+                        authors=metadata["authors"],
+                        year=metadata["year"],
+                        venue=metadata["venue"],
+                        doi=metadata["doi"],
+                        url=metadata["url"],
+                        abstract=metadata["abstract"],
+                        bibtex_raw=None,
+                        tags=[],
+                        visibility=visibility,
+                        created_by_user_id=created_by_user_id,
+                    )
+                else:
+                    metadata = self._fetch_arxiv_metadata(token["value"])
+                    item, created_new = self._create_or_reuse_bibliography_reference(
+                        title=metadata["title"],
+                        authors=metadata["authors"],
+                        year=metadata["year"],
+                        venue=metadata["venue"],
+                        doi=metadata["doi"],
+                        url=metadata["url"],
+                        abstract=metadata["abstract"],
+                        bibtex_raw=None,
+                        tags=[],
+                        visibility=visibility,
+                        created_by_user_id=created_by_user_id,
+                    )
+                    if source_project_id is None:
+                        raise ValidationError("Select a project before importing arXiv papers.")
+                    if not item.document_key:
+                        self._attach_bibliography_pdf_from_url(
+                            project_id=source_project_id,
+                            bibliography_reference_id=item.id,
+                            url=metadata["pdf_url"],
+                            file_name=f"{token['value'].replace('/', '_')}.pdf",
+                        )
+                        item = self.get_bibliography_reference(item.id)
+
+                (created if created_new else reused).append(item)
+            except Exception as exc:
+                errors.append(f"{token['raw']}: {exc}")
+
+        return created, reused, errors
+
+    def _create_or_reuse_bibliography_reference(
+        self,
+        *,
+        title: str,
+        authors: list[str] | None,
+        year: int | None,
+        venue: str | None,
+        doi: str | None,
+        url: str | None,
+        abstract: str | None,
+        bibtex_raw: str | None,
+        tags: list[str] | None,
+        visibility: str,
+        created_by_user_id: uuid.UUID | None,
+    ) -> tuple[BibliographyReference, bool]:
+        duplicates = self.find_bibliography_duplicates(
+            created_by_user_id=created_by_user_id,
+            doi=doi,
+            title=title,
+        )
+        if duplicates:
+            existing = duplicates[0][1]
+            return (
+                self._merge_existing_bibliography_reference(
+                    existing,
+                    authors=authors,
+                    year=year,
+                    venue=venue,
+                    doi=doi,
+                    url=url,
+                    abstract=abstract,
+                    bibtex_raw=bibtex_raw,
+                    tags=tags,
+                ),
+                False,
+            )
+        return (
+            self.create_bibliography_reference(
+                title=title,
+                authors=authors,
+                year=year,
+                venue=venue,
+                doi=doi,
+                url=url,
+                abstract=abstract,
+                bibtex_raw=bibtex_raw,
+                tags=tags,
+                visibility=visibility,
+                created_by_user_id=created_by_user_id,
+                allow_duplicate=True,
+            ),
+            True,
+        )
+
+    def _parse_bibliography_identifier_tokens(self, raw: str) -> list[dict[str, str]]:
+        tokens: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for chunk in re.split(r"[\n,;]+", raw or ""):
+            value = chunk.strip()
+            if not value:
+                continue
+            parsed = self._classify_bibliography_identifier(value)
+            if not parsed:
+                continue
+            key = (parsed["kind"], parsed["value"])
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append(parsed)
+        return tokens
+
+    def _classify_bibliography_identifier(self, raw: str) -> dict[str, str] | None:
+        value = raw.strip()
+        doi_match = re.search(r"(10\.\d{4,9}/[^\s]+)", value, re.IGNORECASE)
+        if doi_match:
+            return {"kind": "doi", "value": doi_match.group(1).rstrip(".,);"), "raw": raw}
+
+        arxiv_match = re.search(r"arxiv\.org/(?:abs|pdf)/([^?\s#/]+)", value, re.IGNORECASE)
+        if arxiv_match:
+            arxiv_id = arxiv_match.group(1).removesuffix(".pdf")
+            return {"kind": "arxiv", "value": arxiv_id, "raw": raw}
+
+        simple_arxiv = re.fullmatch(r"(?:arxiv:)?([a-z\-]+/\d{7}|\d{4}\.\d{4,5}(?:v\d+)?)", value, re.IGNORECASE)
+        if simple_arxiv:
+            return {"kind": "arxiv", "value": simple_arxiv.group(1), "raw": raw}
+        return None
+
+    def _fetch_doi_metadata(self, doi: str) -> dict[str, object]:
+        url = f"https://api.crossref.org/works/{quote(doi.strip(), safe='')}"
+        with httpx.Client(timeout=30.0, follow_redirects=True, headers={"User-Agent": f"{settings.app_name}/1.0"}) as client:
+            response = client.get(url)
+            response.raise_for_status()
+        message = response.json().get("message", {})
+        title = ((message.get("title") or [""])[0] or "").strip()
+        if not title:
+            raise ValidationError("Crossref returned no title.")
+        authors = []
+        for author in message.get("author") or []:
+            given = (author.get("given") or "").strip()
+            family = (author.get("family") or "").strip()
+            full = " ".join(part for part in [given, family] if part).strip()
+            if full:
+                authors.append(full)
+        year = None
+        for field in ("published-print", "published-online", "issued"):
+            date_parts = (((message.get(field) or {}).get("date-parts") or [[]])[0] or [])
+            if date_parts:
+                year = int(date_parts[0])
+                break
+        abstract = (message.get("abstract") or "").strip() or None
+        if abstract:
+            abstract = re.sub(r"<[^>]+>", " ", abstract)
+            abstract = " ".join(abstract.split())
+        venue = ((message.get("container-title") or [""])[0] or "").strip() or None
+        return {
+            "title": title,
+            "authors": authors,
+            "year": year,
+            "venue": venue,
+            "doi": doi.strip(),
+            "url": (message.get("URL") or f"https://doi.org/{doi.strip()}").strip(),
+            "abstract": abstract,
+        }
+
+    def _fetch_arxiv_metadata(self, arxiv_id: str) -> dict[str, object]:
+        with httpx.Client(timeout=30.0, follow_redirects=True, headers={"User-Agent": f"{settings.app_name}/1.0"}) as client:
+            response = client.get("https://export.arxiv.org/api/query", params={"id_list": arxiv_id})
+            response.raise_for_status()
+        root = ET.fromstring(response.text)
+        entry = root.find("atom:entry", ARXIV_NS)
+        if entry is None:
+            raise ValidationError("arXiv entry not found.")
+        title = " ".join((entry.findtext("atom:title", default="", namespaces=ARXIV_NS) or "").split())
+        if not title:
+            raise ValidationError("arXiv returned no title.")
+        authors = [
+            " ".join((author.findtext("atom:name", default="", namespaces=ARXIV_NS) or "").split())
+            for author in entry.findall("atom:author", ARXIV_NS)
+        ]
+        authors = [author for author in authors if author]
+        summary = " ".join((entry.findtext("atom:summary", default="", namespaces=ARXIV_NS) or "").split()) or None
+        published = entry.findtext("atom:published", default="", namespaces=ARXIV_NS)
+        year = int(published[:4]) if published[:4].isdigit() else None
+        doi = entry.findtext("arxiv:doi", default="", namespaces=ARXIV_NS).strip() or None
+        return {
+            "title": title,
+            "authors": authors,
+            "year": year,
+            "venue": "arXiv",
+            "doi": doi,
+            "url": f"https://arxiv.org/abs/{arxiv_id}",
+            "abstract": summary,
+            "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+        }
+
+    def _attach_bibliography_pdf_from_url(
+        self,
+        *,
+        project_id: uuid.UUID,
+        bibliography_reference_id: uuid.UUID,
+        url: str,
+        file_name: str,
+    ) -> BibliographyReference:
+        with httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": f"{settings.app_name}/1.0"}) as client:
+            response = client.get(url)
+            response.raise_for_status()
+        return self.attach_bibliography_file(
+            project_id,
+            bibliography_reference_id,
+            file_name=file_name,
+            content_type="application/pdf",
+            file_stream=io.BytesIO(response.content),
+        )
+
     def _merge_existing_bibliography_reference(
         self,
         existing: BibliographyReference,
@@ -1278,6 +1526,53 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def ensure_bibliography_document_ingested(
+        self,
+        bibliography_reference_id: uuid.UUID,
+        *,
+        source_project_id: uuid.UUID | None = None,
+    ) -> BibliographyReference:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+
+        if item.document_key and item.source_project_id:
+            document = self.db.scalar(
+                select(ProjectDocument)
+                .where(
+                    ProjectDocument.project_id == item.source_project_id,
+                    ProjectDocument.document_key == item.document_key,
+                )
+                .order_by(ProjectDocument.version.desc())
+                .limit(1)
+            )
+            if document:
+                DocumentIngestionService(self.db).reindex_document(item.source_project_id, document.id)
+                self.db.refresh(item)
+                return item
+
+        if not item.attachment_path:
+            raise ValidationError("No PDF attached to this paper.")
+        if source_project_id is None:
+            raise ValidationError("Select a project before ingesting this PDF.")
+
+        path = Path(item.attachment_path)
+        if not path.is_absolute():
+            root = Path(settings.documents_storage_path)
+            if not root.is_absolute():
+                root = (Path.cwd() / root).resolve()
+            path = (root / path).resolve()
+        if not path.exists():
+            raise NotFoundError("Bibliography attachment file not found.")
+
+        with path.open("rb") as stream:
+            updated = self.attach_bibliography_file(
+                source_project_id,
+                bibliography_reference_id,
+                file_name=item.attachment_filename or path.name,
+                content_type=item.attachment_mime_type or "application/pdf",
+                file_stream=stream,
+            )
+        return updated
+
     def find_bibliography_duplicates(
         self,
         *,
@@ -1433,6 +1728,147 @@ class ResearchService:
         if visibility:
             stmt = stmt.where(BibliographyReference.visibility == self._bibliography_visibility(visibility))
         return list(self.db.scalars(stmt).all())
+
+    def search_bibliography_semantic_with_evidence(
+        self,
+        user_id: uuid.UUID,
+        query: str,
+        *,
+        visibility: str | None = None,
+        top_k: int = 20,
+        chunk_limit: int = 3,
+    ) -> list[tuple[BibliographyReference, list[dict[str, Any]]]]:
+        from app.services.embedding_service import EmbeddingService
+
+        svc = EmbeddingService(self.db)
+        try:
+            vectors = svc.embed_texts([query])
+        except Exception:
+            logger.warning("Failed to embed search query", exc_info=True)
+            return []
+        if not vectors:
+            return []
+        query_embedding = vectors[0]
+
+        cosine_dist = BibliographyReference.embedding.cosine_distance(query_embedding)
+        stmt = (
+            select(BibliographyReference)
+            .where(
+                BibliographyReference.embedding.isnot(None),
+                (BibliographyReference.visibility == BibliographyVisibility.shared)
+                | (
+                    (BibliographyReference.visibility == BibliographyVisibility.private)
+                    & (BibliographyReference.created_by_user_id == user_id)
+                ),
+            )
+            .order_by(cosine_dist)
+            .limit(top_k)
+        )
+        if visibility:
+            stmt = stmt.where(BibliographyReference.visibility == self._bibliography_visibility(visibility))
+        items = list(self.db.scalars(stmt).all())
+        return [
+            (item, self.bibliography_document_chunk_evidence(item, query_embedding, query=query, limit=chunk_limit))
+            for item in items
+        ]
+
+    def bibliography_semantic_evidence(self, item: BibliographyReference, query: str, *, limit: int = 3) -> list[str]:
+        terms = _tokenize_query_terms(query)
+        if not terms:
+            return []
+        candidates: list[tuple[int, str]] = []
+
+        def add_candidate(text: str | None) -> None:
+            normalized = " ".join((text or "").split())
+            if not normalized:
+                return
+            lowered = normalized.lower()
+            score = sum(1 for term in terms if term in lowered)
+            if score > 0:
+                candidates.append((score, normalized[:420]))
+
+        add_candidate(item.title)
+        if item.authors:
+            add_candidate(", ".join(item.authors))
+        if item.venue or item.year:
+            add_candidate(" · ".join(str(part) for part in [item.venue, item.year] if part))
+        add_candidate(item.abstract)
+        add_candidate(item.bibtex_raw)
+
+        candidates.sort(key=lambda row: (-row[0], len(row[1])))
+        evidence: list[str] = []
+        seen: set[str] = set()
+        for _, text in candidates:
+            if text in seen:
+                continue
+            seen.add(text)
+            evidence.append(text)
+            if len(evidence) >= limit:
+                break
+        return evidence
+
+    def bibliography_document_chunk_evidence(
+        self,
+        item: BibliographyReference,
+        query_embedding: list[float],
+        *,
+        query: str,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        if item.document_key is None or item.source_project_id is None:
+            return [
+                {"text": text, "similarity": None}
+                for text in self.bibliography_semantic_evidence(item, query, limit=limit)
+            ]
+
+        document = self.db.scalar(
+            select(ProjectDocument)
+            .where(
+                ProjectDocument.project_id == item.source_project_id,
+                ProjectDocument.document_key == item.document_key,
+                ProjectDocument.status == DocumentStatus.indexed.value,
+            )
+            .order_by(ProjectDocument.version.desc())
+            .limit(1)
+        )
+        if not document:
+            return [
+                {"text": text, "similarity": None}
+                for text in self.bibliography_semantic_evidence(item, query, limit=limit)
+            ]
+
+        cosine_distance = DocumentChunk.embedding.cosine_distance(query_embedding)
+        rows = self.db.execute(
+            select(DocumentChunk.content, (1 - cosine_distance).label("similarity"))
+            .where(
+                DocumentChunk.document_id == document.id,
+                DocumentChunk.embedding.isnot(None),
+            )
+            .order_by(cosine_distance)
+            .limit(limit)
+        ).all()
+
+        evidence: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for content, similarity in rows:
+            text = " ".join((content or "").split())
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            evidence.append({
+                "text": text[:420],
+                "similarity": round(float(similarity), 4) if similarity is not None else None,
+            })
+        if evidence:
+            evidence.sort(
+                key=lambda entry: entry["similarity"] if entry["similarity"] is not None else -1,
+                reverse=True,
+            )
+            return evidence
+        return [
+            {"text": text, "similarity": None}
+            for text in self.bibliography_semantic_evidence(item, query, limit=limit)
+        ]
 
     # ── bibliography notes ──────────────────────────────────────────
 
@@ -1702,3 +2138,19 @@ class ResearchService:
             return None
         row = self.db.scalar(select(TeamMember.full_name).where(TeamMember.id == member_id))
         return row
+    def bibliography_document_status(self, bibliography_reference_id: uuid.UUID) -> str | None:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        if item.document_key is None or item.source_project_id is None:
+            if item.attachment_path or item.attachment_filename:
+                return "pending"
+            return "no_pdf"
+        document = self.db.scalar(
+            select(ProjectDocument.status)
+            .where(
+                ProjectDocument.project_id == item.source_project_id,
+                ProjectDocument.document_key == item.document_key,
+            )
+            .order_by(ProjectDocument.version.desc())
+            .limit(1)
+        )
+        return str(document) if document else "pending"

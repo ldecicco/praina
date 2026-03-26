@@ -176,7 +176,7 @@ export function ProjectDashboard({ selectedProjectId, project, onNavigate, onPro
     setBusy(true);
     setError("");
     Promise.all([
-      api.validateProject(selectedProjectId),
+      api.validateProject(selectedProjectId, { includeLlm: false }),
       api.listPartners(selectedProjectId),
       api.listMembers(selectedProjectId),
       api.listWorkPackages(selectedProjectId),

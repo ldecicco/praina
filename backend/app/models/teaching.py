@@ -129,6 +129,9 @@ class TeachingProjectBackgroundMaterial(Base, IdMixin, TimestampMixin):
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     material_type: Mapped[str] = mapped_column(String(32), default="other", index=True)
     title: Mapped[str] = mapped_column(String(255))
+    bibliography_reference_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("bibliography_references.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     document_key: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     external_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

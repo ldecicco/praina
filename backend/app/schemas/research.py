@@ -186,6 +186,7 @@ class BibliographyReferenceCreate(BaseModel):
     url: str | None = None
     abstract: str | None = None
     bibtex_raw: str | None = None
+    tags: list[str] = Field(default_factory=list)
     visibility: str = "shared"
 
 
@@ -198,6 +199,7 @@ class BibliographyReferenceUpdate(BaseModel):
     url: str | None = None
     abstract: str | None = None
     bibtex_raw: str | None = None
+    tags: list[str] | None = None
     visibility: str | None = None
 
 
@@ -213,17 +215,68 @@ class BibliographyReferenceRead(BaseModel):
     url: str | None = None
     abstract: str | None = None
     bibtex_raw: str | None = None
+    tags: list[str] = Field(default_factory=list)
     visibility: str
     created_by_user_id: str | None = None
     attachment_filename: str | None = None
     attachment_url: str | None = None
     linked_project_count: int = 0
+    note_count: int = 0
+    reading_status: str = "unread"
     created_at: datetime
     updated_at: datetime
 
 
 class BibliographyReferenceListRead(PaginatedResponse):
     items: list[BibliographyReferenceRead] = Field(default_factory=list)
+
+
+class BibliographyTagRead(BaseModel):
+    id: str
+    label: str
+    slug: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class BibliographyTagListRead(PaginatedResponse):
+    items: list[BibliographyTagRead] = Field(default_factory=list)
+
+
+class BibliographyNoteCreate(BaseModel):
+    content: str
+    note_type: str = "comment"
+    visibility: str = "shared"
+
+
+class BibliographyNoteUpdate(BaseModel):
+    content: str | None = None
+    note_type: str | None = None
+    visibility: str | None = None
+
+
+class BibliographyNoteRead(BaseModel):
+    id: str
+    bibliography_reference_id: str
+    user_id: str
+    user_display_name: str
+    content: str
+    note_type: str
+    visibility: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class BibliographyNoteListRead(BaseModel):
+    items: list[BibliographyNoteRead] = Field(default_factory=list)
+
+
+class BibliographyReadingStatusRead(BaseModel):
+    reading_status: str
+
+
+class BibliographyReadingStatusUpdate(BaseModel):
+    reading_status: str
 
 
 class BibliographyLinkPayload(BaseModel):

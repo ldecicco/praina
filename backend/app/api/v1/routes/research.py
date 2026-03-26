@@ -21,10 +21,18 @@ from app.schemas.research import (
     AISynthesisRead,
     BibliographyBibtexImportRead,
     BibliographyLinkPayload,
+    BibliographyNoteCreate,
+    BibliographyNoteListRead,
+    BibliographyNoteRead,
+    BibliographyNoteUpdate,
+    BibliographyReadingStatusRead,
+    BibliographyReadingStatusUpdate,
     BibliographyReferenceCreate,
     BibliographyReferenceListRead,
     BibliographyReferenceRead,
     BibliographyReferenceUpdate,
+    BibliographyTagListRead,
+    BibliographyTagRead,
     BibtexImportPayload,
     BibtexImportRead,
     CollectionCreate,
@@ -536,6 +544,7 @@ def create_bibliography_reference(
             url=payload.url,
             abstract=payload.abstract,
             bibtex_raw=payload.bibtex_raw,
+            tags=payload.tags,
             visibility=payload.visibility,
             created_by_user_id=current_user.id,
         )
@@ -565,6 +574,7 @@ def update_bibliography_reference(
             url=payload.url,
             abstract=payload.abstract,
             bibtex_raw=payload.bibtex_raw,
+            tags=payload.tags,
             visibility=payload.visibility,
         )
     except (NotFoundError, ValidationError) as exc:
@@ -736,8 +746,77 @@ def list_global_bibliography(
         items, total = svc.list_bibliography(current_user.id, search=search, visibility=visibility, page=page, page_size=page_size)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ref_ids = [item.id for item in items]
+    note_counts = svc.bibliography_note_counts(ref_ids)
+    reading_statuses = svc.get_bibliography_reading_statuses(current_user.id, ref_ids)
     return BibliographyReferenceListRead(
-        items=[_bibliography_read_global(svc, item) for item in items],
+        items=[
+            _bibliography_read_global(svc, item, note_counts=note_counts, reading_statuses=reading_statuses)
+            for item in items
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@bibliography_router.get("/search", response_model=BibliographyReferenceListRead)
+def search_global_bibliography_semantic(
+    q: str = Query(..., min_length=1),
+    visibility: str | None = Query(default=None),
+    top_k: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyReferenceListRead:
+    """Semantic search over bibliography references using vector embeddings."""
+    svc = ResearchService(db)
+    items = svc.search_bibliography_semantic(current_user.id, q, visibility=visibility, top_k=top_k)
+    ref_ids = [item.id for item in items]
+    note_counts = svc.bibliography_note_counts(ref_ids)
+    reading_statuses = svc.get_bibliography_reading_statuses(current_user.id, ref_ids)
+    return BibliographyReferenceListRead(
+        items=[
+            _bibliography_read_global(svc, item, note_counts=note_counts, reading_statuses=reading_statuses)
+            for item in items
+        ],
+        page=1,
+        page_size=top_k,
+        total=len(items),
+    )
+
+
+@bibliography_router.post("/embed-backfill")
+def bibliography_embed_backfill(
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> dict[str, int]:
+    """Backfill embeddings for bibliography references that don't have one yet."""
+    svc = ResearchService(db)
+    count = svc.embed_bibliography_backfill()
+    db.commit()
+    return {"embedded": count}
+
+
+@bibliography_router.get("/tags", response_model=BibliographyTagListRead)
+def list_global_bibliography_tags(
+    search: str | None = Query(default=None, alias="q"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> BibliographyTagListRead:
+    svc = ResearchService(db)
+    items, total = svc.list_bibliography_tags(search=search, page=page, page_size=page_size)
+    return BibliographyTagListRead(
+        items=[
+            BibliographyTagRead(
+                id=str(item.id),
+                label=item.label,
+                slug=item.slug,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+            for item in items
+        ],
         page=page,
         page_size=page_size,
         total=total,
@@ -761,6 +840,7 @@ def create_global_bibliography_reference(
             url=payload.url,
             abstract=payload.abstract,
             bibtex_raw=payload.bibtex_raw,
+            tags=payload.tags,
             visibility=payload.visibility,
             created_by_user_id=current_user.id,
         )
@@ -787,6 +867,7 @@ def update_global_bibliography_reference(
             url=payload.url,
             abstract=payload.abstract,
             bibtex_raw=payload.bibtex_raw,
+            tags=payload.tags,
             visibility=payload.visibility,
         )
     except (NotFoundError, ValidationError) as exc:
@@ -904,6 +985,123 @@ def download_global_bibliography_attachment(
         media_type=item.attachment_mime_type or "application/pdf",
         filename=item.attachment_filename or path.name,
     )
+
+
+# ── Bibliography notes ─────────────────────────────────────────────
+
+
+def _bibliography_note_read(note, display_name: str) -> BibliographyNoteRead:
+    return BibliographyNoteRead(
+        id=str(note.id),
+        bibliography_reference_id=str(note.bibliography_reference_id),
+        user_id=str(note.user_id),
+        user_display_name=display_name,
+        content=note.content,
+        note_type=note.note_type,
+        visibility=note.visibility.value if hasattr(note.visibility, "value") else str(note.visibility),
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )
+
+
+@bibliography_router.get("/{bibliography_reference_id}/notes", response_model=BibliographyNoteListRead)
+def list_bibliography_notes(
+    bibliography_reference_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyNoteListRead:
+    svc = ResearchService(db)
+    rows = svc.list_bibliography_notes(bibliography_reference_id, current_user.id)
+    return BibliographyNoteListRead(
+        items=[_bibliography_note_read(note, display_name) for note, display_name in rows],
+    )
+
+
+@bibliography_router.post("/{bibliography_reference_id}/notes", response_model=BibliographyNoteRead, status_code=status.HTTP_201_CREATED)
+def create_bibliography_note(
+    bibliography_reference_id: uuid.UUID,
+    payload: BibliographyNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyNoteRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.create_bibliography_note(
+            bibliography_reference_id,
+            current_user.id,
+            content=payload.content,
+            note_type=payload.note_type,
+            visibility=payload.visibility,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _bibliography_note_read(item, current_user.display_name)
+
+
+@bibliography_router.put("/notes/{note_id}", response_model=BibliographyNoteRead)
+def update_bibliography_note(
+    note_id: uuid.UUID,
+    payload: BibliographyNoteUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyNoteRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.update_bibliography_note(
+            note_id,
+            current_user.id,
+            content=payload.content,
+            note_type=payload.note_type,
+            visibility=payload.visibility,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _bibliography_note_read(item, current_user.display_name)
+
+
+@bibliography_router.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_bibliography_note(
+    note_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> None:
+    svc = ResearchService(db)
+    try:
+        svc.delete_bibliography_note(note_id, current_user.id)
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 403
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+# ── Bibliography reading status ───────────────────────────────────
+
+
+@bibliography_router.get("/{bibliography_reference_id}/status", response_model=BibliographyReadingStatusRead)
+def get_bibliography_reading_status(
+    bibliography_reference_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyReadingStatusRead:
+    svc = ResearchService(db)
+    return BibliographyReadingStatusRead(
+        reading_status=svc.get_bibliography_reading_status(bibliography_reference_id, current_user.id),
+    )
+
+
+@bibliography_router.put("/{bibliography_reference_id}/status", response_model=BibliographyReadingStatusRead)
+def set_bibliography_reading_status(
+    bibliography_reference_id: uuid.UUID,
+    payload: BibliographyReadingStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyReadingStatusRead:
+    svc = ResearchService(db)
+    try:
+        result = svc.set_bibliography_reading_status(bibliography_reference_id, current_user.id, payload.reading_status)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BibliographyReadingStatusRead(reading_status=result)
 
 
 @router.delete("/{project_id}/research/references/{reference_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1248,6 +1446,7 @@ def _bibliography_read(svc: ResearchService, project_id: uuid.UUID, item: Biblio
         url=item.url,
         abstract=item.abstract,
         bibtex_raw=item.bibtex_raw,
+        tags=svc.bibliography_tags_for_reference(item.id),
         visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         attachment_filename=item.attachment_filename,
@@ -1262,7 +1461,13 @@ def _bibliography_read(svc: ResearchService, project_id: uuid.UUID, item: Biblio
     )
 
 
-def _bibliography_read_global(svc: ResearchService, item: BibliographyReference) -> BibliographyReferenceRead:
+def _bibliography_read_global(
+    svc: ResearchService,
+    item: BibliographyReference,
+    *,
+    note_counts: dict | None = None,
+    reading_statuses: dict | None = None,
+) -> BibliographyReferenceRead:
     return BibliographyReferenceRead(
         id=str(item.id),
         source_project_id=str(item.source_project_id) if item.source_project_id else None,
@@ -1275,11 +1480,14 @@ def _bibliography_read_global(svc: ResearchService, item: BibliographyReference)
         url=item.url,
         abstract=item.abstract,
         bibtex_raw=item.bibtex_raw,
+        tags=svc.bibliography_tags_for_reference(item.id),
         visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         attachment_filename=item.attachment_filename,
         attachment_url=(f"/bibliography/{item.id}/file" if (item.document_key or item.attachment_path) else None),
         linked_project_count=svc.bibliography_link_count(item.id),
+        note_count=note_counts.get(item.id, 0) if note_counts else svc.bibliography_note_count(item.id),
+        reading_status=reading_statuses.get(item.id, "unread") if reading_statuses else "unread",
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

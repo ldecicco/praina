@@ -31,6 +31,14 @@ class CodexTextProvider:
         prompt = _format_messages(messages)
         if not prompt:
             return ""
+        prompt_preview = "\n---\n".join(
+            f"[{m.get('role', 'user')}] {(m.get('content') or '')[:500]}"
+            for m in messages
+        )
+        logger.info(
+            "LLM request  model=%s timeout=%ds messages=%d\n%s",
+            settings.codex_model, timeout, len(messages), prompt_preview,
+        )
         effective_timeout = max(1, min(timeout, settings.codex_timeout_seconds))
         try:
             result = subprocess.run(
@@ -72,7 +80,10 @@ class CodexTextProvider:
             if isinstance(text, str) and text.strip():
                 messages_out.append(text.strip())
         if messages_out:
-            return "\n\n".join(messages_out).strip()
+            output = "\n\n".join(messages_out).strip()
+            logger.info("LLM response model=%s length=%d chars", settings.codex_model, len(output))
+            return output
         if result.returncode != 0:
             logger.warning("Codex exited with code %s: %s", result.returncode, (result.stderr or "").strip())
+        logger.info("LLM response model=%s length=0 chars (empty)", settings.codex_model)
         return ""

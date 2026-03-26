@@ -60,6 +60,7 @@ type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "deli
 const ASSISTANT_PENDING_PROMPT_KEY = "assistant_pending_prompt";
 const ACTIVE_PROJECT_KEY = "active_project_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
+const NAV_GROUPS_KEY = "nav_groups_collapsed";
 const ACCESS_TOKEN_KEY = "auth_access_token";
 const REFRESH_TOKEN_KEY = "auth_refresh_token";
 
@@ -93,6 +94,16 @@ export default function App() {
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
+  );
+  const [collapsedNavGroups, setCollapsedNavGroups] = useState<Record<string, boolean>>(
+    () => {
+      if (typeof window === "undefined") return {};
+      try {
+        return JSON.parse(window.localStorage.getItem(NAV_GROUPS_KEY) || "{}") as Record<string, boolean>;
+      } catch {
+        return {};
+      }
+    }
   );
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
@@ -313,6 +324,16 @@ export default function App() {
     });
   }
 
+  function toggleNavGroup(key: string) {
+    setCollapsedNavGroups((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+  }
+
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -472,11 +493,15 @@ export default function App() {
       ? canAccessTeaching
         ? [
             {
+              key: "teaching",
               label: "Teaching",
+              collapsible: false,
               items: teachingNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || TEACHING_MODE_VIEWS.has(item.id)),
             },
             {
+              key: "library",
               label: "Library",
+              collapsible: false,
               items: sharedNavItems,
             },
           ]
@@ -484,11 +509,33 @@ export default function App() {
       : canAccessResearch
         ? [
             {
-              label: "Research",
-              items: researchNavItems.filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
+              key: "research-project",
+              label: "Project",
+              collapsible: true,
+              items: researchNavItems
+                .filter((item) => ["dashboard", "call", "proposal", "submission", "wizard", "research"].includes(item.id))
+                .filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
             },
             {
+              key: "research-work",
+              label: "Work",
+              collapsible: true,
+              items: researchNavItems
+                .filter((item) => ["delivery", "workbench", "planning", "documents", "todos"].includes(item.id))
+                .filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
+            },
+            {
+              key: "research-collaboration",
+              label: "Collaboration",
+              collapsible: true,
+              items: researchNavItems
+                .filter((item) => ["meetings", "project-chat", "assistant", "matrix", "resources", "search"].includes(item.id))
+                .filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
+            },
+            {
+              key: "library",
               label: "Library",
+              collapsible: false,
               items: sharedNavItems,
             },
           ]
@@ -569,8 +616,21 @@ export default function App() {
         <nav className="app-nav">
           {navSections.map((section) => (
             <div key={section.label} className="app-nav-section">
-              {!sidebarCollapsed ? <div className="app-nav-section-label">{section.label}</div> : null}
-              {section.items.map((item) => {
+              {!sidebarCollapsed ? (
+                section.collapsible ? (
+                  <button
+                    type="button"
+                    className={`app-nav-section-toggle ${collapsedNavGroups[section.key] ? "collapsed" : ""}`}
+                    onClick={() => toggleNavGroup(section.key)}
+                  >
+                    <span>{section.label}</span>
+                    <FontAwesomeIcon icon={faChevronDown} />
+                  </button>
+                ) : (
+                  <div className="app-nav-section-label">{section.label}</div>
+                )
+              ) : null}
+              {(sidebarCollapsed || !section.collapsible || !collapsedNavGroups[section.key]) ? section.items.map((item) => {
                 const active = view === item.id;
                 const disabled = isNavItemDisabled(item.id);
                 return (
@@ -588,7 +648,7 @@ export default function App() {
                     {!sidebarCollapsed ? <span className="app-nav-label">{item.label}</span> : null}
                   </button>
                 );
-              })}
+              }) : null}
             </div>
           ))}
         </nav>
@@ -849,8 +909,8 @@ export default function App() {
           {view === "planning" ? <PlanningTimeline selectedProjectId={selectedProjectId} project={activeProject} onNavigate={() => setView("wizard")} /> : null}
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
-          {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} /> : null}
-          {view === "bibliography" ? <ResearchWorkspace selectedProjectId={selectedProjectId} bibliographyOnly /> : null}
+          {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} isAdmin={isSuperAdmin} /> : null}
+          {view === "bibliography" ? <ResearchWorkspace selectedProjectId={selectedProjectId} bibliographyOnly isAdmin={isSuperAdmin} /> : null}
           {view === "resources" ? (
             <ResourcesWorkspace
               currentUser={currentUser}

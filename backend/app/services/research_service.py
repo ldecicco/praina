@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 from typing import BinaryIO
 
-from sqlalchemy import delete, func, insert, select
+import logging
+
+from sqlalchemy import delete, func, insert, select, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -16,7 +20,10 @@ from app.models.document import DocumentScope
 from app.models.organization import PartnerOrganization, TeamMember
 from app.models.project import Project
 from app.models.research import (
+    BibliographyNote,
     BibliographyReference,
+    BibliographyTag,
+    BibliographyUserStatus,
     BibliographyVisibility,
     CollectionMemberRole,
     OutputStatus,
@@ -28,6 +35,7 @@ from app.models.research import (
     ResearchCollectionMember,
     ResearchNote,
     ResearchReference,
+    bibliography_reference_tags,
     research_collection_deliverables,
     research_collection_meetings,
     research_collection_tasks,
@@ -38,6 +46,20 @@ from app.services.onboarding_service import NotFoundError, ValidationError
 from app.services.document_service import DocumentService
 from app.services.document_ingestion_service import DocumentIngestionService
 from app.schemas.document import DocumentUploadPayload
+
+logger = logging.getLogger(__name__)
+
+
+def _bibliography_embedding_text(item: BibliographyReference) -> str:
+    """Build a text representation of a bibliography reference for embedding."""
+    parts = [item.title]
+    if item.authors:
+        parts.append(", ".join(item.authors))
+    if item.venue:
+        parts.append(item.venue)
+    if item.abstract:
+        parts.append(item.abstract)
+    return "\n".join(parts)
 
 
 class ResearchService:
@@ -87,6 +109,110 @@ class ResearchService:
             return BibliographyVisibility(value)
         except ValueError as exc:
             raise ValidationError("Invalid bibliography visibility.") from exc
+
+    @staticmethod
+    def _normalize_tag_labels(labels: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in labels or []:
+            label = " ".join((raw or "").strip().split())
+            if not label:
+                continue
+            canonical = label.lower()
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            normalized.append(label)
+        return normalized
+
+    @staticmethod
+    def _tag_slug(label: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+        return slug[:64] or "tag"
+
+    def _ensure_bibliography_tags(self, labels: list[str]) -> list[BibliographyTag]:
+        if not labels:
+            return []
+        normalized = self._normalize_tag_labels(labels)
+        lowered = [label.lower() for label in normalized]
+        existing = list(
+            self.db.scalars(select(BibliographyTag).where(func.lower(BibliographyTag.label).in_(lowered))).all()
+        )
+        by_lower = {item.label.lower(): item for item in existing}
+        created: list[BibliographyTag] = []
+        existing_slugs = set(self.db.scalars(select(BibliographyTag.slug)).all())
+        for label in normalized:
+            key = label.lower()
+            if key in by_lower:
+                continue
+            base_slug = self._tag_slug(label)
+            slug = base_slug
+            suffix = 2
+            while slug in existing_slugs:
+                slug = f"{base_slug[: max(1, 64 - len(str(suffix)) - 1)]}-{suffix}"
+                suffix += 1
+            item = BibliographyTag(label=label, slug=slug)
+            self.db.add(item)
+            self.db.flush()
+            by_lower[key] = item
+            existing_slugs.add(slug)
+            created.append(item)
+        return [by_lower[label.lower()] for label in normalized]
+
+    def _set_bibliography_reference_tags(self, reference_id: uuid.UUID, labels: list[str]) -> None:
+        tags = self._ensure_bibliography_tags(labels)
+        self.db.execute(
+            delete(bibliography_reference_tags).where(bibliography_reference_tags.c.reference_id == reference_id)
+        )
+        for tag in tags:
+            self.db.execute(
+                insert(bibliography_reference_tags).values(reference_id=reference_id, tag_id=tag.id)
+            )
+
+    def bibliography_tags_for_reference(self, reference_id: uuid.UUID) -> list[str]:
+        try:
+            rows = self.db.execute(
+                select(BibliographyTag.label)
+                .join(
+                    bibliography_reference_tags,
+                    bibliography_reference_tags.c.tag_id == BibliographyTag.id,
+                )
+                .where(bibliography_reference_tags.c.reference_id == reference_id)
+                .order_by(func.lower(BibliographyTag.label))
+            ).all()
+            return [row[0] for row in rows]
+        except ProgrammingError as exc:
+            if "bibliography_tags" in str(exc) or "bibliography_reference_tags" in str(exc):
+                self.db.rollback()
+                return []
+            raise
+
+    def list_bibliography_tags(
+        self,
+        *,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[list[BibliographyTag], int]:
+        try:
+            stmt = select(BibliographyTag)
+            if search:
+                pattern = f"%{search.strip()}%"
+                stmt = stmt.where(BibliographyTag.label.ilike(pattern))
+            total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+            items = list(
+                self.db.scalars(
+                    stmt.order_by(func.lower(BibliographyTag.label))
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                ).all()
+            )
+            return items, total
+        except ProgrammingError as exc:
+            if "bibliography_tags" in str(exc):
+                self.db.rollback()
+                return [], 0
+            raise
 
     # ── collection counts ──────────────────────────────────────────────
 
@@ -701,6 +827,7 @@ class ResearchService:
         url: str | None = None,
         abstract: str | None = None,
         bibtex_raw: str | None = None,
+        tags: list[str] | None = None,
         visibility: str = "shared",
         created_by_user_id: uuid.UUID | None = None,
     ) -> BibliographyReference:
@@ -718,6 +845,8 @@ class ResearchService:
                 existing.authors = authors
             if bibliography_raw := (bibtex_raw or "").strip():
                 existing.bibtex_raw = bibliography_raw
+            if tags:
+                self._set_bibliography_reference_tags(existing.id, tags)
             self.db.commit()
             self.db.refresh(existing)
             return existing
@@ -734,6 +863,8 @@ class ResearchService:
             created_by_user_id=created_by_user_id,
         )
         self.db.add(item)
+        self.db.flush()
+        self._set_bibliography_reference_tags(item.id, tags or [])
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -750,6 +881,7 @@ class ResearchService:
         url: str | None = None,
         abstract: str | None = None,
         bibtex_raw: str | None = None,
+        tags: list[str] | None = None,
         visibility: str | None = None,
     ) -> BibliographyReference:
         item = self.get_bibliography_reference(bibliography_reference_id)
@@ -769,6 +901,8 @@ class ResearchService:
             item.abstract = abstract.strip() or None
         if bibtex_raw is not None:
             item.bibtex_raw = bibtex_raw.strip() or None
+        if tags is not None:
+            self._set_bibliography_reference_tags(item.id, tags)
         if visibility is not None:
             item.visibility = self._bibliography_visibility(visibility)
         self.db.commit()
@@ -923,6 +1057,220 @@ class ResearchService:
         path = Path(item.attachment_path)
         if path.exists():
             path.unlink(missing_ok=True)
+
+    # ── bibliography embeddings ──────────────────────────────────────
+
+    def _embed_bibliography_reference(self, item: BibliographyReference) -> None:
+        """Generate and store an embedding for a bibliography reference. Fails silently."""
+        from app.services.embedding_service import EmbeddingService
+
+        text = _bibliography_embedding_text(item)
+        if not text.strip():
+            return
+        try:
+            svc = EmbeddingService(self.db)
+            vectors = svc.embed_texts([text])
+            if vectors:
+                item.embedding = vectors[0]
+        except Exception:
+            logger.warning("Failed to embed bibliography reference %s", item.id, exc_info=True)
+
+    def embed_bibliography_backfill(self) -> int:
+        """Backfill embeddings for all bibliography references missing one. Returns count."""
+        from app.services.embedding_service import EmbeddingService
+
+        items = list(self.db.scalars(
+            select(BibliographyReference).where(BibliographyReference.embedding.is_(None))
+        ).all())
+        if not items:
+            return 0
+        svc = EmbeddingService(self.db)
+        count = 0
+        batch_size = max(1, settings.embedding_batch_size)
+        for i in range(0, len(items), batch_size):
+            batch = items[i : i + batch_size]
+            texts = [_bibliography_embedding_text(item) for item in batch]
+            try:
+                vectors = svc.embed_texts(texts)
+                for item, vec in zip(batch, vectors):
+                    item.embedding = vec
+                    count += 1
+            except Exception:
+                logger.warning("Failed to embed bibliography batch at offset %d", i, exc_info=True)
+        self.db.flush()
+        return count
+
+    def search_bibliography_semantic(
+        self,
+        user_id: uuid.UUID,
+        query: str,
+        *,
+        visibility: str | None = None,
+        top_k: int = 20,
+    ) -> list[BibliographyReference]:
+        """Semantic search over bibliography references using cosine similarity."""
+        from app.services.embedding_service import EmbeddingService
+
+        svc = EmbeddingService(self.db)
+        try:
+            vectors = svc.embed_texts([query])
+        except Exception:
+            logger.warning("Failed to embed search query", exc_info=True)
+            return []
+        if not vectors:
+            return []
+        query_embedding = vectors[0]
+
+        cosine_dist = BibliographyReference.embedding.cosine_distance(query_embedding)
+        stmt = (
+            select(BibliographyReference)
+            .where(
+                BibliographyReference.embedding.isnot(None),
+                (BibliographyReference.visibility == BibliographyVisibility.shared)
+                | (
+                    (BibliographyReference.visibility == BibliographyVisibility.private)
+                    & (BibliographyReference.created_by_user_id == user_id)
+                ),
+            )
+            .order_by(cosine_dist)
+            .limit(top_k)
+        )
+        if visibility:
+            stmt = stmt.where(BibliographyReference.visibility == self._bibliography_visibility(visibility))
+        return list(self.db.scalars(stmt).all())
+
+    # ── bibliography notes ──────────────────────────────────────────
+
+    def list_bibliography_notes(
+        self,
+        bibliography_reference_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[tuple[BibliographyNote, str]]:
+        """Return notes visible to the user, with author display_name."""
+        stmt = (
+            select(BibliographyNote, UserAccount.display_name)
+            .join(UserAccount, BibliographyNote.user_id == UserAccount.id)
+            .where(
+                BibliographyNote.bibliography_reference_id == bibliography_reference_id,
+                (BibliographyNote.visibility == BibliographyVisibility.shared)
+                | (BibliographyNote.user_id == user_id),
+            )
+            .order_by(BibliographyNote.created_at.desc())
+        )
+        return list(self.db.execute(stmt).all())
+
+    def create_bibliography_note(
+        self,
+        bibliography_reference_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        content: str,
+        note_type: str = "comment",
+        visibility: str = "shared",
+    ) -> BibliographyNote:
+        item = BibliographyNote(
+            bibliography_reference_id=bibliography_reference_id,
+            user_id=user_id,
+            content=content.strip(),
+            note_type=note_type,
+            visibility=self._bibliography_visibility(visibility),
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def update_bibliography_note(
+        self,
+        note_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        content: str | None = None,
+        note_type: str | None = None,
+        visibility: str | None = None,
+    ) -> BibliographyNote:
+        item = self.db.get(BibliographyNote, note_id)
+        if not item:
+            raise NotFoundError("Note not found.")
+        if item.user_id != user_id:
+            raise ValidationError("You can only edit your own notes.")
+        if content is not None:
+            item.content = content.strip()
+        if note_type is not None:
+            item.note_type = note_type
+        if visibility is not None:
+            item.visibility = self._bibliography_visibility(visibility)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def delete_bibliography_note(self, note_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        item = self.db.get(BibliographyNote, note_id)
+        if not item:
+            raise NotFoundError("Note not found.")
+        if item.user_id != user_id:
+            raise ValidationError("You can only delete your own notes.")
+        self.db.delete(item)
+        self.db.commit()
+
+    def bibliography_note_count(self, bibliography_reference_id: uuid.UUID) -> int:
+        return int(
+            self.db.scalar(
+                select(func.count()).where(BibliographyNote.bibliography_reference_id == bibliography_reference_id)
+            ) or 0
+        )
+
+    def bibliography_note_counts(self, reference_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+        if not reference_ids:
+            return {}
+        rows = self.db.execute(
+            select(BibliographyNote.bibliography_reference_id, func.count())
+            .where(BibliographyNote.bibliography_reference_id.in_(reference_ids))
+            .group_by(BibliographyNote.bibliography_reference_id)
+        ).all()
+        return {row[0]: row[1] for row in rows}
+
+    # ── bibliography reading status ───────────────────────────────────
+
+    def get_bibliography_reading_status(
+        self, bibliography_reference_id: uuid.UUID, user_id: uuid.UUID
+    ) -> str:
+        item = self.db.get(BibliographyUserStatus, (user_id, bibliography_reference_id))
+        return item.reading_status if item else "unread"
+
+    def set_bibliography_reading_status(
+        self, bibliography_reference_id: uuid.UUID, user_id: uuid.UUID, status: str
+    ) -> str:
+        valid = ("unread", "reading", "read", "reviewed")
+        if status not in valid:
+            raise ValidationError(f"Invalid reading status. Must be one of: {', '.join(valid)}")
+        item = self.db.get(BibliographyUserStatus, (user_id, bibliography_reference_id))
+        if item:
+            item.reading_status = status
+        else:
+            item = BibliographyUserStatus(
+                user_id=user_id,
+                bibliography_reference_id=bibliography_reference_id,
+                reading_status=status,
+            )
+            self.db.add(item)
+        self.db.commit()
+        return status
+
+    def get_bibliography_reading_statuses(
+        self, user_id: uuid.UUID, reference_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, str]:
+        """Get reading statuses for multiple references in one query."""
+        if not reference_ids:
+            return {}
+        rows = self.db.execute(
+            select(BibliographyUserStatus.bibliography_reference_id, BibliographyUserStatus.reading_status)
+            .where(
+                BibliographyUserStatus.user_id == user_id,
+                BibliographyUserStatus.bibliography_reference_id.in_(reference_ids),
+            )
+        ).all()
+        return {row[0]: row[1] for row in rows}
 
     # ══════════════════════════════════════════════════════════════════
     # Notes

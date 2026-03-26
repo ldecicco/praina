@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.auth import UserAccount
+from app.models.research import BibliographyReference
 from app.models.course import Course
 from app.schemas.teaching import (
     TeachingArtifactListRead,
@@ -68,7 +69,7 @@ def get_teaching_workspace(
         profile=_profile_read(db, workspace["profile"]),
         students=[_student_read(item) for item in workspace["students"]],
         artifacts=[_artifact_read(item) for item in workspace["artifacts"]],
-        background_materials=[_background_material_read(item) for item in workspace["background_materials"]],
+        background_materials=[_background_material_read(db, item) for item in workspace["background_materials"]],
         progress_reports=[_report_read(svc, item) for item in workspace["progress_reports"]],
         milestones=[_milestone_read(item) for item in workspace["milestones"]],
         blockers=[_blocker_read(item) for item in workspace["blockers"]],
@@ -247,7 +248,7 @@ def list_teaching_background_materials(
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     return TeachingBackgroundMaterialListRead(
-        items=[_background_material_read(item) for item in items], page=page, page_size=page_size, total=total
+        items=[_background_material_read(db, item) for item in items], page=page, page_size=page_size, total=total
     )
 
 
@@ -269,7 +270,7 @@ def create_teaching_background_material(
     except (NotFoundError, ValidationError, ValueError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
-    return _background_material_read(item)
+    return _background_material_read(db, item)
 
 
 @router.patch(
@@ -290,7 +291,7 @@ def update_teaching_background_material(
     except (NotFoundError, ValidationError, ValueError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
-    return _background_material_read(item)
+    return _background_material_read(db, item)
 
 
 @router.delete("/{project_id}/teaching/background-materials/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -614,12 +615,17 @@ def _artifact_read(item) -> TeachingProjectArtifactRead:
     )
 
 
-def _background_material_read(item) -> TeachingProjectBackgroundMaterialRead:
+def _background_material_read(db: Session, item) -> TeachingProjectBackgroundMaterialRead:
+    bibliography = db.get(BibliographyReference, item.bibliography_reference_id) if item.bibliography_reference_id else None
     return TeachingProjectBackgroundMaterialRead(
         id=str(item.id),
         project_id=str(item.project_id),
         material_type=item.material_type,
         title=item.title,
+        bibliography_reference_id=str(item.bibliography_reference_id) if item.bibliography_reference_id else None,
+        bibliography_title=bibliography.title if bibliography else None,
+        bibliography_url=bibliography.url if bibliography else None,
+        bibliography_attachment_filename=bibliography.attachment_filename if bibliography else None,
         document_key=str(item.document_key) if item.document_key else None,
         external_url=item.external_url,
         notes=item.notes,

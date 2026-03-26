@@ -23,6 +23,7 @@ import { ProjectResourcesPanel } from "./ProjectResourcesPanel";
 import { ProposalRichEditor } from "./ProposalRichEditor";
 import type {
   AuthUser,
+  BibliographyReference,
   Course,
   CourseStaffUser,
   DocumentListItem,
@@ -116,11 +117,13 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
 
   const [backgroundMaterialType, setBackgroundMaterialType] = useState("paper");
   const [backgroundMaterialTitle, setBackgroundMaterialTitle] = useState("");
+  const [backgroundMaterialBibliographyId, setBackgroundMaterialBibliographyId] = useState("");
   const [backgroundMaterialDocumentKey, setBackgroundMaterialDocumentKey] = useState("");
   const [backgroundMaterialExternalUrl, setBackgroundMaterialExternalUrl] = useState("");
   const [backgroundMaterialNotes, setBackgroundMaterialNotes] = useState("");
   const [backgroundUploadFile, setBackgroundUploadFile] = useState<File | null>(null);
   const [backgroundUploading, setBackgroundUploading] = useState(false);
+  const [bibliography, setBibliography] = useState<BibliographyReference[]>([]);
 
   const [artifactType, setArtifactType] = useState("report");
   const [artifactLabel, setArtifactLabel] = useState("");
@@ -172,21 +175,27 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     () => new Map(activeDocuments.map((item) => [item.document_key, item])),
     [activeDocuments]
   );
+  const bibliographyMap = useMemo(
+    () => new Map(bibliography.map((item) => [item.id, item])),
+    [bibliography]
+  );
 
   const loadWorkspace = useCallback(async (projectId = selectedProjectId) => {
     if (!projectId) return;
     setLoading(true);
     try {
-      const [workspaceRes, membersRes, docsRes, coursesRes] = await Promise.all([
+      const [workspaceRes, membersRes, docsRes, coursesRes, bibliographyRes] = await Promise.all([
         api.getTeachingWorkspace(projectId),
         api.listMembers(projectId),
         api.listDocuments(projectId),
         api.listCourses(1, 200, "", true),
+        api.listGlobalBibliography({ page: 1, page_size: 200, visibility: "shared" }),
       ]);
       setWorkspace(workspaceRes);
       setMembers(membersRes.items.filter((item) => item.is_active));
       setDocuments(docsRes.items);
       setCourses(coursesRes.items);
+      setBibliography(bibliographyRes.items);
       setCourseId(workspaceRes.profile.course_id || "");
       setAcademicYear(workspaceRes.profile.academic_year || "");
       setTerm(workspaceRes.profile.term || "");
@@ -225,6 +234,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
     setStudentEmail("");
     setBackgroundMaterialType("paper");
     setBackgroundMaterialTitle("");
+    setBackgroundMaterialBibliographyId("");
     setBackgroundMaterialDocumentKey("");
     setBackgroundMaterialExternalUrl("");
     setBackgroundMaterialNotes("");
@@ -281,6 +291,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
       if (!item) return;
       setBackgroundMaterialType(item.material_type);
       setBackgroundMaterialTitle(item.title);
+      setBackgroundMaterialBibliographyId(item.bibliography_reference_id || "");
       setBackgroundMaterialDocumentKey(item.document_key || "");
       setBackgroundMaterialExternalUrl(item.external_url || "");
       setBackgroundMaterialNotes(item.notes || "");
@@ -522,6 +533,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         const payload = {
           material_type: backgroundMaterialType,
           title: backgroundMaterialTitle,
+          bibliography_reference_id: backgroundMaterialBibliographyId || null,
           document_key: backgroundMaterialDocumentKey || null,
           external_url: backgroundMaterialExternalUrl || null,
           notes: backgroundMaterialNotes || null,
@@ -1053,7 +1065,15 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                     <td><strong>{item.title}</strong></td>
                     <td><span className="chip small">{item.material_type}</span></td>
                     <td>
-                      {item.external_url ? (
+                      {item.bibliography_reference_id ? (
+                        item.bibliography_url ? (
+                          <a href={item.bibliography_url} target="_blank" rel="noreferrer" className="teaching-material-link" title={item.bibliography_url}>
+                            <FontAwesomeIcon icon={faArrowUpRightFromSquare} /> open
+                          </a>
+                        ) : (
+                          <span className="chip small"><FontAwesomeIcon icon={faPaperclip} /> {item.bibliography_title || "paper"}</span>
+                        )
+                      ) : item.external_url ? (
                         <a href={item.external_url} target="_blank" rel="noreferrer" className="teaching-material-link" title={item.external_url}>
                           <FontAwesomeIcon icon={faArrowUpRightFromSquare} /> open
                         </a>
@@ -1360,6 +1380,30 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                   Title
                   <input value={backgroundMaterialTitle} onChange={(event) => setBackgroundMaterialTitle(event.target.value)} />
                 </label>
+                {backgroundMaterialType === "paper" ? (
+                  <label className="full-span">
+                    Bibliography
+                    <select
+                      value={backgroundMaterialBibliographyId}
+                      onChange={(event) => {
+                        const nextId = event.target.value;
+                        setBackgroundMaterialBibliographyId(nextId);
+                        const entry = bibliographyMap.get(nextId);
+                        if (entry) {
+                          setBackgroundMaterialTitle(entry.title);
+                          setBackgroundMaterialExternalUrl(entry.url || "");
+                        }
+                      }}
+                    >
+                      <option value="">Select</option>
+                      {bibliography.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.title}{item.year ? ` (${item.year})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <label className="full-span">
                   Document
                   <select value={backgroundMaterialDocumentKey} onChange={(event) => setBackgroundMaterialDocumentKey(event.target.value)}>

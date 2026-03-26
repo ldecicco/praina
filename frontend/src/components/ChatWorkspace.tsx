@@ -11,6 +11,7 @@ import {
   faClockRotateLeft,
   faComments,
   faCopy,
+  faEye,
   faFlask,
   faGraduationCap,
   faMagnifyingGlass,
@@ -20,6 +21,7 @@ import {
   faRobot,
   faTrash,
   faTriangleExclamation,
+  faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
@@ -214,6 +216,9 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
+  const [promptOnly, setPromptOnly] = useState(false);
+  const [promptPreview, setPromptPreview] = useState("");
+  const [promptPreviewOpen, setPromptPreviewOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -459,7 +464,7 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
     const pending = window.sessionStorage.getItem(ASSISTANT_PENDING_PROMPT_KEY);
     if (!pending || sending || generating) return;
     window.sessionStorage.removeItem(ASSISTANT_PENDING_PROMPT_KEY);
-    void handleSendMessage(pending);
+    void handlePromptAction(pending);
   }, [selectedConversationId, selectedProjectId]);
 
   async function loadConversations(projectId: string) {
@@ -634,6 +639,17 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
     }
   }
 
+  async function handlePromptAction(prompt: string) {
+    const normalized = prompt.trim();
+    if (!normalized) return;
+    if (promptOnly) {
+      setPromptPreview(normalized);
+      setPromptPreviewOpen(true);
+      return;
+    }
+    await handleSendMessage(normalized);
+  }
+
   function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -783,14 +799,16 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
                         <div className="chat-markdown">
                           {renderMarkdown(message.content)}
                           {message.content ? (
-                            <button
-                              type="button"
-                              className="chat-copy-btn"
-                              title="Copy"
-                              onClick={() => void handleCopyMessage(message.id, message.content)}
-                            >
-                              <FontAwesomeIcon icon={copiedMessageId === message.id ? faCheck : faCopy} />
-                            </button>
+                            <div className="chat-message-tools">
+                              <button
+                                type="button"
+                                className="chat-copy-btn"
+                                title="Copy"
+                                onClick={() => void handleCopyMessage(message.id, message.content)}
+                              >
+                                <FontAwesomeIcon icon={copiedMessageId === message.id ? faCheck : faCopy} />
+                              </button>
+                            </div>
                           ) : null}
                         </div>
                       ) : (
@@ -808,7 +826,7 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
                         </div>
                       ) : null}
                       {message.role === "assistant" && message.content ? (
-                        <ProposalActions content={message.content} onCommand={(command) => void handleSendMessage(command)} busy={isBusy} />
+                        <ProposalActions content={message.content} onCommand={(command) => void handlePromptAction(command)} busy={isBusy} />
                       ) : null}
                       {message.role === "assistant" && message.cards.length > 0 ? (
                         <div className="chat-card-grid">
@@ -818,7 +836,7 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
                               type="button"
                               className="chat-result-card"
                               disabled={isBusy || !card.action_prompt}
-                              onClick={() => card.action_prompt && void handleSendMessage(card.action_prompt)}
+                              onClick={() => card.action_prompt && void handlePromptAction(card.action_prompt)}
                             >
                               <strong>{card.title}</strong>
                               <span>{card.body}</span>
@@ -879,7 +897,7 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
                       type="button"
                       className="chat-welcome-action"
                       disabled={isBusy}
-                      onClick={() => void handleSendMessage(item.prompt)}
+                      onClick={() => void handlePromptAction(item.prompt)}
                     >
                       <span className="chat-welcome-action-icon">
                         <FontAwesomeIcon icon={item.icon} />
@@ -909,14 +927,24 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
               <button
                 type="button"
                 className="chat-send-btn"
-                onClick={() => void handleSendMessage()}
+                onClick={() => void handlePromptAction(draft)}
                 disabled={!draft.trim() || isBusy}
-                title="Send message (Enter)"
+                title={promptOnly ? "Show prompt" : "Send message (Enter)"}
               >
-                <FontAwesomeIcon icon={faPaperPlane} />
+                <FontAwesomeIcon icon={promptOnly ? faEye : faPaperPlane} />
               </button>
             </div>
-            <span className="chat-composer-hint">Enter to send · Shift+Enter for new line</span>
+            <div className="chat-composer-meta">
+              <label className={`chat-prompt-toggle ${promptOnly ? "active" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={promptOnly}
+                  onChange={(event) => setPromptOnly(event.target.checked)}
+                />
+                <span>Prompt only</span>
+              </label>
+              <span className="chat-composer-hint">{promptOnly ? "Enter to preview · Shift+Enter for new line" : "Enter to send · Shift+Enter for new line"}</span>
+            </div>
           </div>
         </section>
 
@@ -1001,7 +1029,7 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
                     type="button"
                     className="assistant-action-card"
                     disabled={isBusy}
-                    onClick={() => void handleSendMessage(item.prompt)}
+                    onClick={() => void handlePromptAction(item.prompt)}
                     title={item.description}
                   >
                     <span className="assistant-action-icon"><FontAwesomeIcon icon={item.icon} /></span>
@@ -1029,6 +1057,30 @@ export function ChatWorkspace({ selectedProjectId, project, currentUser, onNavig
           ) : null}
         </aside>
       </div>
+
+      {promptPreviewOpen ? (
+        <div className="modal-overlay" role="presentation" onClick={() => setPromptPreviewOpen(false)}>
+          <div className="modal-card assistant-prompt-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>Prompt</h3>
+              <div className="modal-head-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void handleCopyMessage("prompt-preview", promptPreview)}
+                >
+                  <FontAwesomeIcon icon={copiedMessageId === "prompt-preview" ? faCheck : faCopy} />
+                  <span>{copiedMessageId === "prompt-preview" ? "Copied" : "Copy"}</span>
+                </button>
+                <button type="button" className="ghost icon-only" onClick={() => setPromptPreviewOpen(false)} aria-label="Close">
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            </div>
+            <div className="assistant-prompt-preview">{promptPreview}</div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

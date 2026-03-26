@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.course import CourseMaterial
 from app.models.document import ProjectDocument
+from app.models.research import BibliographyReference
 from app.models.teaching import (
     TeachingChunk,
     TeachingProgressReport,
@@ -105,10 +106,23 @@ class TeachingAIService:
         ).all()
         chunks: list[TeachingChunk] = []
         for item in items:
+            bibliography = self.db.get(BibliographyReference, item.bibliography_reference_id) if item.bibliography_reference_id else None
             text_parts = [
                 f"Background Material: {item.title}",
                 f"Type: {item.material_type}",
             ]
+            if bibliography:
+                text_parts.append(f"Bibliography Title: {bibliography.title}")
+                if bibliography.authors:
+                    text_parts.append(f"Authors: {', '.join(str(author) for author in bibliography.authors)}")
+                if bibliography.year:
+                    text_parts.append(f"Year: {bibliography.year}")
+                if bibliography.venue:
+                    text_parts.append(f"Venue: {bibliography.venue}")
+                if bibliography.doi:
+                    text_parts.append(f"DOI: {bibliography.doi}")
+                if bibliography.url:
+                    text_parts.append(f"Bibliography URL: {bibliography.url}")
             if item.external_url:
                 text_parts.append(f"URL: {item.external_url}")
             if item.notes:

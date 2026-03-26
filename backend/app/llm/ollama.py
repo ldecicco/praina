@@ -18,7 +18,17 @@ class OllamaTextProvider:
         temperature: float = 0.7,
         timeout: int = 60,
     ) -> str:
-        return self._generate(messages, temperature=temperature, timeout=timeout, allow_compaction=True)
+        prompt_preview = "\n---\n".join(
+            f"[{m.get('role', 'user')}] {(m.get('content') or '')[:500]}"
+            for m in messages
+        )
+        logger.info(
+            "LLM request  model=%s temperature=%.1f timeout=%ds messages=%d\n%s",
+            settings.ollama_model, temperature, timeout, len(messages), prompt_preview,
+        )
+        result = self._generate(messages, temperature=temperature, timeout=timeout, allow_compaction=True)
+        logger.info("LLM response model=%s length=%d chars", settings.ollama_model, len(result))
+        return result
 
     def _generate(
         self,

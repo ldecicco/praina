@@ -54,7 +54,9 @@ import type {
   DashboardHealthSnapshot,
   DashboardScopeOptions,
   SearchResponse,
+  BibliographyNote,
   BibliographyReference,
+  BibliographyTag,
   ResearchCollection,
   ResearchCollectionDetail,
   ResearchCollectionMember,
@@ -695,6 +697,7 @@ export const api = {
   createTeachingBackgroundMaterial(projectId: string, payload: {
     material_type?: string;
     title: string;
+    bibliography_reference_id?: string | null;
     document_key?: string | null;
     external_url?: string | null;
     notes?: string | null;
@@ -705,6 +708,7 @@ export const api = {
   updateTeachingBackgroundMaterial(projectId: string, materialId: string, payload: {
     material_type?: string;
     title?: string;
+    bibliography_reference_id?: string | null;
     document_key?: string | null;
     external_url?: string | null;
     notes?: string | null;
@@ -2205,6 +2209,33 @@ export const api = {
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/bibliography?${q}`);
   },
+  searchGlobalBibliographySemantic(
+    query: string,
+    opts?: { visibility?: string; top_k?: number }
+  ): Promise<{ items: BibliographyReference[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams({ q: query });
+    if (opts?.visibility) q.set("visibility", opts.visibility);
+    if (opts?.top_k) q.set("top_k", String(opts.top_k));
+    return request(`/bibliography/search?${q}`);
+  },
+  backfillBibliographyEmbeddings(): Promise<{ embedded: number }> {
+    return request("/bibliography/embed-backfill", { method: "POST" });
+  },
+  listBibliographyNotes(bibliographyReferenceId: string): Promise<{ items: BibliographyNote[] }> {
+    return request(`/bibliography/${bibliographyReferenceId}/notes`);
+  },
+  createBibliographyNote(bibliographyReferenceId: string, data: { content: string; note_type?: string; visibility?: string }): Promise<BibliographyNote> {
+    return request(`/bibliography/${bibliographyReferenceId}/notes`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateBibliographyNote(noteId: string, data: { content?: string; note_type?: string; visibility?: string }): Promise<BibliographyNote> {
+    return request(`/bibliography/notes/${noteId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteBibliographyNote(noteId: string): Promise<void> {
+    return request(`/bibliography/notes/${noteId}`, { method: "DELETE" });
+  },
+  setBibliographyReadingStatus(bibliographyReferenceId: string, readingStatus: string): Promise<{ reading_status: string }> {
+    return request(`/bibliography/${bibliographyReferenceId}/status`, { method: "PUT", body: JSON.stringify({ reading_status: readingStatus }) });
+  },
   createGlobalBibliography(data: Record<string, unknown>): Promise<BibliographyReference> {
     return request("/bibliography", { method: "POST", body: JSON.stringify(data) });
   },
@@ -2227,6 +2258,15 @@ export const api = {
   },
   getGlobalBibliographyAttachment(bibliographyReferenceId: string): Promise<Blob> {
     return requestBlob(`/bibliography/${bibliographyReferenceId}/file`);
+  },
+  listBibliographyTags(
+    opts?: { q?: string; page?: number; page_size?: number }
+  ): Promise<{ items: BibliographyTag[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.q) q.set("q", opts.q);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/bibliography/tags?${q}`);
   },
 
   listResearchNotes(projectId: string, opts?: { collection_id?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {

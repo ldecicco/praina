@@ -95,6 +95,13 @@ research_note_references = Table(
     Column("reference_id", UUID(as_uuid=True), ForeignKey("research_references.id", ondelete="CASCADE"), primary_key=True),
 )
 
+bibliography_reference_tags = Table(
+    "bibliography_reference_tags",
+    Base.metadata,
+    Column("reference_id", UUID(as_uuid=True), ForeignKey("bibliography_references.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", UUID(as_uuid=True), ForeignKey("bibliography_tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 # ── Models ─────────────────────────────────────────────────────────────
 
@@ -192,6 +199,43 @@ class BibliographyReference(Base, IdMixin, TimestampMixin):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
+
+
+class BibliographyTag(Base, IdMixin, TimestampMixin):
+    __tablename__ = "bibliography_tags"
+
+    label: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+
+class BibliographyNote(Base, IdMixin, TimestampMixin):
+    __tablename__ = "bibliography_notes"
+
+    bibliography_reference_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("bibliography_references.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+    content: Mapped[str] = mapped_column(Text)
+    note_type: Mapped[str] = mapped_column(String(32), default="comment", index=True)
+    visibility: Mapped[BibliographyVisibility] = mapped_column(
+        Enum(BibliographyVisibility, name="bibliography_visibility", create_type=False),
+        default=BibliographyVisibility.shared,
+    )
+
+
+class BibliographyUserStatus(Base, TimestampMixin):
+    __tablename__ = "bibliography_user_status"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    bibliography_reference_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("bibliography_references.id", ondelete="CASCADE"), primary_key=True
+    )
+    reading_status: Mapped[str] = mapped_column(String(32), default="unread")
 
 
 class ResearchNote(Base, IdMixin, TimestampMixin):

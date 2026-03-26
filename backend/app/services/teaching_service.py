@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.auth import UserAccount
 from app.models.course import Course
 from app.models.project import Project, ProjectKind
+from app.models.research import BibliographyReference
 from app.models.teaching import (
     TeachingArtifactStatus,
     TeachingArtifactType,
@@ -227,10 +228,14 @@ class TeachingService:
 
     def create_background_material(self, project_id: uuid.UUID, **fields) -> TeachingProjectBackgroundMaterial:
         self._get_project(project_id)
+        bibliography_reference_id = uuid.UUID(fields["bibliography_reference_id"]) if fields.get("bibliography_reference_id") else None
+        if bibliography_reference_id and not self.db.get(BibliographyReference, bibliography_reference_id):
+            raise NotFoundError("Bibliography reference not found.")
         item = TeachingProjectBackgroundMaterial(
             project_id=project_id,
             material_type=(fields.get("material_type") or "other").strip(),
             title=fields["title"].strip(),
+            bibliography_reference_id=bibliography_reference_id,
             document_key=uuid.UUID(fields["document_key"]) if fields.get("document_key") else None,
             external_url=(fields.get("external_url") or "").strip() or None,
             notes=fields.get("notes"),
@@ -249,6 +254,11 @@ class TeachingService:
             item.material_type = fields["material_type"].strip()
         if "title" in fields and fields["title"] is not None:
             item.title = fields["title"].strip()
+        if "bibliography_reference_id" in fields:
+            bibliography_reference_id = uuid.UUID(fields["bibliography_reference_id"]) if fields["bibliography_reference_id"] else None
+            if bibliography_reference_id and not self.db.get(BibliographyReference, bibliography_reference_id):
+                raise NotFoundError("Bibliography reference not found.")
+            item.bibliography_reference_id = bibliography_reference_id
         if "document_key" in fields:
             item.document_key = uuid.UUID(fields["document_key"]) if fields["document_key"] else None
         if "external_url" in fields:

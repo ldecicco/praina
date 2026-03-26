@@ -98,6 +98,10 @@ export type TeachingProjectBackgroundMaterial = {
   project_id: string;
   material_type: string;
   title: string;
+  bibliography_reference_id: string | null;
+  bibliography_title: string | null;
+  bibliography_url: string | null;
+  bibliography_attachment_filename: string | null;
   document_key: string | null;
   external_url: string | null;
   notes: string | null;
@@ -1197,11 +1201,34 @@ export type BibliographyReference = {
   url: string | null;
   abstract: string | null;
   bibtex_raw: string | null;
+  tags: string[];
   visibility: string;
   created_by_user_id: string | null;
   attachment_filename: string | null;
   attachment_url: string | null;
   linked_project_count: number;
+  note_count: number;
+  reading_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BibliographyNote = {
+  id: string;
+  bibliography_reference_id: string;
+  user_id: string;
+  user_display_name: string;
+  content: string;
+  note_type: string;
+  visibility: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BibliographyTag = {
+  id: string;
+  label: string;
+  slug: string;
   created_at: string;
   updated_at: string;
 };

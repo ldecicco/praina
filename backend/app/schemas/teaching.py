@@ -101,6 +101,7 @@ class TeachingProjectArtifactRead(BaseModel):
 class TeachingProjectBackgroundMaterialCreate(BaseModel):
     material_type: str = "other"
     title: str = Field(min_length=2, max_length=255)
+    bibliography_reference_id: str | None = None
     document_key: str | None = None
     external_url: str | None = Field(default=None, max_length=512)
     notes: str | None = None
@@ -109,6 +110,7 @@ class TeachingProjectBackgroundMaterialCreate(BaseModel):
 class TeachingProjectBackgroundMaterialUpdate(BaseModel):
     material_type: str | None = None
     title: str | None = Field(default=None, min_length=2, max_length=255)
+    bibliography_reference_id: str | None = None
     document_key: str | None = None
     external_url: str | None = Field(default=None, max_length=512)
     notes: str | None = None
@@ -119,6 +121,10 @@ class TeachingProjectBackgroundMaterialRead(BaseModel):
     project_id: str
     material_type: str
     title: str
+    bibliography_reference_id: str | None
+    bibliography_title: str | None
+    bibliography_url: str | None
+    bibliography_attachment_filename: str | None
     document_key: str | None
     external_url: str | None
     notes: str | None

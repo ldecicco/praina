@@ -1574,6 +1574,19 @@ button.resources-schedule-block {
   margin-left: auto;
 }
 
+.bibliography-tab-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bibliography-tab-search {
+  flex: 0 1 360px;
+  min-width: 0;
+}
+
 .delivery-risk-level {
   font-size: 11px;
   color: var(--text-secondary);
@@ -8068,6 +8081,20 @@ tr.row-selected {
   min-width: 180px;
   max-width: 360px;
   flex: 1;
+}
+
+@media (max-width: 1080px) {
+  .bibliography-tab-tools {
+    width: 100%;
+    margin-left: 0;
+    order: 10;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .bibliography-tab-search {
+    flex: 1 1 280px;
+  }
 }
 .bib-filter-panel {
   margin-top: 8px;

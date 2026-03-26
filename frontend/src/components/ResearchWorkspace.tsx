@@ -1596,48 +1596,24 @@ export function ResearchWorkspace({
 
   return (
     <>
-      <div className="setup-summary-bar">
-        <div className="setup-summary-stats">
-          {!bibliographyOnly ? (
-            <>
-              <span>{collections.length} collections</span>
-              <span className="setup-summary-sep" />
-            </>
-          ) : null}
-          <span>{bibliography.length} papers</span>
-          {bibliographyOnly ? (
-            <>
-              <span className="setup-summary-sep" />
-              <span>{bibliographyCollections.length} collections</span>
-            </>
-          ) : null}
-          {!bibliographyOnly ? (
-            <>
-              <span className="setup-summary-sep" />
-              <span>{references.length} references</span>
-              <span className="setup-summary-sep" />
-              <span>{readCount} read</span>
-              <span className="setup-summary-sep" />
-              <span>{notes.length} notes</span>
-            </>
-          ) : null}
-        </div>
-        {bibliographyOnly ? (
-          bibTab === "papers" ? (
-            <button type="button" className="meetings-new-btn" onClick={openCreateBibliographyModal}>
-              <FontAwesomeIcon icon={faPlus} /> Add Paper
-            </button>
-          ) : (
-            <button type="button" className="meetings-new-btn" onClick={openCreateBibliographyCollectionModal}>
-              <FontAwesomeIcon icon={faPlus} /> New Collection
-            </button>
-          )
-        ) : (
+      {!bibliographyOnly ? (
+        <div className="setup-summary-bar">
+          <div className="setup-summary-stats">
+            <span>{collections.length} collections</span>
+            <span className="setup-summary-sep" />
+            <span>{bibliography.length} papers</span>
+            <span className="setup-summary-sep" />
+            <span>{references.length} references</span>
+            <span className="setup-summary-sep" />
+            <span>{readCount} read</span>
+            <span className="setup-summary-sep" />
+            <span>{notes.length} notes</span>
+          </div>
           <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
             <FontAwesomeIcon icon={faPlus} /> New Collection
           </button>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="muted-small">{status}</p> : null}
@@ -1919,6 +1895,49 @@ export function ResearchWorkspace({
           <button className={`delivery-tab ${bibTab === "collections" ? "active" : ""}`} onClick={() => setBibTab("collections")}>
             Collections <span className="delivery-tab-count">{bibliographyCollections.length}</span>
           </button>
+          {bibTab === "papers" ? (
+            <div className="bibliography-tab-tools">
+              <div className="meetings-filter-group bib-search-group bibliography-tab-search">
+                <input
+                  className={`meetings-search bib-search-wide${searchingBibliography ? " bib-search-loading" : ""}`}
+                  type="text"
+                  placeholder={semanticSearch ? "Semantic search (Enter)..." : "Search papers..."}
+                  value={bibliographySearch}
+                  onChange={(event) => setBibliographySearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (semanticSearch && event.key === "Enter") {
+                      event.preventDefault();
+                      void runSemanticSearch();
+                    }
+                  }}
+                  disabled={searchingBibliography}
+                />
+                {searchingBibliography ? <span className="bib-search-spinner" /> : null}
+                <button
+                  type="button"
+                  className={`bib-toggle-btn${semanticSearch ? " bib-toggle-btn-active" : ""}`}
+                  onClick={() => setSemanticSearch((v) => !v)}
+                >
+                  Semantic
+                </button>
+              </div>
+              <button
+                type="button"
+                className={`ghost docs-action-btn${bibliographyFiltersOpen ? " active" : ""}`}
+                onClick={() => setBibliographyFiltersOpen((value) => !value)}
+                title="Filters"
+              >
+                <FontAwesomeIcon icon={faFilter} />
+              </button>
+              <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyModal}>
+                <FontAwesomeIcon icon={faPlus} /> Add Paper
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyCollectionModal}>
+              <FontAwesomeIcon icon={faPlus} /> New Collection
+            </button>
+          )}
         </div>
 
         {bibTab === "papers" ? renderBibliographyPapersView() : renderBibliographyCollectionsView()}
@@ -1930,62 +1949,18 @@ export function ResearchWorkspace({
     const totalColSpan = bibliographyOnly ? 5 : 6;
     return (
       <>
-        <div className="meetings-toolbar bib-toolbar">
-          <div className="meetings-filter-group bib-search-group">
-            <input
-              className={`meetings-search bib-search-wide${searchingBibliography ? " bib-search-loading" : ""}`}
-              type="text"
-              placeholder={semanticSearch ? "Semantic search (Enter)..." : "Search papers..."}
-              value={bibliographySearch}
-              onChange={(event) => setBibliographySearch(event.target.value)}
-              onKeyDown={(event) => {
-                if (semanticSearch && event.key === "Enter") {
-                  event.preventDefault();
-                  void runSemanticSearch();
-                }
-              }}
-              disabled={searchingBibliography}
-            />
-            {searchingBibliography ? <span className="bib-search-spinner" /> : null}
-            <button
-              type="button"
-              className={`bib-toggle-btn${semanticSearch ? " bib-toggle-btn-active" : ""}`}
-              onClick={() => setSemanticSearch((v) => !v)}
-            >
-              Semantic
-            </button>
-          </div>
-          <div className="meetings-filter-group">
-            <button
-              type="button"
-              className={`ghost docs-action-btn${bibliographyFiltersOpen ? " active" : ""}`}
-              onClick={() => setBibliographyFiltersOpen((value) => !value)}
-              title="Filters"
-            >
-              <FontAwesomeIcon icon={faFilter} />
-            </button>
-            {selectedBibIds.size > 0 ? (
-              <>
-                <button type="button" className="meetings-new-btn" onClick={() => { setAddToCollectionId(""); setAddToCollectionModalOpen(true); }}>
-                  <FontAwesomeIcon icon={faPlus} /> Add to Collection ({selectedBibIds.size})
-                </button>
-                <button type="button" className="ghost icon-text-button small" onClick={exportSelectedBib}>
-                  <FontAwesomeIcon icon={faFileExport} /> Export .bib
-                </button>
-              </>
-            ) : null}
-            {isAdmin ? (
-              <button
-                type="button"
-                className="ghost icon-text-button small"
-                disabled={saving}
-                onClick={() => void handleBibliographyEmbedBackfill()}
-              >
-                {saving ? "Indexing..." : "Re-index"}
+        {selectedBibIds.size > 0 ? (
+          <div className="meetings-toolbar bib-toolbar">
+            <div className="meetings-filter-group">
+              <button type="button" className="meetings-new-btn" onClick={() => { setAddToCollectionId(""); setAddToCollectionModalOpen(true); }}>
+                <FontAwesomeIcon icon={faPlus} /> Add to Collection ({selectedBibIds.size})
               </button>
-            ) : null}
+              <button type="button" className="ghost icon-text-button small" onClick={exportSelectedBib}>
+                <FontAwesomeIcon icon={faFileExport} /> Export .bib
+              </button>
+            </div>
           </div>
-        </div>
+        ) : null}
 
         {bibliographyFiltersOpen ? (
           <div className="bib-filter-panel">

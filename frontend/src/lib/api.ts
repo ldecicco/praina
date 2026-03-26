@@ -56,6 +56,7 @@ import type {
   SearchResponse,
   BibliographyNote,
   BibliographyReference,
+  BibliographyCollection,
   BibliographyTag,
   ResearchCollection,
   ResearchCollectionDetail,
@@ -2200,11 +2201,12 @@ export const api = {
     return requestBlob(`/projects/${projectId}/research/bibliography/${bibliographyReferenceId}/file`);
   },
   listGlobalBibliography(
-    opts?: { q?: string; visibility?: string; page?: number; page_size?: number }
+    opts?: { q?: string; visibility?: string; bibliography_collection_id?: string; page?: number; page_size?: number }
   ): Promise<{ items: BibliographyReference[]; page: number; page_size: number; total: number }> {
     const q = new URLSearchParams();
     if (opts?.q) q.set("q", opts.q);
     if (opts?.visibility) q.set("visibility", opts.visibility);
+    if (opts?.bibliography_collection_id) q.set("bibliography_collection_id", opts.bibliography_collection_id);
     if (opts?.page) q.set("page", String(opts.page));
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/bibliography?${q}`);
@@ -2258,6 +2260,42 @@ export const api = {
   },
   getGlobalBibliographyAttachment(bibliographyReferenceId: string): Promise<Blob> {
     return requestBlob(`/bibliography/${bibliographyReferenceId}/file`);
+  },
+  listBibliographyCollections(
+    opts?: { visibility?: string; page?: number; page_size?: number }
+  ): Promise<{ items: BibliographyCollection[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.visibility) q.set("visibility", opts.visibility);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/bibliography/collections?${q}`);
+  },
+  createBibliographyCollection(data: { title: string; description?: string | null; visibility?: string }): Promise<BibliographyCollection> {
+    return request("/bibliography/collections", { method: "POST", body: JSON.stringify(data) });
+  },
+  updateBibliographyCollection(collectionId: string, data: { title?: string; description?: string | null; visibility?: string }): Promise<BibliographyCollection> {
+    return request(`/bibliography/collections/${collectionId}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  deleteBibliographyCollection(collectionId: string): Promise<void> {
+    return request(`/bibliography/collections/${collectionId}`, { method: "DELETE" });
+  },
+  addPaperToBibliographyCollection(collectionId: string, bibliographyReferenceId: string): Promise<void> {
+    return request(`/bibliography/collections/${collectionId}/papers`, {
+      method: "POST",
+      body: JSON.stringify({ bibliography_reference_id: bibliographyReferenceId }),
+    });
+  },
+  removePaperFromBibliographyCollection(collectionId: string, bibliographyReferenceId: string): Promise<void> {
+    return request(`/bibliography/collections/${collectionId}/papers/${bibliographyReferenceId}`, { method: "DELETE" });
+  },
+  listBibliographyCollectionPaperIds(collectionId: string): Promise<string[]> {
+    return request(`/bibliography/collections/${collectionId}/paper-ids`);
+  },
+  bulkLinkBibliographyCollectionToResearch(collectionId: string, payload: { project_id: string; collection_id: string; reading_status?: string }): Promise<{ linked: number }> {
+    return request(`/bibliography/collections/${collectionId}/link/research`, { method: "POST", body: JSON.stringify(payload) });
+  },
+  bulkLinkBibliographyCollectionToTeaching(collectionId: string, payload: { project_id: string }): Promise<{ linked: number }> {
+    return request(`/bibliography/collections/${collectionId}/link/teaching`, { method: "POST", body: JSON.stringify(payload) });
   },
   listBibliographyTags(
     opts?: { q?: string; page?: number; page_size?: number }

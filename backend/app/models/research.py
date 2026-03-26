@@ -102,6 +102,13 @@ bibliography_reference_tags = Table(
     Column("tag_id", UUID(as_uuid=True), ForeignKey("bibliography_tags.id", ondelete="CASCADE"), primary_key=True),
 )
 
+bibliography_collection_references = Table(
+    "bibliography_collection_references",
+    Base.metadata,
+    Column("collection_id", UUID(as_uuid=True), ForeignKey("bibliography_collections.id", ondelete="CASCADE"), primary_key=True),
+    Column("reference_id", UUID(as_uuid=True), ForeignKey("bibliography_references.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 # ── Models ─────────────────────────────────────────────────────────────
 
@@ -200,6 +207,21 @@ class BibliographyReference(Base, IdMixin, TimestampMixin):
         ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
+
+
+class BibliographyCollection(Base, IdMixin, TimestampMixin):
+    __tablename__ = "bibliography_collections"
+
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    visibility: Mapped[BibliographyVisibility] = mapped_column(
+        Enum(BibliographyVisibility, name="bibliography_visibility", create_type=False),
+        default=BibliographyVisibility.private,
+        index=True,
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
 
 
 class BibliographyTag(Base, IdMixin, TimestampMixin):

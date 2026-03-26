@@ -9,7 +9,7 @@ from typing import BinaryIO
 
 import logging
 
-from sqlalchemy import delete, func, insert, select, text
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -18,8 +18,9 @@ from app.models.meeting import MeetingRecord
 from app.models.auth import UserAccount
 from app.models.document import DocumentScope
 from app.models.organization import PartnerOrganization, TeamMember
-from app.models.project import Project
+from app.models.project import Project, ProjectKind
 from app.models.research import (
+    BibliographyCollection,
     BibliographyNote,
     BibliographyReference,
     BibliographyTag,
@@ -35,6 +36,7 @@ from app.models.research import (
     ResearchCollectionMember,
     ResearchNote,
     ResearchReference,
+    bibliography_collection_references,
     bibliography_reference_tags,
     research_collection_deliverables,
     research_collection_meetings,
@@ -42,6 +44,7 @@ from app.models.research import (
     research_collection_wps,
     research_note_references,
 )
+from app.models.teaching import TeachingProjectBackgroundMaterial
 from app.services.onboarding_service import NotFoundError, ValidationError
 from app.services.document_service import DocumentService
 from app.services.document_ingestion_service import DocumentIngestionService
@@ -264,6 +267,16 @@ class ResearchService:
                     ResearchReference.bibliography_reference_id == bibliography_reference_id
                 )
             ) or 0
+        )
+
+    def bibliography_collection_reference_count(self, bibliography_collection_id: uuid.UUID) -> int:
+        return int(
+            self.db.scalar(
+                select(func.count()).select_from(bibliography_collection_references).where(
+                    bibliography_collection_references.c.collection_id == bibliography_collection_id
+                )
+            )
+            or 0
         )
 
     # ══════════════════════════════════════════════════════════════════
@@ -784,10 +797,212 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def _bibliography_collection_visibility(self, value: str) -> BibliographyVisibility:
+        return self._bibliography_visibility(value)
+
+    def list_bibliography_collections(
+        self,
+        user_id: uuid.UUID,
+        *,
+        visibility: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[BibliographyCollection], int]:
+        stmt = select(BibliographyCollection).where(
+            (BibliographyCollection.owner_user_id == user_id)
+            | (BibliographyCollection.visibility == BibliographyVisibility.shared)
+        )
+        if visibility:
+            stmt = stmt.where(BibliographyCollection.visibility == self._bibliography_collection_visibility(visibility))
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(BibliographyCollection.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            ).all()
+        )
+        return items, total
+
+    def get_bibliography_collection(self, collection_id: uuid.UUID, actor_user_id: uuid.UUID | None = None) -> BibliographyCollection:
+        item = self.db.get(BibliographyCollection, collection_id)
+        if not item:
+            raise NotFoundError("Bibliography collection not found.")
+        if actor_user_id is not None and item.visibility != BibliographyVisibility.shared and item.owner_user_id != actor_user_id:
+            raise ValidationError("Cannot access this bibliography collection.")
+        return item
+
+    def create_bibliography_collection(
+        self,
+        user_id: uuid.UUID,
+        *,
+        title: str,
+        description: str | None = None,
+        visibility: str = "private",
+    ) -> BibliographyCollection:
+        item = BibliographyCollection(
+            title=title[:255].strip(),
+            description=(description or "").strip() or None,
+            visibility=self._bibliography_collection_visibility(visibility),
+            owner_user_id=user_id,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def update_bibliography_collection(
+        self,
+        collection_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        visibility: str | None = None,
+    ) -> BibliographyCollection:
+        item = self.get_bibliography_collection(collection_id, actor_user_id)
+        if item.owner_user_id != actor_user_id:
+            raise ValidationError("Only the owner can edit this bibliography collection.")
+        if title is not None:
+            item.title = title[:255].strip()
+        if description is not None:
+            item.description = description.strip() or None
+        if visibility is not None:
+            item.visibility = self._bibliography_collection_visibility(visibility)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def delete_bibliography_collection(self, collection_id: uuid.UUID, actor_user_id: uuid.UUID) -> None:
+        item = self.get_bibliography_collection(collection_id, actor_user_id)
+        if item.owner_user_id != actor_user_id:
+            raise ValidationError("Only the owner can delete this bibliography collection.")
+        self.db.delete(item)
+        self.db.commit()
+
+    def add_reference_to_bibliography_collection(
+        self, collection_id: uuid.UUID, bibliography_reference_id: uuid.UUID, actor_user_id: uuid.UUID
+    ) -> None:
+        collection = self.get_bibliography_collection(collection_id, actor_user_id)
+        if collection.owner_user_id != actor_user_id:
+            raise ValidationError("Only the owner can edit this bibliography collection.")
+        self.get_bibliography_reference(bibliography_reference_id)
+        existing = self.db.execute(
+            select(bibliography_collection_references.c.reference_id).where(
+                bibliography_collection_references.c.collection_id == collection_id,
+                bibliography_collection_references.c.reference_id == bibliography_reference_id,
+            )
+        ).first()
+        if not existing:
+            self.db.execute(
+                insert(bibliography_collection_references).values(
+                    collection_id=collection_id,
+                    reference_id=bibliography_reference_id,
+                )
+            )
+        self.db.commit()
+
+    def remove_reference_from_bibliography_collection(
+        self, collection_id: uuid.UUID, bibliography_reference_id: uuid.UUID, actor_user_id: uuid.UUID
+    ) -> None:
+        collection = self.get_bibliography_collection(collection_id, actor_user_id)
+        if collection.owner_user_id != actor_user_id:
+            raise ValidationError("Only the owner can edit this bibliography collection.")
+        self.db.execute(
+            delete(bibliography_collection_references).where(
+                bibliography_collection_references.c.collection_id == collection_id,
+                bibliography_collection_references.c.reference_id == bibliography_reference_id,
+            )
+        )
+        self.db.commit()
+
+    def bibliography_reference_ids_for_collection(
+        self, collection_id: uuid.UUID, actor_user_id: uuid.UUID | None = None
+    ) -> list[uuid.UUID]:
+        self.get_bibliography_collection(collection_id, actor_user_id)
+        rows = self.db.execute(
+            select(bibliography_collection_references.c.reference_id).where(
+                bibliography_collection_references.c.collection_id == collection_id
+            )
+        ).all()
+        return [row[0] for row in rows]
+
+    def bulk_link_bibliography_collection_to_research(
+        self,
+        bibliography_collection_id: uuid.UUID,
+        *,
+        project_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        added_by_member_id: uuid.UUID | None = None,
+        reading_status: str = "unread",
+    ) -> int:
+        project = self._get_project(project_id)
+        if project.project_kind not in {ProjectKind.research, ProjectKind.funded}:
+            raise ValidationError("Target project is not a research project.")
+        self.get_collection(project_id, collection_id)
+        reference_ids = self.bibliography_reference_ids_for_collection(bibliography_collection_id, actor_user_id)
+        created = 0
+        for reference_id in reference_ids:
+            existing = self.db.scalar(
+                select(ResearchReference.id).where(
+                    ResearchReference.project_id == project_id,
+                    ResearchReference.collection_id == collection_id,
+                    ResearchReference.bibliography_reference_id == reference_id,
+                )
+            )
+            if existing:
+                continue
+            self.link_bibliography_reference(
+                project_id,
+                bibliography_reference_id=reference_id,
+                collection_id=collection_id,
+                reading_status=reading_status,
+                added_by_member_id=added_by_member_id,
+            )
+            created += 1
+        return created
+
+    def bulk_link_bibliography_collection_to_teaching(
+        self,
+        bibliography_collection_id: uuid.UUID,
+        *,
+        project_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+    ) -> int:
+        from app.services.teaching_service import TeachingService
+
+        project = self._get_project(project_id)
+        if project.project_kind != ProjectKind.teaching:
+            raise ValidationError("Target project is not a teaching project.")
+        reference_ids = self.bibliography_reference_ids_for_collection(bibliography_collection_id, actor_user_id)
+        teaching_service = TeachingService(self.db)
+        created = 0
+        for reference_id in reference_ids:
+            bibliography = self.get_bibliography_reference(reference_id)
+            existing_background = self.db.scalar(
+                select(TeachingProjectBackgroundMaterial.id).where(
+                    TeachingProjectBackgroundMaterial.project_id == project_id,
+                    TeachingProjectBackgroundMaterial.bibliography_reference_id == reference_id,
+                )
+            )
+            if existing_background:
+                continue
+            teaching_service.create_background_material(
+                project_id,
+                material_type="paper",
+                title=bibliography.title,
+                bibliography_reference_id=str(reference_id),
+                document_key=None,
+                external_url=bibliography.url,
+                notes=None,
+            )
+            created += 1
+        return created
+
     def list_bibliography(
         self,
         user_id: uuid.UUID,
         *,
+        bibliography_collection_id: uuid.UUID | None = None,
         search: str | None = None,
         visibility: str | None = None,
         page: int = 1,
@@ -797,6 +1012,11 @@ class ResearchService:
             (BibliographyReference.visibility == BibliographyVisibility.shared)
             | ((BibliographyReference.visibility == BibliographyVisibility.private) & (BibliographyReference.created_by_user_id == user_id))
         )
+        if bibliography_collection_id:
+            stmt = stmt.join(
+                bibliography_collection_references,
+                bibliography_collection_references.c.reference_id == BibliographyReference.id,
+            ).where(bibliography_collection_references.c.collection_id == bibliography_collection_id)
         if visibility:
             stmt = stmt.where(BibliographyReference.visibility == self._bibliography_visibility(visibility))
         if search:

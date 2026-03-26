@@ -7577,6 +7577,114 @@ tr.row-selected {
   margin-top: 10px;
 }
 
+.bibliography-collection-actions {
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  background: color-mix(in srgb, var(--brand) 7%, var(--bg-elevated));
+}
+
+.bib-cell-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.bib-cell-title strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bib-file-btn {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.bib-file-btn:hover {
+  color: var(--brand);
+}
+
+.bib-cell-year {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.bib-import-select {
+  max-width: 140px;
+}
+
+.bib-collection-name-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-bright);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bib-collection-name-btn:hover strong {
+  color: var(--brand);
+}
+
+.bib-collection-import-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bib-expanded-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bib-abstract-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bib-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.bib-abstract-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.bib-row-in-collection td:first-child {
+  position: relative;
+}
+
+.bib-row-in-collection td:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--success);
+}
+
+.bib-row-in-collection:not(.row-selected) {
+  background: color-mix(in srgb, var(--success) 4%, transparent);
+}
+
+
 .research-inline-meta {
   display: block;
   margin-top: 2px;
@@ -7597,6 +7705,44 @@ tr.row-selected {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.bib-preview-modal {
+  width: min(1180px, calc(100vw - 48px));
+  height: min(92vh, 920px);
+  display: flex;
+  flex-direction: column;
+}
+
+.bib-preview-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px 14px;
+}
+
+.bib-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bib-preview-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg) 92%, black);
+}
+
+@media (max-width: 760px) {
+  .bib-preview-modal {
+    width: min(100vw - 16px, 100%);
+    height: min(94vh, 100%);
+  }
 }
 
 /* Bibliography modal */

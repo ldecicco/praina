@@ -20,6 +20,13 @@ from app.schemas.research import (
     AISummaryRead,
     AISynthesisRead,
     BibliographyBibtexImportRead,
+    BibliographyCollectionBulkResearchLinkPayload,
+    BibliographyCollectionBulkTeachingLinkPayload,
+    BibliographyCollectionCreate,
+    BibliographyCollectionListRead,
+    BibliographyCollectionRead,
+    BibliographyCollectionReferenceUpsert,
+    BibliographyCollectionUpdate,
     BibliographyLinkPayload,
     BibliographyNoteCreate,
     BibliographyNoteListRead,
@@ -497,6 +504,7 @@ def update_reference(
 @router.get("/{project_id}/research/bibliography", response_model=BibliographyReferenceListRead)
 def list_bibliography(
     project_id: uuid.UUID,
+    bibliography_collection_id: str | None = Query(default=None),
     search: str | None = Query(default=None, alias="q"),
     visibility: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -509,6 +517,7 @@ def list_bibliography(
         svc._get_project(project_id)
         items, total = svc.list_bibliography(
             current_user.id,
+            bibliography_collection_id=uuid.UUID(bibliography_collection_id) if bibliography_collection_id else None,
             search=search,
             visibility=visibility,
             page=page,
@@ -732,8 +741,169 @@ def download_bibliography_attachment(
     )
 
 
+@bibliography_router.get("/collections", response_model=BibliographyCollectionListRead)
+def list_bibliography_collections(
+    visibility: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyCollectionListRead:
+    svc = ResearchService(db)
+    items, total = svc.list_bibliography_collections(current_user.id, visibility=visibility, page=page, page_size=page_size)
+    return BibliographyCollectionListRead(
+        items=[_bibliography_collection_read(svc, item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@bibliography_router.post("/collections", response_model=BibliographyCollectionRead, status_code=status.HTTP_201_CREATED)
+def create_bibliography_collection(
+    payload: BibliographyCollectionCreate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyCollectionRead:
+    svc = ResearchService(db)
+    item = svc.create_bibliography_collection(
+        current_user.id,
+        title=payload.title,
+        description=payload.description,
+        visibility=payload.visibility,
+    )
+    return _bibliography_collection_read(svc, item)
+
+
+@bibliography_router.put("/collections/{bibliography_collection_id}", response_model=BibliographyCollectionRead)
+def update_bibliography_collection(
+    bibliography_collection_id: uuid.UUID,
+    payload: BibliographyCollectionUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyCollectionRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.update_bibliography_collection(
+            bibliography_collection_id,
+            current_user.id,
+            title=payload.title,
+            description=payload.description,
+            visibility=payload.visibility,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return _bibliography_collection_read(svc, item)
+
+
+@bibliography_router.delete("/collections/{bibliography_collection_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_bibliography_collection(
+    bibliography_collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> None:
+    svc = ResearchService(db)
+    try:
+        svc.delete_bibliography_collection(bibliography_collection_id, current_user.id)
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+
+
+@bibliography_router.post("/collections/{bibliography_collection_id}/papers", status_code=status.HTTP_204_NO_CONTENT)
+def add_paper_to_bibliography_collection(
+    bibliography_collection_id: uuid.UUID,
+    payload: BibliographyCollectionReferenceUpsert,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> None:
+    svc = ResearchService(db)
+    try:
+        svc.add_reference_to_bibliography_collection(
+            bibliography_collection_id,
+            uuid.UUID(payload.bibliography_reference_id),
+            current_user.id,
+        )
+    except (NotFoundError, ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+
+
+@bibliography_router.delete("/collections/{bibliography_collection_id}/papers/{bibliography_reference_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_paper_from_bibliography_collection(
+    bibliography_collection_id: uuid.UUID,
+    bibliography_reference_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> None:
+    svc = ResearchService(db)
+    try:
+        svc.remove_reference_from_bibliography_collection(
+            bibliography_collection_id,
+            bibliography_reference_id,
+            current_user.id,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+
+
+@bibliography_router.get("/collections/{bibliography_collection_id}/paper-ids", response_model=list[str])
+def list_bibliography_collection_paper_ids(
+    bibliography_collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> list[str]:
+    svc = ResearchService(db)
+    try:
+        ids = svc.bibliography_reference_ids_for_collection(bibliography_collection_id, current_user.id)
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return [str(item) for item in ids]
+
+
+@bibliography_router.post("/collections/{bibliography_collection_id}/link/research")
+def bulk_link_bibliography_collection_to_research(
+    bibliography_collection_id: uuid.UUID,
+    payload: BibliographyCollectionBulkResearchLinkPayload,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> dict[str, int]:
+    svc = ResearchService(db)
+    member_id = _resolve_member_id(db, current_user, uuid.UUID(payload.project_id))
+    try:
+        count = svc.bulk_link_bibliography_collection_to_research(
+            bibliography_collection_id,
+            project_id=uuid.UUID(payload.project_id),
+            collection_id=uuid.UUID(payload.collection_id),
+            actor_user_id=current_user.id,
+            added_by_member_id=member_id,
+            reading_status=payload.reading_status,
+        )
+    except (NotFoundError, ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return {"linked": count}
+
+
+@bibliography_router.post("/collections/{bibliography_collection_id}/link/teaching")
+def bulk_link_bibliography_collection_to_teaching(
+    bibliography_collection_id: uuid.UUID,
+    payload: BibliographyCollectionBulkTeachingLinkPayload,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> dict[str, int]:
+    svc = ResearchService(db)
+    try:
+        count = svc.bulk_link_bibliography_collection_to_teaching(
+            bibliography_collection_id,
+            project_id=uuid.UUID(payload.project_id),
+            actor_user_id=current_user.id,
+        )
+    except (NotFoundError, ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return {"linked": count}
+
+
 @bibliography_router.get("", response_model=BibliographyReferenceListRead)
 def list_global_bibliography(
+    bibliography_collection_id: str | None = Query(default=None),
     search: str | None = Query(default=None, alias="q"),
     visibility: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -743,7 +913,14 @@ def list_global_bibliography(
 ) -> BibliographyReferenceListRead:
     svc = ResearchService(db)
     try:
-        items, total = svc.list_bibliography(current_user.id, search=search, visibility=visibility, page=page, page_size=page_size)
+        items, total = svc.list_bibliography(
+            current_user.id,
+            bibliography_collection_id=uuid.UUID(bibliography_collection_id) if bibliography_collection_id else None,
+            search=search,
+            visibility=visibility,
+            page=page,
+            page_size=page_size,
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     ref_ids = [item.id for item in items]
@@ -1488,6 +1665,19 @@ def _bibliography_read_global(
         linked_project_count=svc.bibliography_link_count(item.id),
         note_count=note_counts.get(item.id, 0) if note_counts else svc.bibliography_note_count(item.id),
         reading_status=reading_statuses.get(item.id, "unread") if reading_statuses else "unread",
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _bibliography_collection_read(svc: ResearchService, item) -> BibliographyCollectionRead:
+    return BibliographyCollectionRead(
+        id=str(item.id),
+        title=item.title,
+        description=item.description,
+        visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
+        owner_user_id=str(item.owner_user_id),
+        reference_count=svc.bibliography_collection_reference_count(item.id),
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

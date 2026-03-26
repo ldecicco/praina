@@ -1213,6 +1213,17 @@ export type BibliographyReference = {
   updated_at: string;
 };
 
+export type BibliographyCollection = {
+  id: string;
+  title: string;
+  description: string | null;
+  visibility: string;
+  owner_user_id: string;
+  reference_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type BibliographyNote = {
   id: string;
   bibliography_reference_id: string;

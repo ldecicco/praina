@@ -231,6 +231,47 @@ class BibliographyReferenceListRead(PaginatedResponse):
     items: list[BibliographyReferenceRead] = Field(default_factory=list)
 
 
+class BibliographyCollectionCreate(BaseModel):
+    title: str
+    description: str | None = None
+    visibility: str = "private"
+
+
+class BibliographyCollectionUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    visibility: str | None = None
+
+
+class BibliographyCollectionRead(BaseModel):
+    id: str
+    title: str
+    description: str | None = None
+    visibility: str
+    owner_user_id: str
+    reference_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class BibliographyCollectionListRead(PaginatedResponse):
+    items: list[BibliographyCollectionRead] = Field(default_factory=list)
+
+
+class BibliographyCollectionReferenceUpsert(BaseModel):
+    bibliography_reference_id: str
+
+
+class BibliographyCollectionBulkResearchLinkPayload(BaseModel):
+    project_id: str
+    collection_id: str
+    reading_status: str = "unread"
+
+
+class BibliographyCollectionBulkTeachingLinkPayload(BaseModel):
+    project_id: str
+
+
 class BibliographyTagRead(BaseModel):
     id: str
     label: str

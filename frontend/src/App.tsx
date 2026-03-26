@@ -909,8 +909,8 @@ export default function App() {
           {view === "planning" ? <PlanningTimeline selectedProjectId={selectedProjectId} project={activeProject} onNavigate={() => setView("wizard")} /> : null}
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
-          {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} isAdmin={isSuperAdmin} /> : null}
-          {view === "bibliography" ? <ResearchWorkspace selectedProjectId={selectedProjectId} bibliographyOnly isAdmin={isSuperAdmin} /> : null}
+          {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} currentProject={activeProject} isAdmin={isSuperAdmin} /> : null}
+          {view === "bibliography" ? <ResearchWorkspace selectedProjectId={selectedProjectId} currentProject={activeProject} bibliographyOnly isAdmin={isSuperAdmin} /> : null}
           {view === "resources" ? (
             <ResourcesWorkspace
               currentUser={currentUser}

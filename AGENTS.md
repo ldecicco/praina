@@ -3,6 +3,7 @@
 1. Never add subtitles, taglines, descriptive helper text, or marketing-style secondary headings in the UI.
 2. Use only direct labels and actionable text for controls and sections.
 3. Add explanatory subtitle text only if the user explicitly asks for it in that specific request.
+4. Never assume a frontend list endpoint accepts `page_size=200`. Check the backend route limit first. Default to `100` unless the route explicitly allows more.
 
 ## Repo Context
 

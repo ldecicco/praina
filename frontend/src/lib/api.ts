@@ -247,7 +247,7 @@ export const api = {
   },
 
   listProjectMembershipsWithUsers(projectId: string): Promise<Paginated<MembershipWithUser>> {
-    return request(`/auth/projects/${projectId}/memberships?page=1&page_size=200`);
+    return request(`/auth/projects/${projectId}/memberships?page=1&page_size=100`);
   },
 
   listProjects(page = 1, pageSize = 100): Promise<Paginated<Project>> {
@@ -1595,7 +1595,7 @@ export const api = {
   },
 
   listProjectMemberships(projectId: string): Promise<Paginated<ProjectMembership>> {
-    return request(`/projects/${projectId}/memberships?page=1&page_size=200`);
+    return request(`/projects/${projectId}/memberships?page=1&page_size=100`);
   },
 
   upsertProjectMembership(
@@ -1606,7 +1606,7 @@ export const api = {
   },
 
   listProjectRooms(projectId: string): Promise<Paginated<ProjectChatRoom>> {
-    return request(`/projects/${projectId}/rooms?page=1&page_size=200`);
+    return request(`/projects/${projectId}/rooms?page=1&page_size=100`);
   },
 
   createProjectRoom(

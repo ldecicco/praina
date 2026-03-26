@@ -1213,6 +1213,11 @@ export type BibliographyReference = {
   updated_at: string;
 };
 
+export type BibliographyDuplicateMatch = {
+  match_reason: string;
+  reference: BibliographyReference;
+};
+
 export type BibliographyCollection = {
   id: string;
   title: string;

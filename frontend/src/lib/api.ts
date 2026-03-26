@@ -54,6 +54,7 @@ import type {
   DashboardHealthSnapshot,
   DashboardScopeOptions,
   SearchResponse,
+  BibliographyDuplicateMatch,
   BibliographyNote,
   BibliographyReference,
   BibliographyCollection,
@@ -2251,6 +2252,12 @@ export const api = {
     return request("/bibliography/import-bibtex", {
       method: "POST",
       body: JSON.stringify({ bibtex, visibility }),
+    });
+  },
+  checkGlobalBibliographyDuplicates(data: { title: string; doi?: string | null }): Promise<{ matches: BibliographyDuplicateMatch[] }> {
+    return request("/bibliography/check-duplicates", {
+      method: "POST",
+      body: JSON.stringify(data),
     });
   },
   uploadGlobalBibliographyAttachment(bibliographyReferenceId: string, sourceProjectId: string, file: File): Promise<BibliographyReference> {

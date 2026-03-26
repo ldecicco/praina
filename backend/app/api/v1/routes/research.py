@@ -20,6 +20,9 @@ from app.schemas.research import (
     AISummaryRead,
     AISynthesisRead,
     BibliographyBibtexImportRead,
+    BibliographyDuplicateCheckPayload,
+    BibliographyDuplicateCheckRead,
+    BibliographyDuplicateMatchRead,
     BibliographyCollectionBulkResearchLinkPayload,
     BibliographyCollectionBulkTeachingLinkPayload,
     BibliographyCollectionCreate,
@@ -68,7 +71,7 @@ from app.schemas.research import (
     WbsLinksRead,
 )
 from app.services.onboarding_service import NotFoundError, ValidationError
-from app.services.research_service import ResearchService
+from app.services.research_service import DuplicateBibliographyError, ResearchService
 
 
 def require_research_access(current_user: UserAccount = Depends(get_current_user)) -> None:
@@ -556,8 +559,24 @@ def create_bibliography_reference(
             tags=payload.tags,
             visibility=payload.visibility,
             created_by_user_id=current_user.id,
+            allow_duplicate=payload.allow_duplicate,
+            reuse_existing_id=uuid.UUID(payload.reuse_existing_id) if payload.reuse_existing_id else None,
         )
-    except (NotFoundError, ValidationError) as exc:
+    except (NotFoundError, ValidationError, DuplicateBibliographyError) as exc:
+        if isinstance(exc, DuplicateBibliographyError):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": str(exc),
+                    "matches": [
+                        {
+                            "match_reason": reason,
+                            "reference": _bibliography_read_global(svc, item),
+                        }
+                        for reason, item in exc.matches
+                    ],
+                },
+            ) from exc
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     return _bibliography_read(svc, project_id, item)
@@ -641,6 +660,9 @@ def import_bibliography_bibtex(
                 created_by_user_id=current_user.id,
             )
             created.append(_bibliography_read(svc, project_id, item))
+        except DuplicateBibliographyError as exc:
+            duplicate_titles = ", ".join(item.title for _, item in exc.matches[:2])
+            errors.append(f"{entry.get('cite_key', '?')}: duplicate ({duplicate_titles})")
         except Exception as exc:
             errors.append(f"{entry.get('cite_key', '?')}: {exc}")
     return BibliographyBibtexImportRead(created=created, errors=errors)
@@ -1020,10 +1042,49 @@ def create_global_bibliography_reference(
             tags=payload.tags,
             visibility=payload.visibility,
             created_by_user_id=current_user.id,
+            allow_duplicate=payload.allow_duplicate,
+            reuse_existing_id=uuid.UUID(payload.reuse_existing_id) if payload.reuse_existing_id else None,
         )
+    except DuplicateBibliographyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "matches": [
+                    {
+                        "match_reason": reason,
+                        "reference": _bibliography_read_global(svc, item),
+                    }
+                    for reason, item in exc.matches
+                ],
+            },
+        ) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _bibliography_read_global(svc, item)
+
+
+@bibliography_router.post("/check-duplicates", response_model=BibliographyDuplicateCheckRead)
+def check_global_bibliography_duplicates(
+    payload: BibliographyDuplicateCheckPayload,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyDuplicateCheckRead:
+    svc = ResearchService(db)
+    matches = svc.find_bibliography_duplicates(
+        created_by_user_id=current_user.id,
+        doi=payload.doi,
+        title=payload.title,
+    )
+    return BibliographyDuplicateCheckRead(
+        matches=[
+            BibliographyDuplicateMatchRead(
+                match_reason=reason,
+                reference=_bibliography_read_global(svc, item),
+            )
+            for reason, item in matches
+        ]
+    )
 
 
 @bibliography_router.put("/{bibliography_reference_id}", response_model=BibliographyReferenceRead)
@@ -1095,6 +1156,9 @@ def import_global_bibliography_bibtex(
                 created_by_user_id=current_user.id,
             )
             created.append(_bibliography_read_global(svc, item))
+        except DuplicateBibliographyError as exc:
+            duplicate_titles = ", ".join(item.title for _, item in exc.matches[:2])
+            errors.append(f"{entry.get('cite_key', '?')}: duplicate ({duplicate_titles})")
         except Exception as exc:
             errors.append(f"{entry.get('cite_key', '?')}: {exc}")
     return BibliographyBibtexImportRead(created=created, errors=errors)

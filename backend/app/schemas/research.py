@@ -188,6 +188,8 @@ class BibliographyReferenceCreate(BaseModel):
     bibtex_raw: str | None = None
     tags: list[str] = Field(default_factory=list)
     visibility: str = "shared"
+    allow_duplicate: bool = False
+    reuse_existing_id: str | None = None
 
 
 class BibliographyReferenceUpdate(BaseModel):
@@ -229,6 +231,20 @@ class BibliographyReferenceRead(BaseModel):
 
 class BibliographyReferenceListRead(PaginatedResponse):
     items: list[BibliographyReferenceRead] = Field(default_factory=list)
+
+
+class BibliographyDuplicateCheckPayload(BaseModel):
+    title: str
+    doi: str | None = None
+
+
+class BibliographyDuplicateMatchRead(BaseModel):
+    match_reason: str
+    reference: BibliographyReferenceRead
+
+
+class BibliographyDuplicateCheckRead(BaseModel):
+    matches: list[BibliographyDuplicateMatchRead] = Field(default_factory=list)
 
 
 class BibliographyCollectionCreate(BaseModel):

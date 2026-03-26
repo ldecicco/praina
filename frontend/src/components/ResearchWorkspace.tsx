@@ -9,6 +9,7 @@ import {
   faComment,
   faFileExport,
   faFileImport,
+  faFilter,
   faFlask,
   faLink,
   faMagicWandSparkles,
@@ -23,6 +24,7 @@ import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import type {
   BibliographyCollection,
+  BibliographyDuplicateMatch,
   BibliographyNote,
   BibliographyReference,
   BibliographyTag,
@@ -172,6 +174,7 @@ export function ResearchWorkspace({
   const [noteModalMode, setNoteModalMode] = useState<NoteModalMode>("create");
   const [bibliographyModalOpen, setBibliographyModalOpen] = useState(false);
   const [bibliographyCollectionModalOpen, setBibliographyCollectionModalOpen] = useState(false);
+  const [bibliographyDuplicateModalOpen, setBibliographyDuplicateModalOpen] = useState(false);
   const [bibliographyPickerOpen, setBibliographyPickerOpen] = useState(false);
   const [bibliographyModalMode, setBibliographyModalMode] = useState<BibliographyModalMode>("create");
   const [bibliographyCollectionModalMode, setBibliographyCollectionModalMode] = useState<"create" | "edit">("create");
@@ -236,6 +239,7 @@ export function ResearchWorkspace({
   const [bibliographyVisibilityFilter, setBibliographyVisibilityFilter] = useState("");
   const [bibliographyTagFilter, setBibliographyTagFilter] = useState("");
   const [bibliographyStatusFilter, setBibliographyStatusFilter] = useState("");
+  const [bibliographyFiltersOpen, setBibliographyFiltersOpen] = useState(false);
   const [selectedBibIds, setSelectedBibIds] = useState<Set<string>>(new Set());
   const [semanticSearch, setSemanticSearch] = useState(false);
   const [searchingBibliography, setSearchingBibliography] = useState(false);
@@ -266,6 +270,7 @@ export function ResearchWorkspace({
   const [bibliographyBibtexInput, setBibliographyBibtexInput] = useState("");
   const [bibliographyBibtexResult, setBibliographyBibtexResult] = useState<{ created: number; errors: string[] } | null>(null);
   const [bibliographyAttachmentFile, setBibliographyAttachmentFile] = useState<File | null>(null);
+  const [bibliographyDuplicateMatches, setBibliographyDuplicateMatches] = useState<BibliographyDuplicateMatch[]>([]);
   const [bibliographyPreview, setBibliographyPreview] = useState<{ title: string; filename: string; url: string } | null>(null);
   const [openingBibliographyAttachmentId, setOpeningBibliographyAttachmentId] = useState<string | null>(null);
 
@@ -576,6 +581,8 @@ export function ResearchWorkspace({
     setBibliographyBibtexInput("");
     setBibliographyBibtexResult(null);
     setBibliographyAttachmentFile(null);
+    setBibliographyDuplicateMatches([]);
+    setBibliographyDuplicateModalOpen(false);
     setEditingBibliographyId(null);
   }
 
@@ -1040,30 +1047,68 @@ export function ResearchWorkspace({
     setBibliographyTags((current) => current.filter((item) => item.toLowerCase() !== label.toLowerCase()));
   }
 
-  async function handleSaveBibliography() {
+  async function persistBibliography(options?: { allowDuplicate?: boolean; reuseExistingId?: string | null }) {
     if (!selectedProjectId || !bibliographyTitle.trim()) return;
     setSaving(true);
     setError("");
     setStatus("");
     try {
-      const payload = buildBibliographyPayload({ bibtex_raw: bibliographyBibtexInput.trim() || undefined });
+      const payload = buildBibliographyPayload({
+        bibtex_raw: bibliographyBibtexInput.trim() || undefined,
+        allow_duplicate: options?.allowDuplicate || undefined,
+        reuse_existing_id: options?.reuseExistingId || undefined,
+      });
       const item =
         bibliographyModalMode === "create"
           ? await api.createGlobalBibliography(payload)
           : await api.updateGlobalBibliography(editingBibliographyId!, payload);
       if (bibliographyAttachmentFile) {
         if (!selectedProjectId) throw new Error("Select a project before attaching a PDF.");
-        await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
+        if (!item.attachment_url || options?.allowDuplicate) {
+          await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
+        }
       }
       await Promise.all([loadBibliography(), loadBibliographyTags()]);
       setBibliographyModalOpen(false);
+      setBibliographyDuplicateModalOpen(false);
+      setBibliographyDuplicateMatches([]);
       resetBibliographyForm();
-      setStatus(bibliographyModalMode === "create" ? "Paper added." : "Paper updated.");
+      setStatus(
+        bibliographyModalMode === "create"
+          ? options?.reuseExistingId
+            ? "Existing paper reused."
+            : "Paper added."
+          : "Paper updated."
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save paper");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSaveBibliography() {
+    if (bibliographyModalMode === "create" && bibliographyTitle.trim()) {
+      try {
+        setSaving(true);
+        setError("");
+        const result = await api.checkGlobalBibliographyDuplicates({
+          title: bibliographyTitle.trim(),
+          doi: bibliographyDoi.trim() || null,
+        });
+        if (result.matches.length > 0) {
+          setBibliographyDuplicateMatches(result.matches);
+          setBibliographyDuplicateModalOpen(true);
+          return;
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to check duplicates");
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+    await persistBibliography();
   }
 
   async function handleSaveBibliographyCollection() {
@@ -1729,6 +1774,7 @@ export function ResearchWorkspace({
       {!bibliographyOnly && collectionModalOpen ? renderCollectionModal() : null}
       {!bibliographyOnly && referenceModalOpen ? renderReferenceModal() : null}
       {bibliographyModalOpen ? renderBibliographyModal() : null}
+      {bibliographyDuplicateModalOpen ? renderBibliographyDuplicateModal() : null}
       {bibliographyPreview ? renderBibliographyPreviewModal() : null}
       {bibliographyCollectionModalOpen ? renderBibliographyCollectionModal() : null}
       {addToCollectionModalOpen ? renderAddToCollectionModal() : null}
@@ -1910,36 +1956,14 @@ export function ResearchWorkspace({
             </button>
           </div>
           <div className="meetings-filter-group">
-            {bibliographyCollections.length > 0 ? (
-              <select value={selectedBibliographyCollectionId ?? ""} onChange={(event) => setSelectedBibliographyCollectionId(event.target.value || null)}>
-                <option value="">All collections</option>
-                {bibliographyCollections.map((c) => (
-                  <option key={c.id} value={c.id}>{c.title}</option>
-                ))}
-              </select>
-            ) : null}
-            {bibliographyTagsInUse.length > 0 ? (
-              <select value={bibliographyTagFilter} onChange={(event) => setBibliographyTagFilter(event.target.value)}>
-                <option value="">All tags</option>
-                {bibliographyTagsInUse.map((tag) => (
-                  <option key={tag} value={tag}>{tag}</option>
-                ))}
-              </select>
-            ) : null}
-            <select value={bibliographyStatusFilter} onChange={(event) => setBibliographyStatusFilter(event.target.value)}>
-              <option value="">All status</option>
-              <option value="unread">Unread</option>
-              <option value="reading">Reading</option>
-              <option value="read">Read</option>
-              <option value="reviewed">Reviewed</option>
-            </select>
-            <select value={bibliographyVisibilityFilter} onChange={(event) => setBibliographyVisibilityFilter(event.target.value)}>
-              <option value="">All visibility</option>
-              <option value="shared">Shared</option>
-              <option value="private">Private</option>
-            </select>
-          </div>
-          <div className="meetings-filter-group">
+            <button
+              type="button"
+              className={`ghost docs-action-btn${bibliographyFiltersOpen ? " active" : ""}`}
+              onClick={() => setBibliographyFiltersOpen((value) => !value)}
+              title="Filters"
+            >
+              <FontAwesomeIcon icon={faFilter} />
+            </button>
             {selectedBibIds.size > 0 ? (
               <>
                 <button type="button" className="meetings-new-btn" onClick={() => { setAddToCollectionId(""); setAddToCollectionModalOpen(true); }}>
@@ -1962,6 +1986,53 @@ export function ResearchWorkspace({
             ) : null}
           </div>
         </div>
+
+        {bibliographyFiltersOpen ? (
+          <div className="bib-filter-panel">
+            <div className="meetings-filter-group">
+              {bibliographyCollections.length > 0 ? (
+                <select value={selectedBibliographyCollectionId ?? ""} onChange={(event) => setSelectedBibliographyCollectionId(event.target.value || null)}>
+                  <option value="">All collections</option>
+                  {bibliographyCollections.map((c) => (
+                    <option key={c.id} value={c.id}>{c.title}</option>
+                  ))}
+                </select>
+              ) : null}
+              {bibliographyTagsInUse.length > 0 ? (
+                <select value={bibliographyTagFilter} onChange={(event) => setBibliographyTagFilter(event.target.value)}>
+                  <option value="">All tags</option>
+                  {bibliographyTagsInUse.map((tag) => (
+                    <option key={tag} value={tag}>{tag}</option>
+                  ))}
+                </select>
+              ) : null}
+              <select value={bibliographyStatusFilter} onChange={(event) => setBibliographyStatusFilter(event.target.value)}>
+                <option value="">All status</option>
+                <option value="unread">Unread</option>
+                <option value="reading">Reading</option>
+                <option value="read">Read</option>
+                <option value="reviewed">Reviewed</option>
+              </select>
+              <select value={bibliographyVisibilityFilter} onChange={(event) => setBibliographyVisibilityFilter(event.target.value)}>
+                <option value="">All visibility</option>
+                <option value="shared">Shared</option>
+                <option value="private">Private</option>
+              </select>
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                onClick={() => {
+                  setSelectedBibliographyCollectionId(null);
+                  setBibliographyTagFilter("");
+                  setBibliographyStatusFilter("");
+                  setBibliographyVisibilityFilter("");
+                }}
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {filteredBibliography.length === 0 ? (
           <p className="empty-message">{bibliography.length === 0 ? "No papers yet." : "No papers match filters."}</p>
@@ -2795,6 +2866,60 @@ export function ResearchWorkspace({
               <span className="muted-small">{bibliographyPreview.filename}</span>
             </div>
             <iframe className="bib-preview-frame" src={bibliographyPreview.url} title={bibliographyPreview.title} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderBibliographyDuplicateModal() {
+    return (
+      <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setBibliographyDuplicateModalOpen(false)}>
+        <div className="modal-card settings-modal-card" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-head">
+            <h3>Duplicates</h3>
+            <div className="modal-head-actions">
+              <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void persistBibliography({ allowDuplicate: true })}>
+                {saving ? "Saving..." : "Create Anyway"}
+              </button>
+              <button type="button" className="ghost docs-action-btn" onClick={() => setBibliographyDuplicateModalOpen(false)} title="Close">
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+          </div>
+          <div className="bib-duplicate-list">
+            {bibliographyDuplicateMatches.map((match) => (
+              <div key={`${match.reference.id}-${match.match_reason}`} className="bib-duplicate-card">
+                <div className="bib-duplicate-main">
+                  <div className="research-chip-group">
+                    <span className="chip small">{match.match_reason === "doi" ? "DOI" : "Title"}</span>
+                    <span className="chip small">{match.reference.visibility}</span>
+                  </div>
+                  <strong>{match.reference.title}</strong>
+                  <span className="muted-small">{match.reference.authors.join(", ") || "-"}</span>
+                  {(match.reference.venue || match.reference.year) ? (
+                    <span className="muted-small">{[match.reference.venue, match.reference.year].filter(Boolean).join(" · ")}</span>
+                  ) : null}
+                  <div className="research-chip-group">
+                    <span className="chip small">{match.reference.linked_project_count} linked</span>
+                    {match.reference.attachment_url ? <span className="chip small">PDF</span> : null}
+                    {match.reference.tags.map((tag) => (
+                      <span key={`${match.reference.id}-${tag}`} className="chip small">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="bib-duplicate-actions">
+                  {match.reference.attachment_url ? (
+                    <button type="button" className="ghost icon-text-button small" onClick={() => void handleOpenBibliographyAttachment(match.reference)}>
+                      PDF
+                    </button>
+                  ) : null}
+                  <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void persistBibliography({ reuseExistingId: match.reference.id })}>
+                    Use Existing
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

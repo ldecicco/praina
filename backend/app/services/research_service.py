@@ -53,6 +53,12 @@ from app.schemas.document import DocumentUploadPayload
 logger = logging.getLogger(__name__)
 
 
+class DuplicateBibliographyError(ValidationError):
+    def __init__(self, matches: list[tuple[str, BibliographyReference]]):
+        super().__init__("Duplicate bibliography reference exists.")
+        self.matches = matches
+
+
 def _bibliography_embedding_text(item: BibliographyReference) -> str:
     """Build a text representation of a bibliography reference for embedding."""
     parts = [item.title]
@@ -112,6 +118,10 @@ class ResearchService:
             return BibliographyVisibility(value)
         except ValueError as exc:
             raise ValidationError("Invalid bibliography visibility.") from exc
+
+    @staticmethod
+    def _normalize_bibliography_title(value: str) -> str:
+        return " ".join((value or "").strip().lower().split())
 
     @staticmethod
     def _normalize_tag_labels(labels: list[str] | None) -> list[str]:
@@ -1050,26 +1060,33 @@ class ResearchService:
         tags: list[str] | None = None,
         visibility: str = "shared",
         created_by_user_id: uuid.UUID | None = None,
+        allow_duplicate: bool = False,
+        reuse_existing_id: uuid.UUID | None = None,
     ) -> BibliographyReference:
-        existing = self._find_existing_bibliography_reference(doi=doi, title=title, created_by_user_id=created_by_user_id)
-        if existing:
-            if not existing.abstract and abstract:
-                existing.abstract = abstract.strip()
-            if not existing.url and url:
-                existing.url = url.strip()
-            if not existing.venue and venue:
-                existing.venue = venue.strip()
-            if not existing.year and year:
-                existing.year = year
-            if (not existing.authors) and authors:
-                existing.authors = authors
-            if bibliography_raw := (bibtex_raw or "").strip():
-                existing.bibtex_raw = bibliography_raw
-            if tags:
-                self._set_bibliography_reference_tags(existing.id, tags)
-            self.db.commit()
-            self.db.refresh(existing)
+        duplicates = self.find_bibliography_duplicates(
+            created_by_user_id=created_by_user_id,
+            doi=doi,
+            title=title,
+        )
+        if reuse_existing_id:
+            existing = self.get_bibliography_reference(reuse_existing_id)
+            visible_ids = {item.id for _, item in duplicates}
+            if duplicates and existing.id not in visible_ids:
+                raise ValidationError("Selected bibliography reference is not a valid duplicate candidate.")
+            self._merge_existing_bibliography_reference(
+                existing,
+                authors=authors,
+                year=year,
+                venue=venue,
+                doi=doi,
+                url=url,
+                abstract=abstract,
+                bibtex_raw=bibtex_raw,
+                tags=tags,
+            )
             return existing
+        if duplicates and not allow_duplicate:
+            raise DuplicateBibliographyError(duplicates)
         item = BibliographyReference(
             title=title[:512].strip(),
             authors=authors or [],
@@ -1088,6 +1105,40 @@ class ResearchService:
         self.db.commit()
         self.db.refresh(item)
         return item
+
+    def _merge_existing_bibliography_reference(
+        self,
+        existing: BibliographyReference,
+        *,
+        authors: list[str] | None = None,
+        year: int | None = None,
+        venue: str | None = None,
+        doi: str | None = None,
+        url: str | None = None,
+        abstract: str | None = None,
+        bibtex_raw: str | None = None,
+        tags: list[str] | None = None,
+    ) -> BibliographyReference:
+        if not existing.abstract and abstract:
+            existing.abstract = abstract.strip()
+        if not existing.url and url:
+            existing.url = url.strip()
+        if not existing.venue and venue:
+            existing.venue = venue.strip()
+        if not existing.year and year:
+            existing.year = year
+        if not existing.doi and doi:
+            existing.doi = doi.strip() or None
+        if (not existing.authors) and authors:
+            existing.authors = authors
+        if bibliography_raw := (bibtex_raw or "").strip():
+            existing.bibtex_raw = bibliography_raw
+        if tags:
+            merged_tags = sorted(set(self.bibliography_tags_for_reference(existing.id)) | set(tags), key=str.lower)
+            self._set_bibliography_reference_tags(existing.id, merged_tags)
+        self.db.commit()
+        self.db.refresh(existing)
+        return existing
 
     def update_bibliography_reference(
         self,
@@ -1227,28 +1278,52 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
-    def _find_existing_bibliography_reference(
+    def find_bibliography_duplicates(
         self,
         *,
         doi: str | None,
         title: str,
         created_by_user_id: uuid.UUID | None,
-    ) -> BibliographyReference | None:
-        if doi and doi.strip():
-            existing = self.db.scalar(
-                select(BibliographyReference).where(BibliographyReference.doi == doi.strip())
+    ) -> list[tuple[str, BibliographyReference]]:
+        matches: list[tuple[str, BibliographyReference]] = []
+        seen: set[uuid.UUID] = set()
+
+        visible_filter = (
+            (BibliographyReference.visibility == BibliographyVisibility.shared)
+            | (
+                (BibliographyReference.visibility == BibliographyVisibility.private)
+                & (BibliographyReference.created_by_user_id == created_by_user_id)
             )
-            if existing:
-                return existing
-        normalized_title = title.strip().lower()
-        if not normalized_title:
-            return None
-        rows = self.db.scalars(select(BibliographyReference).where(BibliographyReference.title.ilike(title.strip()))).all()
-        for item in rows:
-            if item.title.strip().lower() == normalized_title:
-                if item.visibility == BibliographyVisibility.shared or item.created_by_user_id == created_by_user_id:
-                    return item
-        return None
+        )
+
+        if doi and doi.strip():
+            doi_matches = self.db.scalars(
+                select(BibliographyReference).where(
+                    visible_filter,
+                    BibliographyReference.doi == doi.strip(),
+                )
+            ).all()
+            for item in doi_matches:
+                if item.id in seen:
+                    continue
+                seen.add(item.id)
+                matches.append(("doi", item))
+
+        normalized_title = self._normalize_bibliography_title(title)
+        if normalized_title:
+            rows = self.db.scalars(
+                select(BibliographyReference).where(
+                    visible_filter,
+                    BibliographyReference.title.ilike(title.strip()),
+                )
+            ).all()
+            for item in rows:
+                if self._normalize_bibliography_title(item.title) != normalized_title or item.id in seen:
+                    continue
+                seen.add(item.id)
+                matches.append(("title", item))
+
+        return matches
 
     @staticmethod
     def _write_file(file_stream: BinaryIO, target_path: Path) -> int:

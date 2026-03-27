@@ -16,8 +16,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("user_accounts", sa.Column("telegram_pending_chat_id", sa.String(length=64), nullable=True))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("user_accounts")}
+    if "telegram_pending_chat_id" not in columns:
+        op.add_column("user_accounts", sa.Column("telegram_pending_chat_id", sa.String(length=64), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("user_accounts", "telegram_pending_chat_id")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("user_accounts")}
+    if "telegram_pending_chat_id" in columns:
+        op.drop_column("user_accounts", "telegram_pending_chat_id")

@@ -29,8 +29,8 @@ class TelegramService:
     def is_configured(self) -> bool:
         return bool((settings.telegram_bot_token or "").strip())
 
-    def send_message(self, chat_id: str, text: str) -> bool:
-        return self.send_message_result(chat_id, text).ok
+    def send_message(self, chat_id: str, text: str, *, parse_mode: str | None = None) -> bool:
+        return self.send_message_result(chat_id, text, parse_mode=parse_mode).ok
 
     def find_chat_by_code(self, code: str) -> TelegramUpdateMatch | None:
         token = (settings.telegram_bot_token or "").strip()
@@ -84,7 +84,7 @@ class TelegramService:
             return TelegramUpdateMatch(chat_id=str(chat_id), username=username, first_name=first_name)
         return None
 
-    def send_message_result(self, chat_id: str, text: str) -> TelegramSendResult:
+    def send_message_result(self, chat_id: str, text: str, *, parse_mode: str | None = None) -> TelegramSendResult:
         token = (settings.telegram_bot_token or "").strip()
         if not token:
             return TelegramSendResult(ok=False, error_message="Telegram bot token is not configured.")
@@ -98,6 +98,7 @@ class TelegramService:
                         "chat_id": chat_id,
                         "text": text,
                         "disable_web_page_preview": True,
+                        **({"parse_mode": parse_mode} if parse_mode else {}),
                     },
                 )
                 if response.is_success:

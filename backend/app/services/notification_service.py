@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import uuid
 
@@ -30,6 +31,7 @@ class NotificationService:
         link_type: str | None = None,
         link_id: uuid.UUID | None = None,
         channel: str = NotificationChannel.in_app.value,
+        forward_telegram: bool = True,
     ) -> Notification:
         notification = Notification(
             user_id=user_id,
@@ -44,7 +46,8 @@ class NotificationService:
         self.db.add(notification)
         self.db.commit()
         self.db.refresh(notification)
-        self._deliver_telegram(notification)
+        if forward_telegram:
+            self._deliver_telegram(notification)
         return notification
 
     def notify_project_members(
@@ -56,6 +59,7 @@ class NotificationService:
         link_type: str | None = None,
         link_id: uuid.UUID | None = None,
         exclude_user_id: uuid.UUID | None = None,
+        forward_telegram: bool = True,
     ) -> list[Notification]:
         member_user_ids = list(
             self.db.scalars(
@@ -83,7 +87,8 @@ class NotificationService:
         self.db.commit()
         for n in notifications:
             self.db.refresh(n)
-            self._deliver_telegram(n)
+            if forward_telegram:
+                self._deliver_telegram(n)
         return notifications
 
     def _deliver_telegram(self, notification: Notification) -> None:
@@ -91,12 +96,30 @@ class NotificationService:
             user = self.db.get(UserAccount, notification.user_id)
             if not user or not user.telegram_chat_id or not user.telegram_notifications_enabled:
                 return
-            text = notification.title.strip()
-            if notification.body.strip():
-                text = f"{text}\n{notification.body.strip()}"
-            TelegramService().send_message(user.telegram_chat_id, text[:4000])
+            text, parse_mode = self._render_telegram_notification(notification)
+            TelegramService().send_message(user.telegram_chat_id, text, parse_mode=parse_mode)
         except Exception:
             logger.warning("Failed to deliver Telegram notification %s", notification.id, exc_info=True)
+
+    def _render_telegram_notification(self, notification: Notification) -> tuple[str, str | None]:
+        title = notification.title.strip()
+        body = notification.body.strip()
+        if notification.link_type in {"project_broadcast", "lab_broadcast"}:
+            segments = [part.strip() for part in body.split("\n\n") if part.strip()]
+            headline = segments[0] if segments else ""
+            remainder = segments[1:] if len(segments) > 1 else []
+            lines = [f"<b>{html.escape(title[:240])}</b>"]
+            if headline:
+                lines.append(f"<b>{html.escape(headline[:280])}</b>")
+            if remainder:
+                rendered_body = "\n\n".join(html.escape(part[:1200]) for part in remainder)
+                lines.append(rendered_body)
+            text = "\n\n".join(lines)
+            return text[:4000], "HTML"
+        text = title
+        if body:
+            text = f"{text}\n{body}"
+        return text[:4000], None
 
     def list_notifications(
         self,

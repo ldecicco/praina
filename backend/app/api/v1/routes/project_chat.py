@@ -20,12 +20,16 @@ from app.schemas.project_chat import (
     ChatRoomCreateRequest,
     ChatRoomListRead,
     ChatRoomRead,
+    ProjectBroadcastCreateRequest,
+    ProjectBroadcastListRead,
+    ProjectBroadcastRead,
     RoomMemberAddRequest,
 )
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 from app.services.project_chat_service import ProjectChatService
+from app.services.project_broadcast_service import ProjectBroadcastService
 from app.services.project_chatops_service import ProjectChatOpsService
 
 router = APIRouter()
@@ -175,6 +179,56 @@ def create_room(
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _room_read(service, room)
+
+
+@router.get("/{project_id}/broadcasts", response_model=ProjectBroadcastListRead)
+def list_project_broadcasts(
+    project_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectBroadcastListRead:
+    service = ProjectBroadcastService(db)
+    try:
+        items, total = service.list_broadcasts(project_id, current_user.id, page, page_size)
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    broadcast_ids = [item.id for item in items]
+    author_ids = [item.author_user_id for item in items]
+    recipient_counts = service.recipient_count_by_broadcast(broadcast_ids)
+    authors = service.author_lookup(author_ids)
+    return ProjectBroadcastListRead(
+        items=[_broadcast_read(item, authors, recipient_counts) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.post("/{project_id}/broadcasts", response_model=ProjectBroadcastRead)
+def create_project_broadcast(
+    project_id: uuid.UUID,
+    payload: ProjectBroadcastCreateRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectBroadcastRead:
+    service = ProjectBroadcastService(db)
+    try:
+        item = service.create_broadcast(
+            project_id,
+            current_user.id,
+            title=payload.title,
+            body=payload.body,
+            severity=payload.severity,
+            deliver_telegram=payload.deliver_telegram,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    recipient_counts = service.recipient_count_by_broadcast([item.id])
+    authors = service.author_lookup([item.author_user_id])
+    return _broadcast_read(item, authors, recipient_counts)
 
 
 @router.post("/{project_id}/rooms/{room_id}/members", response_model=ChatRoomRead)
@@ -534,6 +588,25 @@ def _message_read(
         reactions=reactions,
         edited_at=item.edited_at,
         deleted_at=item.deleted_at,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _broadcast_read(item, authors: dict[uuid.UUID, UserAccount], recipient_counts: dict[uuid.UUID, int]) -> ProjectBroadcastRead:
+    author = authors.get(item.author_user_id)
+    return ProjectBroadcastRead(
+        id=str(item.id),
+        project_id=str(item.project_id) if item.project_id else None,
+        lab_id=str(item.lab_id) if item.lab_id else None,
+        author_user_id=str(item.author_user_id),
+        author_display_name=author.display_name if author else "Unknown",
+        title=item.title,
+        body=item.body,
+        severity=item.severity,
+        deliver_telegram=item.deliver_telegram,
+        recipient_count=int(recipient_counts.get(item.id, 0)),
+        sent_at=item.sent_at,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

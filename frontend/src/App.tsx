@@ -78,10 +78,12 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   inbox: "dashboard",
   research_collection: "research",
   research_reference: "research",
-    research_note: "research",
-    resource_booking: "resources",
-    bibliography_reference: "bibliography",
-  };
+  research_note: "research",
+  resource_booking: "resources",
+  bibliography_reference: "bibliography",
+  project_broadcast: "project-chat",
+  lab_broadcast: "resources",
+};
 
 export default function App() {
   const [platformSection, setPlatformSection] = useState<"research" | "teaching">("research");

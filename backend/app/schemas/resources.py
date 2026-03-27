@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.common import PaginatedResponse
+from app.schemas.project_chat import ProjectBroadcastCreateRequest, ProjectBroadcastListRead, ProjectBroadcastRead
 
 
 class ResourceOwnerRead(BaseModel):

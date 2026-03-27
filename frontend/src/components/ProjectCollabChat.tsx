@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import FocusLock from "react-focus-lock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faFaceSmile, faPaperPlane, faPlus, faReply, faUsersGear } from "@fortawesome/free-solid-svg-icons";
+import { faBullhorn, faFaceSmile, faPaperPlane, faPlus, faReply, faUsersGear } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
 import type {
   AuthUser,
   DocumentListItem,
   MembershipWithUser,
+  ProjectBroadcast,
   ProjectChatMessage,
   ProjectChatRoom,
 } from "../types";
@@ -200,6 +201,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   const [rooms, setRooms] = useState<ProjectChatRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
+  const [broadcasts, setBroadcasts] = useState<ProjectBroadcast[]>([]);
   const [lastMessageAtByRoom, setLastMessageAtByRoom] = useState<Record<string, string>>({});
   const [seenMessageAtByRoom, setSeenMessageAtByRoom] = useState<Record<string, string>>({});
   const [memberships, setMemberships] = useState<MembershipWithUser[]>([]);
@@ -215,7 +217,12 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const [manageRoomOpen, setManageRoomOpen] = useState(false);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
   const [roomMemberUserId, setRoomMemberUserId] = useState("");
+  const [broadcastTitle, setBroadcastTitle] = useState("");
+  const [broadcastBody, setBroadcastBody] = useState("");
+  const [broadcastSeverity, setBroadcastSeverity] = useState("important");
+  const [broadcastTelegram, setBroadcastTelegram] = useState(true);
 
   const [assistOpen, setAssistOpen] = useState(false);
   const [assistTrigger, setAssistTrigger] = useState<AssistTrigger>(null);
@@ -351,6 +358,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
       setSelectedRoomId("");
       setMessages([]);
       setLastMessageAtByRoom({});
+      setBroadcasts([]);
       setSeenMessageAtByRoom({});
       setMemberships([]);
       setDocuments([]);
@@ -365,6 +373,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
     setRooms([]);
     setSelectedRoomId("");
     setMessages([]);
+    setBroadcasts([]);
     setBotStreams({});
     setLastMessageAtByRoom({});
     setMemberships([]);
@@ -432,14 +441,16 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
     try {
       setBusy(true);
       setError("");
-      const [roomsRes, membershipsRes, docsRes] = await Promise.all([
+      const [roomsRes, membershipsRes, docsRes, broadcastsRes] = await Promise.all([
         api.listProjectRooms(projectId),
         api.listProjectMembershipsWithUsers(projectId),
         api.listDocuments(projectId),
+        api.listProjectBroadcasts(projectId, { page: 1, pageSize: 12 }),
       ]);
       setRooms(roomsRes.items);
       setMemberships(membershipsRes.items);
       setDocuments(docsRes.items);
+      setBroadcasts(broadcastsRes.items);
       setRoomMemberUserId("");
       const latestEntries = await Promise.all(
         roomsRes.items.map(async (room) => {
@@ -640,6 +651,30 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
     }
   }
 
+  async function handleSendBroadcast() {
+    if (!selectedProjectId || !broadcastTitle.trim() || !broadcastBody.trim()) return;
+    try {
+      setBusy(true);
+      setError("");
+      const created = await api.createProjectBroadcast(selectedProjectId, {
+        title: broadcastTitle.trim(),
+        body: broadcastBody.trim(),
+        severity: broadcastSeverity,
+        deliver_telegram: broadcastTelegram,
+      });
+      setBroadcasts((prev) => [created, ...prev].slice(0, 12));
+      setBroadcastOpen(false);
+      setBroadcastTitle("");
+      setBroadcastBody("");
+      setBroadcastSeverity("important");
+      setBroadcastTelegram(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send broadcast.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleToggleReaction(messageId: string, emoji: string) {
     if (!selectedProjectId || !selectedRoomId) return;
     try {
@@ -806,6 +841,31 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
               </button>
             </div>
           ) : null}
+
+          <div className="pm-broadcast-panel">
+            <div className="pm-broadcast-head">
+              <h4>Broadcasts</h4>
+              {canManage ? (
+                <button type="button" className="ghost icon-only" onClick={() => setBroadcastOpen(true)} aria-label="Broadcast">
+                  <FontAwesomeIcon icon={faBullhorn} />
+                </button>
+              ) : null}
+            </div>
+            <div className="pm-broadcast-list">
+              {broadcasts.map((item) => (
+                <div key={item.id} className={`pm-broadcast-item ${item.severity}`}>
+                  <div className="pm-broadcast-item-head">
+                    <span className={`pm-broadcast-severity ${item.severity}`}>{item.severity}</span>
+                    <span>{formatTimestamp(item.sent_at)}</span>
+                  </div>
+                  <strong>{item.title}</strong>
+                  <p>{excerpt(item.body, 120)}</p>
+                  <small>{item.author_display_name} · {item.recipient_count} recipients</small>
+                </div>
+              ))}
+              {broadcasts.length === 0 ? <p className="muted-small">No broadcasts.</p> : null}
+            </div>
+          </div>
         </aside>
 
         <section className="card pm-thread">
@@ -1134,6 +1194,63 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
               </table>
             </div>
           </div>
+          </FocusLock>
+        </div>
+      ) : null}
+
+      {broadcastOpen ? (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <FocusLock returnFocus>
+            <div
+              className="modal-card room-modal-card"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setBroadcastOpen(false);
+              }}
+            >
+              <div className="modal-head">
+                <h3>Broadcast</h3>
+                <button type="button" className="ghost" onClick={() => setBroadcastOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <div className="form-grid">
+                <label className="full-span">
+                  Title
+                  <input value={broadcastTitle} onChange={(event) => setBroadcastTitle(event.target.value)} />
+                </label>
+                <label className="full-span">
+                  Message
+                  <textarea value={broadcastBody} onChange={(event) => setBroadcastBody(event.target.value)} />
+                </label>
+                <label>
+                  Severity
+                  <select value={broadcastSeverity} onChange={(event) => setBroadcastSeverity(event.target.value)}>
+                    <option value="info">Info</option>
+                    <option value="important">Important</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={broadcastTelegram}
+                    onChange={(event) => setBroadcastTelegram(event.target.checked)}
+                  />
+                  Telegram
+                </label>
+              </div>
+              <div className="modal-actions profile-modal-actions">
+                <button type="button" className="ghost" onClick={() => setBroadcastOpen(false)}>Cancel</button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy || !broadcastTitle.trim() || !broadcastBody.trim()}
+                  onClick={() => void handleSendBroadcast()}
+                >
+                  {busy ? "Sending..." : "Send"}
+                </button>
+              </div>
+            </div>
           </FocusLock>
         </div>
       ) : null}

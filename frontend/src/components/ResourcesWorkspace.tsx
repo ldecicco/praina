@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRight,
+  faBullhorn,
   faCalendarPlus,
   faClockRotateLeft,
   faPenToSquare,
@@ -12,7 +13,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
-import type { AuthUser, Equipment, EquipmentBooking, EquipmentConflict, EquipmentDowntime, EquipmentMaterial, Lab, LabClosure, Project } from "../types";
+import type { AuthUser, Equipment, EquipmentBooking, EquipmentConflict, EquipmentDowntime, EquipmentMaterial, Lab, LabClosure, Project, ProjectBroadcast } from "../types";
 
 type Props = {
   currentUser: AuthUser;
@@ -20,7 +21,7 @@ type Props = {
 };
 
 type Tab = "labs" | "equipment" | "bookings" | "conflicts";
-type ModalKind = "equipment" | "equipment-material" | "lab" | "booking" | "downtime" | "lab-closure" | null;
+type ModalKind = "equipment" | "equipment-material" | "lab" | "booking" | "downtime" | "lab-closure" | "lab-broadcast" | null;
 const SCHEDULE_START_HOUR = 8;
 const SCHEDULE_END_HOUR = 21;
 
@@ -79,6 +80,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [equipmentMaterials, setEquipmentMaterials] = useState<EquipmentMaterial[]>([]);
   const [labs, setLabs] = useState<Lab[]>([]);
   const [labClosures, setLabClosures] = useState<LabClosure[]>([]);
+  const [labBroadcasts, setLabBroadcasts] = useState<ProjectBroadcast[]>([]);
   const [bookings, setBookings] = useState<EquipmentBooking[]>([]);
   const [conflicts, setConflicts] = useState<EquipmentConflict[]>([]);
   const [downtime, setDowntime] = useState<EquipmentDowntime[]>([]);
@@ -143,6 +145,10 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [closureEndAt, setClosureEndAt] = useState("");
   const [closureReason, setClosureReason] = useState("personnel_unavailable");
   const [closureNotes, setClosureNotes] = useState("");
+  const [broadcastTitle, setBroadcastTitle] = useState("");
+  const [broadcastBody, setBroadcastBody] = useState("");
+  const [broadcastSeverity, setBroadcastSeverity] = useState("important");
+  const [broadcastTelegram, setBroadcastTelegram] = useState(true);
 
   const isSuperAdmin = currentUser.platform_role === "super_admin";
 
@@ -240,6 +246,24 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     () => labClosures.filter((item) => item.lab_id === selectedLabId),
     [labClosures, selectedLabId]
   );
+  useEffect(() => {
+    if (!selectedLabId) {
+      setLabBroadcasts([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await api.listLabBroadcasts(selectedLabId, { page: 1, pageSize: 12 });
+        if (!cancelled) setLabBroadcasts(response.items);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load lab broadcasts.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLabId]);
   const selectedEquipmentBookings = useMemo(
     () => bookings.filter((item) => item.equipment_id === selectedEquipmentId),
     [bookings, selectedEquipmentId]
@@ -358,6 +382,10 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     setClosureEndAt("");
     setClosureReason("personnel_unavailable");
     setClosureNotes("");
+    setBroadcastTitle("");
+    setBroadcastBody("");
+    setBroadcastSeverity("important");
+    setBroadcastTelegram(true);
   }
 
   function openEquipmentModal(item?: Equipment) {
@@ -444,6 +472,11 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
     setClosureLabId(item.id);
   }
 
+  function openLabBroadcastModal() {
+    resetForms();
+    setModal("lab-broadcast");
+  }
+
   async function saveEquipment() {
     if (!equipmentName.trim()) return;
     try {
@@ -516,6 +549,27 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
       await loadWorkspace();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save lab.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveLabBroadcast() {
+    if (!selectedLab || !broadcastTitle.trim() || !broadcastBody.trim()) return;
+    try {
+      setBusy(true);
+      await api.createLabBroadcast(selectedLab.id, {
+        title: broadcastTitle.trim(),
+        body: broadcastBody.trim(),
+        severity: broadcastSeverity,
+        deliver_telegram: broadcastTelegram,
+      });
+      setModal(null);
+      setStatus("Broadcast sent.");
+      const broadcastsRes = await api.listLabBroadcasts(selectedLab.id, { page: 1, pageSize: 12 });
+      setLabBroadcasts(broadcastsRes.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send broadcast.");
     } finally {
       setBusy(false);
     }
@@ -1228,6 +1282,9 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                         <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openLabModal(selectedLab)}>
                           <FontAwesomeIcon icon={faPenToSquare} />
                         </button>
+                        <button type="button" className="ghost icon-text-button small" onClick={openLabBroadcastModal}>
+                          <FontAwesomeIcon icon={faBullhorn} /> Broadcast
+                        </button>
                         <button type="button" className="ghost icon-text-button small" onClick={() => openLabClosureModal(selectedLab)}>
                           Close
                         </button>
@@ -1347,6 +1404,32 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
             </div>
             {selectedLab ? (
               <>
+                <div className="resources-footer-head" style={{ marginTop: 8 }}>
+                  <strong>Broadcasts</strong>
+                  <span className="delivery-tab-count">{labBroadcasts.length}</span>
+                  {canManageSelectedLab ? (
+                    <button type="button" className="ghost icon-text-button small" onClick={openLabBroadcastModal}>
+                      <FontAwesomeIcon icon={faBullhorn} /> Broadcast
+                    </button>
+                  ) : null}
+                </div>
+                <div className="resources-broadcast-list">
+                  {labBroadcasts.map((item) => (
+                    <div key={item.id} className={`resources-broadcast-item ${item.severity}`}>
+                      <div className="resources-broadcast-head">
+                        <span className={`resources-broadcast-severity ${item.severity}`}>{item.severity}</span>
+                        <span>{new Date(item.sent_at).toLocaleString()}</span>
+                      </div>
+                      <strong>{item.title}</strong>
+                      <p>{item.body}</p>
+                      <small>
+                        {item.author_display_name} · {item.recipient_count} recipients{item.deliver_telegram ? " · Telegram" : ""}
+                      </small>
+                    </div>
+                  ))}
+                  {labBroadcasts.length === 0 ? <div className="resources-empty-inline">No broadcasts.</div> : null}
+                </div>
+
                 <div className="resources-footer-head" style={{ marginTop: 8 }}>
                   <strong>Staff</strong>
                   <span className="delivery-tab-count">{selectedLab.staff.length}</span>
@@ -1565,6 +1648,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                   : modal === "lab" ? (editingId ? "Edit Lab" : "Add Lab")
                   : modal === "booking" ? (editingId ? "Edit Booking" : "Add Booking")
                   : modal === "lab-closure" ? (editingId ? "Edit Lab Closure" : "Close Lab")
+                  : modal === "lab-broadcast" ? "Broadcast"
                   : "Add Downtime"}
               </h3>
               <div className="modal-head-actions">
@@ -1572,9 +1656,9 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                   type="button"
                   className="meetings-new-btn"
                   disabled={busy}
-                  onClick={() => void (modal === "equipment" ? saveEquipment() : modal === "equipment-material" ? saveEquipmentMaterial() : modal === "lab" ? saveLab() : modal === "booking" ? saveBooking() : modal === "lab-closure" ? saveLabClosure() : saveDowntime())}
+                  onClick={() => void (modal === "equipment" ? saveEquipment() : modal === "equipment-material" ? saveEquipmentMaterial() : modal === "lab" ? saveLab() : modal === "booking" ? saveBooking() : modal === "lab-closure" ? saveLabClosure() : modal === "lab-broadcast" ? saveLabBroadcast() : saveDowntime())}
                 >
-                  {busy ? "Saving..." : "Save"}
+                  {busy ? (modal === "lab-broadcast" ? "Sending..." : "Saving...") : (modal === "lab-broadcast" ? "Send" : "Save")}
                 </button>
                 <button type="button" className="ghost docs-action-btn" onClick={() => setModal(null)} title="Close">
                   <FontAwesomeIcon icon={faXmark} />
@@ -1725,6 +1809,35 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                 <label className="full-span">
                   Notes
                   <textarea rows={3} value={labNotes} onChange={(event) => setLabNotes(event.target.value)} />
+                </label>
+              </div>
+            ) : null}
+
+            {modal === "lab-broadcast" ? (
+              <div className="form-grid">
+                <label className="full-span">
+                  Lab
+                  <input value={selectedLab?.name || ""} disabled />
+                </label>
+                <label className="full-span">
+                  Title
+                  <input value={broadcastTitle} onChange={(event) => setBroadcastTitle(event.target.value)} />
+                </label>
+                <label className="full-span">
+                  Message
+                  <textarea rows={5} value={broadcastBody} onChange={(event) => setBroadcastBody(event.target.value)} />
+                </label>
+                <label>
+                  Severity
+                  <select value={broadcastSeverity} onChange={(event) => setBroadcastSeverity(event.target.value)}>
+                    <option value="info">info</option>
+                    <option value="important">important</option>
+                    <option value="urgent">urgent</option>
+                  </select>
+                </label>
+                <label className="resources-inline-check">
+                  <span>Telegram</span>
+                  <input type="checkbox" checked={broadcastTelegram} onChange={(event) => setBroadcastTelegram(event.target.checked)} />
                 </label>
               </div>
             ) : null}

@@ -835,6 +835,22 @@ export type ProjectChatMessage = {
   updated_at: string;
 };
 
+export type ProjectBroadcast = {
+  id: string;
+  project_id: string | null;
+  lab_id?: string | null;
+  author_user_id: string;
+  author_display_name: string;
+  title: string;
+  body: string;
+  severity: "info" | "important" | "urgent" | string;
+  deliver_telegram: boolean;
+  recipient_count: number;
+  sent_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectValidationError = {
   entity_type: string;
   entity_id: string;

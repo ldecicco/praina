@@ -24,6 +24,7 @@ import type {
   Partner,
   ProjectChatMessage,
   ProjectChatRoom,
+  ProjectBroadcast,
   ProjectActivationResult,
   ProjectProposalSection,
   ProjectRisk,
@@ -1712,6 +1713,32 @@ export const api = {
     });
   },
 
+  listProjectBroadcasts(projectId: string, options?: { page?: number; pageSize?: number }): Promise<Paginated<ProjectBroadcast>> {
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    return request(`/projects/${projectId}/broadcasts?page=${page}&page_size=${pageSize}`);
+  },
+
+  createProjectBroadcast(
+    projectId: string,
+    payload: { title: string; body: string; severity: string; deliver_telegram: boolean }
+  ): Promise<ProjectBroadcast> {
+    return request(`/projects/${projectId}/broadcasts`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  listLabBroadcasts(labId: string, options?: { page?: number; pageSize?: number }): Promise<Paginated<ProjectBroadcast>> {
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    return request(`/resources/labs/${labId}/broadcasts?page=${page}&page_size=${pageSize}`);
+  },
+
+  createLabBroadcast(
+    labId: string,
+    payload: { title: string; body: string; severity: string; deliver_telegram: boolean }
+  ): Promise<ProjectBroadcast> {
+    return request(`/resources/labs/${labId}/broadcasts`, { method: "POST", body: JSON.stringify(payload) });
+  },
+
 
 
   listMeetings(projectId: string, params?: { search?: string; source_type?: string }): Promise<Paginated<MeetingRecord>> {
@@ -1868,7 +1895,7 @@ export const api = {
   },
 
   listChatMessages(projectId: string, conversationId: string): Promise<Paginated<ChatMessage>> {
-    return request(`/projects/${projectId}/chat/conversations/${conversationId}/messages?page=1&page_size=500`);
+    return request(`/projects/${projectId}/chat/conversations/${conversationId}/messages?page=1&page_size=100`);
   },
 
   postChatMessage(

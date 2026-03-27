@@ -75,3 +75,30 @@ class ChatMessageRead(BaseModel):
 
 class ChatMessageListRead(PaginatedResponse):
     items: list[ChatMessageRead]
+
+
+class ProjectBroadcastCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=4000)
+    severity: str = Field(default="important", max_length=16)
+    deliver_telegram: bool = False
+
+
+class ProjectBroadcastRead(BaseModel):
+    id: str
+    project_id: str | None
+    lab_id: str | None = None
+    author_user_id: str
+    author_display_name: str
+    title: str
+    body: str
+    severity: str
+    deliver_telegram: bool
+    recipient_count: int
+    sent_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectBroadcastListRead(PaginatedResponse):
+    items: list[ProjectBroadcastRead]

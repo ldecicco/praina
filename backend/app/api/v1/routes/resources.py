@@ -47,11 +47,15 @@ from app.schemas.resources import (
     LabStaffRead,
     LabRead,
     LabUpdate,
+    ProjectBroadcastCreateRequest,
+    ProjectBroadcastListRead,
+    ProjectBroadcastRead,
     ProjectResourcesWorkspaceRead,
     ResourceOwnerRead,
 )
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 from app.services.notification_service import NotificationService
+from app.services.project_broadcast_service import ProjectBroadcastService
 from app.services.resources_service import ResourcesService
 
 
@@ -260,6 +264,57 @@ def delete_lab_closure(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     _require_lab_closure_manager(svc, item.lab_id, current_user)
     svc.delete_lab_closure(closure_id)
+
+
+@router.get("/resources/labs/{lab_id}/broadcasts", response_model=ProjectBroadcastListRead)
+def list_lab_broadcasts(
+    lab_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> ProjectBroadcastListRead:
+    service = ProjectBroadcastService(db)
+    try:
+        items, total = service.list_lab_broadcasts(lab_id, page, page_size)
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    broadcast_ids = [item.id for item in items]
+    author_ids = [item.author_user_id for item in items]
+    recipient_counts = service.recipient_count_by_broadcast(broadcast_ids)
+    authors = service.author_lookup(author_ids)
+    return ProjectBroadcastListRead(
+        items=[_broadcast_read(item, authors, recipient_counts) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.post("/resources/labs/{lab_id}/broadcasts", response_model=ProjectBroadcastRead)
+def create_lab_broadcast(
+    lab_id: uuid.UUID,
+    payload: ProjectBroadcastCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> ProjectBroadcastRead:
+    service = ProjectBroadcastService(db)
+    try:
+        item = service.create_lab_broadcast(
+            lab_id,
+            current_user.id,
+            current_user.platform_role,
+            title=payload.title,
+            body=payload.body,
+            severity=payload.severity,
+            deliver_telegram=payload.deliver_telegram,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    recipient_counts = service.recipient_count_by_broadcast([item.id])
+    authors = service.author_lookup([item.author_user_id])
+    return _broadcast_read(item, authors, recipient_counts)
 
 
 @router.post("/resources/equipment", response_model=EquipmentRead, status_code=status.HTTP_201_CREATED)
@@ -929,6 +984,25 @@ def _blocker_read(db: Session, item: EquipmentBlocker) -> EquipmentBlockerRead:
         reason=item.reason,
         status=item.status,
         equipment=_equipment_read(db, equipment),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _broadcast_read(item, authors: dict[uuid.UUID, UserAccount], recipient_counts: dict[uuid.UUID, int]) -> ProjectBroadcastRead:
+    author = authors.get(item.author_user_id)
+    return ProjectBroadcastRead(
+        id=str(item.id),
+        project_id=str(item.project_id) if item.project_id else None,
+        lab_id=str(item.lab_id) if item.lab_id else None,
+        author_user_id=str(item.author_user_id),
+        author_display_name=author.display_name if author else "Unknown",
+        title=item.title,
+        body=item.body,
+        severity=item.severity,
+        deliver_telegram=item.deliver_telegram,
+        recipient_count=int(recipient_counts.get(item.id, 0)),
+        sent_at=item.sent_at,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

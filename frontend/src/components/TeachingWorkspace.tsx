@@ -189,7 +189,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         api.listMembers(projectId),
         api.listDocuments(projectId),
         api.listCourses(1, 200, "", true),
-        api.listGlobalBibliography({ page: 1, page_size: 200, visibility: "shared" }),
+        api.listGlobalBibliography({ page: 1, page_size: 100, visibility: "shared" }),
       ]);
       setWorkspace(workspaceRes);
       setMembers(membersRes.items.filter((item) => item.is_active));

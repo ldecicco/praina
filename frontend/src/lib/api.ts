@@ -60,6 +60,8 @@ import type {
   BibliographyCollection,
   BibliographyTag,
   BibliographyIdentifierImportResult,
+  TelegramLinkState,
+  TelegramDiscoveryStart,
   ResearchCollection,
   ResearchCollectionDetail,
   ResearchCollectionMember,
@@ -235,6 +237,30 @@ export const api = {
 
   changeMyPassword(payload: { current_password: string; new_password: string }): Promise<{ ok: boolean }> {
     return request("/auth/me/password", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  getMyTelegramState(): Promise<TelegramLinkState> {
+    return request("/auth/me/telegram");
+  },
+
+  startMyTelegramDiscovery(): Promise<TelegramDiscoveryStart> {
+    return request("/auth/me/telegram/discovery", { method: "POST" });
+  },
+
+  completeMyTelegramDiscovery(): Promise<TelegramLinkState> {
+    return request("/auth/me/telegram/discovery/complete", { method: "POST" });
+  },
+
+  updateMyTelegramPreferences(payload: { notifications_enabled: boolean }): Promise<TelegramLinkState> {
+    return request("/auth/me/telegram", { method: "PATCH", body: JSON.stringify(payload) });
+  },
+
+  disconnectMyTelegram(): Promise<TelegramLinkState> {
+    return request("/auth/me/telegram", { method: "DELETE" });
+  },
+
+  sendMyTelegramTestNotification(): Promise<{ ok: boolean }> {
+    return request("/auth/me/telegram/test", { method: "POST" });
   },
 
   uploadMyAvatar(file: File): Promise<{ avatar_url: string }> {
@@ -1155,8 +1181,11 @@ export const api = {
     return request(`/projects/${projectId}/activate`, { method: "POST" });
   },
 
-  runCoherenceCheck(projectId: string): Promise<CoherenceReport> {
-    return request(`/projects/${projectId}/coherence-check`, { method: "POST" });
+  runCoherenceCheck(projectId: string, options?: { includeLlm?: boolean }): Promise<CoherenceReport> {
+    const query = new URLSearchParams();
+    if (typeof options?.includeLlm === "boolean") query.set("include_llm", String(options.includeLlm));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request(`/projects/${projectId}/coherence-check${suffix}`, { method: "POST" });
   },
 
   listActivity(projectId: string, page = 1, pageSize = 20, eventType = ""): Promise<Paginated<AuditEvent>> {

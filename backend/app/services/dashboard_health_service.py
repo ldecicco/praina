@@ -90,7 +90,7 @@ class DashboardHealthService:
         try:
             from app.agents.coherence_agent import CoherenceAgent
 
-            report = CoherenceAgent().check_project(project_id, self.db)
+            report = CoherenceAgent().check_project(project_id, self.db, include_llm=False)
             coherence_issues = [
                 self._issue_dict(
                     source="coherence",

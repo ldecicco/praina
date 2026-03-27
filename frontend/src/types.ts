@@ -744,8 +744,29 @@ export type AuthUser = {
   organization: string | null;
   phone: string | null;
   avatar_url: string | null;
+  telegram_linked: boolean;
+  telegram_notifications_enabled: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type TelegramLinkState = {
+  linked: boolean;
+  notifications_enabled: boolean;
+  bot_username: string | null;
+  chat_id: string | null;
+  pending_chat_id: string | null;
+  telegram_username: string | null;
+  telegram_first_name: string | null;
+  pending_code: string | null;
+  pending_code_expires_at: string | null;
+};
+
+export type TelegramDiscoveryStart = {
+  code: string;
+  expires_at: string;
+  bot_username: string | null;
+  start_url: string | null;
 };
 
 export type ProjectMembership = {

@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import ProjectMembership
 from app.models.notification import Notification, NotificationChannel, NotificationStatus
+from app.models.auth import UserAccount
+from app.services.telegram_service import TelegramService
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class NotificationService:
         self.db.add(notification)
         self.db.commit()
         self.db.refresh(notification)
+        self._deliver_telegram(notification)
         return notification
 
     def notify_project_members(
@@ -80,7 +83,20 @@ class NotificationService:
         self.db.commit()
         for n in notifications:
             self.db.refresh(n)
+            self._deliver_telegram(n)
         return notifications
+
+    def _deliver_telegram(self, notification: Notification) -> None:
+        try:
+            user = self.db.get(UserAccount, notification.user_id)
+            if not user or not user.telegram_chat_id or not user.telegram_notifications_enabled:
+                return
+            text = notification.title.strip()
+            if notification.body.strip():
+                text = f"{text}\n{notification.body.strip()}"
+            TelegramService().send_message(user.telegram_chat_id, text[:4000])
+        except Exception:
+            logger.warning("Failed to deliver Telegram notification %s", notification.id, exc_info=True)
 
     def list_notifications(
         self,

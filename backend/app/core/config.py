@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     calendar_sync_past_days: int = 14
     calendar_sync_future_days: int = 90
     log_level: str = "INFO"
+    telegram_bot_token: str | None = Field(default=None, validation_alias="TELEGRAM_BOT_TOKEN")
+    telegram_bot_username: str | None = Field(default=None, validation_alias="TELEGRAM_BOT_USERNAME")
+    telegram_webhook_secret: str | None = Field(default=None, validation_alias="TELEGRAM_WEBHOOK_SECRET")
 
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),

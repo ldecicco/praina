@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -27,12 +27,13 @@ class CoherenceReportRead(BaseModel):
 @router.post("/{project_id}/coherence-check", response_model=CoherenceReportRead)
 def coherence_check(
     project_id: uuid.UUID,
+    include_llm: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> CoherenceReportRead:
     from app.agents.coherence_agent import CoherenceAgent
 
     agent = CoherenceAgent()
-    report = agent.check_project(project_id, db)
+    report = agent.check_project(project_id, db, include_llm=include_llm)
 
     return CoherenceReportRead(
         project_id=report.project_id,

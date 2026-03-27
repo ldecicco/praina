@@ -39,6 +39,13 @@ class UserAccount(Base, IdMixin, TimestampMixin):
     organization: Mapped[str | None] = mapped_column(String(160), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     avatar_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    telegram_pending_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    telegram_first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    telegram_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    telegram_link_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    telegram_link_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProjectMembership(Base, IdMixin, TimestampMixin):

@@ -11,6 +11,7 @@
 - [MVP Sprint Plan](/home/luca/dev/code/agentic-project-management/docs/sprint-plan.md)
 - [Teaching Projects Plan](/home/luca/dev/code/praina/docs/teaching-projects-plan.md)
 - [Resources And Equipment Plan](/home/luca/dev/code/praina/docs/resources-equipment-plan.md)
+- [Telegram Setup](/home/luca/dev/code/praina/docs/telegram-setup.md)
 
 Developer quick links:
 - [Root README](/home/luca/dev/code/agentic-project-management/README.md)

@@ -17,6 +17,9 @@ from app.schemas.auth import (
     MembershipWithUserRead,
     MembershipRead,
     PasswordChangeRequest,
+    TelegramDiscoveryStartRead,
+    TelegramLinkStateRead,
+    TelegramPreferencesUpdateRequest,
     TokenRefreshRequest,
     UserAdminCreateRequest,
     UserAdminUpdateRequest,
@@ -27,7 +30,9 @@ from app.schemas.auth import (
     UserRegisterRequest,
 )
 from app.services.auth_service import AuthService
+from app.services.notification_service import NotificationService
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
+from app.services.telegram_service import TelegramService
 
 ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_AVATAR_SIZE = 5 * 1024 * 1024  # 5 MB
@@ -127,6 +132,154 @@ def change_my_password(
         )
     except ValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.get("/me/telegram", response_model=TelegramLinkStateRead)
+def get_my_telegram_state(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TelegramLinkStateRead:
+    state = AuthService(db).get_telegram_link_state(current_user.id)
+    return TelegramLinkStateRead(
+        linked=state.linked,
+        notifications_enabled=state.notifications_enabled,
+        bot_username=settings.telegram_bot_username,
+        chat_id=state.chat_id,
+        pending_chat_id=state.pending_chat_id,
+        telegram_username=state.telegram_username,
+        telegram_first_name=state.telegram_first_name,
+        pending_code=state.pending_code,
+        pending_code_expires_at=state.pending_code_expires_at,
+    )
+
+
+@router.post("/me/telegram/discovery", response_model=TelegramDiscoveryStartRead)
+def start_my_telegram_discovery(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TelegramDiscoveryStartRead:
+    service = AuthService(db)
+    try:
+        _, code, expires_at = service.start_telegram_discovery(current_user.id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    bot_username = (settings.telegram_bot_username or "").strip() or None
+    start_url = f"https://t.me/{bot_username}?start={code}" if bot_username else None
+    return TelegramDiscoveryStartRead(
+        code=code,
+        expires_at=expires_at,
+        bot_username=bot_username,
+        start_url=start_url,
+    )
+
+
+@router.post("/me/telegram/discovery/complete", response_model=TelegramLinkStateRead)
+def complete_my_telegram_discovery(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TelegramLinkStateRead:
+    service = AuthService(db)
+    state = service.get_telegram_link_state(current_user.id)
+    if not state.pending_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No Telegram discovery is pending.")
+    match = TelegramService().find_chat_by_code(state.pending_code)
+    if not match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No Telegram chat found for this code. Open the bot link, press Start, then try again.",
+        )
+    try:
+        service.complete_telegram_discovery(
+            current_user.id,
+            chat_id=match.chat_id,
+            code=state.pending_code,
+            telegram_username=match.username,
+            telegram_first_name=match.first_name,
+        )
+    except (ValidationError, ConflictError) as exc:
+        code_status = status.HTTP_409_CONFLICT if isinstance(exc, ConflictError) else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code_status, detail=str(exc)) from exc
+    state = service.get_telegram_link_state(current_user.id)
+    return TelegramLinkStateRead(
+        linked=state.linked,
+        notifications_enabled=state.notifications_enabled,
+        bot_username=settings.telegram_bot_username,
+        chat_id=state.chat_id,
+        pending_chat_id=state.pending_chat_id,
+        telegram_username=state.telegram_username,
+        telegram_first_name=state.telegram_first_name,
+        pending_code=state.pending_code,
+        pending_code_expires_at=state.pending_code_expires_at,
+    )
+
+
+@router.patch("/me/telegram", response_model=TelegramLinkStateRead)
+def update_my_telegram_preferences(
+    payload: TelegramPreferencesUpdateRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TelegramLinkStateRead:
+    service = AuthService(db)
+    try:
+        service.update_telegram_preferences(
+            current_user.id,
+            notifications_enabled=payload.notifications_enabled,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    state = service.get_telegram_link_state(current_user.id)
+    return TelegramLinkStateRead(
+        linked=state.linked,
+        notifications_enabled=state.notifications_enabled,
+        bot_username=settings.telegram_bot_username,
+        chat_id=state.chat_id,
+        pending_chat_id=state.pending_chat_id,
+        telegram_username=state.telegram_username,
+        telegram_first_name=state.telegram_first_name,
+        pending_code=state.pending_code,
+        pending_code_expires_at=state.pending_code_expires_at,
+    )
+
+
+@router.delete("/me/telegram", response_model=TelegramLinkStateRead)
+def disconnect_my_telegram(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TelegramLinkStateRead:
+    service = AuthService(db)
+    service.disconnect_telegram(current_user.id)
+    state = service.get_telegram_link_state(current_user.id)
+    return TelegramLinkStateRead(
+        linked=state.linked,
+        notifications_enabled=state.notifications_enabled,
+        bot_username=settings.telegram_bot_username,
+        chat_id=state.chat_id,
+        pending_chat_id=state.pending_chat_id,
+        telegram_username=state.telegram_username,
+        telegram_first_name=state.telegram_first_name,
+        pending_code=state.pending_code,
+        pending_code_expires_at=state.pending_code_expires_at,
+    )
+
+
+@router.post("/me/telegram/test")
+def send_my_telegram_test_notification(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not current_user.telegram_chat_id or not current_user.telegram_notifications_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Link Telegram and enable notifications before sending a test notification.",
+        )
+    NotificationService(db).notify(
+        current_user.id,
+        title="Telegram test notification",
+        body="If you received this message in Telegram, the integration is working.",
+        link_type=None,
+        link_id=None,
+    )
     return {"ok": True}
 
 
@@ -290,6 +443,8 @@ def _user_read(user: UserAccount, temporary_password: str | None = None) -> User
         organization=user.organization,
         phone=user.phone,
         avatar_url=avatar_url,
+        telegram_linked=bool(user.telegram_chat_id),
+        telegram_notifications_enabled=bool(user.telegram_notifications_enabled and user.telegram_chat_id),
         created_at=user.created_at,
         updated_at=user.updated_at,
     )

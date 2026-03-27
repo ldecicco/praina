@@ -1112,39 +1112,341 @@ button.resources-schedule-block {
 }
 
 /* ─── Profile Modal ─── */
+.profile-settings-modal {
+  width: min(1040px, 100%);
+  padding: 18px;
+}
+
+.profile-banner {
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.profile-banner.error-banner {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 20%, var(--line));
+}
+
+.profile-banner.success-banner {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border-color: color-mix(in srgb, var(--success) 22%, var(--line));
+}
+
+.profile-settings-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.05fr) minmax(360px, 0.95fr);
+  gap: 14px;
+}
+
+.profile-side-stack {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.profile-section-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 70%, transparent), transparent 40%),
+    var(--bg-elevated);
+  padding: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.profile-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.profile-section-head h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .profile-avatar-section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 16px 0 8px;
+  gap: 10px;
+  padding: 8px 0 12px;
 }
 
 .profile-avatar-preview {
-  width: 72px;
-  height: 72px;
+  width: 88px;
+  height: 88px;
   border-radius: 999px;
-  border: 2px solid var(--border);
-  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--line));
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--brand) 18%, transparent), transparent 60%),
+    var(--surface-2);
   color: var(--brand);
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   overflow: hidden;
-  transition: border-color var(--t);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--brand) 8%, transparent);
+  transition: border-color var(--t), transform var(--t);
 }
 
 .profile-avatar-preview:hover {
   border-color: var(--brand);
+  transform: translateY(-1px);
 }
 
 .profile-avatar-preview img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.profile-avatar-initials {
+  color: var(--text-bright);
+}
+
+.profile-identity-card {
+  display: grid;
+  align-content: start;
+}
+
+.profile-identity-meta {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  margin-bottom: 12px;
+}
+
+.profile-identity-meta strong {
+  color: var(--text-bright);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.profile-identity-meta span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.profile-identity-grid,
+.profile-security-grid,
+.profile-telegram-grid {
+  gap: 12px;
+}
+
+.profile-security-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.profile-telegram-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.profile-telegram-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.profile-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.profile-step {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.profile-step-index {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-bright);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+}
+
+.profile-step-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.profile-step.active {
+  border-color: color-mix(in srgb, var(--brand) 34%, var(--line));
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface));
+}
+
+.profile-step.active .profile-step-index {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 38%, var(--line));
+  background: color-mix(in srgb, var(--brand) 10%, var(--bg));
+}
+
+.profile-step.active .profile-step-label {
+  color: var(--text-bright);
+}
+
+.profile-step.done {
+  border-color: color-mix(in srgb, var(--success) 30%, var(--line));
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+
+.profile-step.done .profile-step-index {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 38%, var(--line));
+  background: color-mix(in srgb, var(--success) 10%, var(--bg));
+}
+
+.profile-step.done .profile-step-label {
+  color: var(--text-bright);
+}
+
+.profile-telegram-meta-item {
+  min-width: 0;
+  display: inline-grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.profile-telegram-meta-item span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.profile-telegram-meta-item strong {
+  color: var(--text-bright);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.profile-telegram-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.profile-inline-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.profile-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-status-pill.linked {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 28%, var(--line));
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.profile-status-pill.pending {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 28%, var(--line));
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.profile-status-pill.idle {
+  color: var(--text-secondary);
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.profile-modal-actions {
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .profile-settings-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .profile-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-telegram-grid,
+  .profile-security-grid,
+  .profile-identity-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .profile-telegram-actions,
+  .profile-modal-actions {
+    justify-content: stretch;
+  }
+
+  .profile-telegram-actions button,
+  .profile-modal-actions button {
+    width: 100%;
+  }
 }
 
 /* ─── Page Content ─── */

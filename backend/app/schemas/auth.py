@@ -25,6 +25,29 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+class TelegramLinkStateRead(BaseModel):
+    linked: bool
+    notifications_enabled: bool
+    bot_username: str | None = None
+    chat_id: str | None = None
+    pending_chat_id: str | None = None
+    telegram_username: str | None = None
+    telegram_first_name: str | None = None
+    pending_code: str | None = None
+    pending_code_expires_at: datetime | None = None
+
+
+class TelegramDiscoveryStartRead(BaseModel):
+    code: str
+    expires_at: datetime
+    bot_username: str | None = None
+    start_url: str | None = None
+
+
+class TelegramPreferencesUpdateRequest(BaseModel):
+    notifications_enabled: bool
+
+
 class UserRead(BaseModel):
     id: str
     email: EmailStr
@@ -38,6 +61,8 @@ class UserRead(BaseModel):
     organization: str | None = None
     phone: str | None = None
     avatar_url: str | None = None
+    telegram_linked: bool = False
+    telegram_notifications_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 

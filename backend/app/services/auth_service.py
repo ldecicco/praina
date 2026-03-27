@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
@@ -126,6 +126,154 @@ class AuthService:
         if verify_password(cleaned_new_password, user.password_hash):
             raise ValidationError("New password must be different from the current password.")
         user.password_hash = hash_password(cleaned_new_password)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def start_telegram_verification(self, user_id: uuid.UUID, *, chat_id: str) -> tuple[UserAccount, str, datetime]:
+        user = self.get_user_by_id(user_id)
+        cleaned_chat_id = chat_id.strip()
+        if not cleaned_chat_id:
+            raise ValidationError("Telegram chat id is required.")
+        existing = self.db.scalar(
+            select(UserAccount).where(
+                UserAccount.telegram_chat_id == cleaned_chat_id,
+                UserAccount.id != user.id,
+            )
+        )
+        if existing:
+            raise ConflictError("This Telegram chat is already linked to another user.")
+        code = uuid.uuid4().hex[:10].upper()
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+        user.telegram_pending_chat_id = cleaned_chat_id
+        user.telegram_link_code = code
+        user.telegram_link_code_expires_at = expires_at
+        self.db.commit()
+        self.db.refresh(user)
+        return user, code, expires_at
+
+    def start_telegram_discovery(self, user_id: uuid.UUID) -> tuple[UserAccount, str, datetime]:
+        user = self.get_user_by_id(user_id)
+        code = uuid.uuid4().hex[:10].upper()
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+        user.telegram_pending_chat_id = None
+        user.telegram_link_code = code
+        user.telegram_link_code_expires_at = expires_at
+        self.db.commit()
+        self.db.refresh(user)
+        return user, code, expires_at
+
+    def get_telegram_link_state(self, user_id: uuid.UUID):
+        user = self.get_user_by_id(user_id)
+        now = datetime.now(timezone.utc)
+        pending_code = None
+        pending_expires_at = None
+        if user.telegram_link_code and user.telegram_link_code_expires_at and user.telegram_link_code_expires_at > now:
+            pending_code = user.telegram_link_code
+            pending_expires_at = user.telegram_link_code_expires_at
+        return SimpleNamespace(
+            linked=bool(user.telegram_chat_id),
+            notifications_enabled=bool(user.telegram_notifications_enabled and user.telegram_chat_id),
+            chat_id=user.telegram_chat_id,
+            pending_chat_id=user.telegram_pending_chat_id,
+            telegram_username=user.telegram_username,
+            telegram_first_name=user.telegram_first_name,
+            pending_code=pending_code,
+            pending_code_expires_at=pending_expires_at,
+        )
+
+    def update_telegram_preferences(self, user_id: uuid.UUID, *, notifications_enabled: bool) -> UserAccount:
+        user = self.get_user_by_id(user_id)
+        if notifications_enabled and not user.telegram_chat_id:
+            raise ValidationError("Link Telegram before enabling notifications.")
+        user.telegram_notifications_enabled = notifications_enabled
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def disconnect_telegram(self, user_id: uuid.UUID) -> UserAccount:
+        user = self.get_user_by_id(user_id)
+        user.telegram_chat_id = None
+        user.telegram_username = None
+        user.telegram_first_name = None
+        user.telegram_notifications_enabled = False
+        user.telegram_pending_chat_id = None
+        user.telegram_link_code = None
+        user.telegram_link_code_expires_at = None
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def confirm_telegram_verification(
+        self,
+        user_id: uuid.UUID,
+        *,
+        code: str,
+    ) -> UserAccount:
+        user = self.get_user_by_id(user_id)
+        normalized = code.strip().upper()
+        if not normalized:
+            raise ValidationError("Verification code is required.")
+        now = datetime.now(timezone.utc)
+        if not user.telegram_pending_chat_id:
+            raise ValidationError("No Telegram verification is pending.")
+        if user.telegram_link_code != normalized:
+            raise ValidationError("Invalid verification code.")
+        if not user.telegram_link_code_expires_at or user.telegram_link_code_expires_at <= now:
+            raise ValidationError("Verification code has expired.")
+        existing = self.db.scalar(
+            select(UserAccount).where(
+                UserAccount.telegram_chat_id == user.telegram_pending_chat_id,
+                UserAccount.id != user.id,
+            )
+        )
+        if existing:
+            raise ConflictError("This Telegram chat is already linked to another user.")
+        user.telegram_chat_id = user.telegram_pending_chat_id
+        user.telegram_notifications_enabled = True
+        user.telegram_pending_chat_id = None
+        user.telegram_link_code = None
+        user.telegram_link_code_expires_at = None
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def complete_telegram_discovery(
+        self,
+        user_id: uuid.UUID,
+        *,
+        chat_id: str,
+        code: str,
+        telegram_username: str | None = None,
+        telegram_first_name: str | None = None,
+    ) -> UserAccount:
+        user = self.get_user_by_id(user_id)
+        normalized = code.strip().upper()
+        if not normalized:
+            raise ValidationError("Verification code is required.")
+        now = datetime.now(timezone.utc)
+        if user.telegram_link_code != normalized:
+            raise ValidationError("Invalid verification code.")
+        if not user.telegram_link_code_expires_at or user.telegram_link_code_expires_at <= now:
+            raise ValidationError("Verification code has expired.")
+        cleaned_chat_id = chat_id.strip()
+        if not cleaned_chat_id:
+            raise ValidationError("Telegram chat id is required.")
+        existing = self.db.scalar(
+            select(UserAccount).where(
+                UserAccount.telegram_chat_id == cleaned_chat_id,
+                UserAccount.id != user.id,
+            )
+        )
+        if existing:
+            raise ConflictError("This Telegram chat is already linked to another user.")
+        user.telegram_chat_id = cleaned_chat_id
+        user.telegram_pending_chat_id = None
+        user.telegram_username = telegram_username
+        user.telegram_first_name = telegram_first_name
+        user.telegram_notifications_enabled = True
+        user.telegram_link_code = None
+        user.telegram_link_code_expires_at = None
         self.db.commit()
         self.db.refresh(user)
         return user

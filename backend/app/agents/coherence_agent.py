@@ -58,7 +58,7 @@ class CoherenceAgent:
     def __init__(self) -> None:
         self._llm = ChatActionExtractionAgent()
 
-    def check_project(self, project_id: uuid.UUID, db: Session) -> CoherenceReport:
+    def check_project(self, project_id: uuid.UUID, db: Session, *, include_llm: bool = True) -> CoherenceReport:
         report = CoherenceReport(
             project_id=str(project_id),
             checked_at=datetime.utcnow().isoformat(),
@@ -93,11 +93,12 @@ class CoherenceAgent:
         report.issues.extend(self._check_reporting_alignment(project, deliverables))
 
         # LLM coherence check (best-effort)
-        try:
-            llm_issues = self._llm_coherence_check(project_id, db, project, wps, deliverables, milestones)
-            report.issues.extend(llm_issues)
-        except Exception as exc:
-            logger.warning("LLM coherence check failed for project %s: %s", project_id, exc)
+        if include_llm:
+            try:
+                llm_issues = self._llm_coherence_check(project_id, db, project, wps, deliverables, milestones)
+                report.issues.extend(llm_issues)
+            except Exception as exc:
+                logger.warning("LLM coherence check failed for project %s: %s", project_id, exc)
 
         return report
 

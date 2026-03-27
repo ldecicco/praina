@@ -159,12 +159,17 @@ def start_my_telegram_discovery(
     current_user: UserAccount = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TelegramDiscoveryStartRead:
+    bot_username = (settings.telegram_bot_username or "").strip() or None
+    if not bot_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Telegram bot username is not configured on the backend.",
+        )
     service = AuthService(db)
     try:
         _, code, expires_at = service.start_telegram_discovery(current_user.id)
     except ValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    bot_username = (settings.telegram_bot_username or "").strip() or None
     start_url = f"https://t.me/{bot_username}?start={code}" if bot_username else None
     return TelegramDiscoveryStartRead(
         code=code,

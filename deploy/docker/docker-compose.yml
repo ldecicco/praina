@@ -67,6 +67,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CODEX_MODEL: ${CODEX_MODEL:-gpt-5.4}
       CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-120}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     volumes:
       - backend_storage:/app/storage
     expose:

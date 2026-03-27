@@ -450,11 +450,9 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
                   </button>
                   {!telegramLinked ? (
                     <>
-                      {!telegramPending ? (
-                        <button type="button" className="ghost" onClick={() => void handleStartTelegramDiscovery()} disabled={telegramBusy}>
-                          {telegramBusy ? "Working..." : "Generate Link"}
-                        </button>
-                      ) : null}
+                      <button type="button" className="ghost" onClick={() => void handleStartTelegramDiscovery()} disabled={telegramBusy}>
+                        {telegramBusy ? "Working..." : telegramPending ? "Regenerate Link" : "Generate Link"}
+                      </button>
                       {telegramPending && telegramStartUrl ? (
                         <a
                           className="ghost profile-inline-link-btn"
@@ -468,11 +466,6 @@ export function UserProfileModal({ currentUser, onClose, onUpdated }: Props) {
                       {telegramPending ? (
                         <button type="button" className="ghost" onClick={() => void handleCompleteTelegramDiscovery()} disabled={telegramBusy}>
                           {telegramBusy ? "Working..." : "Find Chat"}
-                        </button>
-                      ) : null}
-                      {telegramPending ? (
-                        <button type="button" className="ghost" onClick={() => void handleStartTelegramDiscovery()} disabled={telegramBusy}>
-                          {telegramBusy ? "Working..." : "Regenerate"}
                         </button>
                       ) : null}
                     </>

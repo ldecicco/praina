@@ -18,6 +18,7 @@ from app.llm.json_utils import extract_json_object
 from app.models.document import DocumentChunk, ProjectDocument
 from app.models.meeting import MeetingRecord
 from app.models.research import (
+    BibliographyReference,
     ResearchChunk,
     ResearchCollection,
     ResearchNote,
@@ -28,7 +29,7 @@ from app.models.research import (
     research_collection_wps,
 )
 from app.models.work import Deliverable, Task, WorkPackage
-from app.services.onboarding_service import NotFoundError
+from app.services.onboarding_service import NotFoundError, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,23 @@ ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
     "discussion": ("discussion", "analysis", "ablation", "error analysis"),
     "limitations": ("limitation", "limitations", "caveat", "failure case", "threats to validity"),
     "conclusion": ("conclusion", "future work", "we conclude", "in conclusion"),
+}
+
+GENERIC_CONCEPT_TERMS = {
+    "paper",
+    "study",
+    "method",
+    "approach",
+    "result",
+    "results",
+    "performance",
+    "experiment",
+    "experiments",
+    "evaluation",
+    "model",
+    "models",
+    "framework",
+    "task",
 }
 
 MAP_SUMMARY_SYSTEM_PROMPT = """
@@ -180,6 +198,23 @@ Rules:
 - If evidence is weak or incomplete, say so conservatively.
 - `sources` must reference the provided artifact labels such as note titles, reference titles, meeting titles, task codes, or deliverable codes.
 - Do not invent experiments, results, task ownership, or publication state.
+""".strip()
+
+CONCEPT_EXTRACTION_SYSTEM_PROMPT = """
+You extract the core technical concepts from an academic paper title and abstract.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "concepts": []
+}
+
+Rules:
+- Return 5 to 12 concepts.
+- Concepts must be short technical noun phrases, not sentences.
+- Keep canonical labels concise.
+- Preserve important acronyms such as VLM, RAG, SLAM, RL, LLM when central.
+- Avoid generic terms such as paper, study, method, approach, result, performance, experiment, evaluation.
+- Avoid duplicates, near-duplicates, or trivial restatements of the title.
 """.strip()
 
 
@@ -391,6 +426,53 @@ class ResearchAIService:
         self.db.commit()
         self.db.refresh(ref)
         return ref
+
+    def summarize_bibliography_reference(self, bibliography_reference_id: uuid.UUID) -> BibliographyReference:
+        ref = self.db.scalar(
+            select(BibliographyReference).where(BibliographyReference.id == bibliography_reference_id)
+        )
+        if not ref:
+            raise NotFoundError("Bibliography reference not found.")
+        summary_payload = self._summarize_bibliography_reference_payload(ref)
+        ref.ai_summary = json.dumps(summary_payload, ensure_ascii=False, indent=2)
+        ref.ai_summary_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(ref)
+        return ref
+
+    def extract_bibliography_concepts(self, bibliography_reference_id: uuid.UUID) -> list[str]:
+        ref = self.db.scalar(
+            select(BibliographyReference).where(BibliographyReference.id == bibliography_reference_id)
+        )
+        if not ref:
+            raise NotFoundError("Bibliography reference not found.")
+        abstract = (ref.abstract or "").strip()
+        if not abstract:
+            raise ValidationError("Abstract not available for concept extraction.")
+        payload = self._chat_json(
+            CONCEPT_EXTRACTION_SYSTEM_PROMPT,
+            (
+                f"Title: {ref.title.strip()}\n\n"
+                f"Abstract:\n{abstract}\n"
+            ),
+        )
+        raw_items = payload.get("concepts")
+        if not isinstance(raw_items, list):
+            return []
+        concepts: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            label = " ".join(str(item or "").strip().split())
+            if not label:
+                continue
+            canonical = label.lower()
+            if canonical in GENERIC_CONCEPT_TERMS:
+                continue
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            concepts.append(label[:96])
+        return concepts[:12]
 
     # ── Synthesize collection ──────────────────────────────────────────
 
@@ -752,6 +834,39 @@ class ResearchAIService:
             doc = self.db.scalar(
                 select(ProjectDocument).where(
                     ProjectDocument.project_id == project_id,
+                    ProjectDocument.document_key == ref.document_key,
+                )
+            )
+
+        if doc:
+            queries = self.build_summary_queries(
+                {
+                    "title": ref.title,
+                    "authors": ref.authors or [],
+                    "abstract": ref.abstract,
+                    "metadata": doc.metadata_json or {},
+                }
+            )
+            selected_chunks = self.retrieve_summary_chunks(doc.id, queries, per_query_k=5)
+            if selected_chunks:
+                map_outputs = self.summarize_chunk_map(selected_chunks)
+                reduced = self.reduce_summaries(map_outputs)
+                final_summary = self.generate_final_summary(reduced)
+                if not final_summary.get("title"):
+                    final_summary["title"] = ref.title
+                return final_summary
+
+        if ref.abstract:
+            return self._summarize_abstract_only(ref)
+
+        raise NotFoundError("No content available to summarize.")
+
+    def _summarize_bibliography_reference_payload(self, ref: BibliographyReference) -> dict[str, Any]:
+        doc = None
+        if ref.document_key and ref.source_project_id:
+            doc = self.db.scalar(
+                select(ProjectDocument).where(
+                    ProjectDocument.project_id == ref.source_project_id,
                     ProjectDocument.document_key == ref.document_key,
                 )
             )

@@ -23,6 +23,10 @@ from app.schemas.research import (
     BibliographyDuplicateCheckPayload,
     BibliographyDuplicateCheckRead,
     BibliographyDuplicateMatchRead,
+    BibliographyGraphEdgeRead,
+    BibliographyGraphNodeRead,
+    BibliographyGraphRead,
+    BibliographyGraphRequest,
     BibliographyIdentifierImportPayload,
     BibliographyIdentifierImportRead,
     BibliographyCollectionBulkResearchLinkPayload,
@@ -1006,6 +1010,54 @@ def bibliography_embed_backfill(
     return {"embedded": count}
 
 
+@bibliography_router.post("/{bibliography_reference_id}/summarize", response_model=AISummaryRead)
+def summarize_bibliography_reference(
+    bibliography_reference_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> AISummaryRead:
+    from app.services.research_ai_service import ResearchAIService
+
+    svc = ResearchService(db)
+    try:
+        svc.get_bibliography_reference_visible_to_user(bibliography_reference_id, user_id=current_user.id)
+        ref = ResearchAIService(db).summarize_bibliography_reference(bibliography_reference_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI summarization failed: {exc}") from exc
+    return AISummaryRead(ai_summary=ref.ai_summary, ai_summary_at=ref.ai_summary_at)
+
+
+@bibliography_router.post("/graph", response_model=BibliographyGraphRead)
+def build_bibliography_graph(
+    payload: BibliographyGraphRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyGraphRead:
+    svc = ResearchService(db)
+    try:
+        graph = svc.bibliography_graph(
+            user_id=current_user.id,
+            reference_ids=[uuid.UUID(item) for item in payload.reference_ids],
+            include_authors=payload.include_authors,
+            include_concepts=payload.include_concepts,
+            include_tags=payload.include_tags,
+            include_semantic=payload.include_semantic,
+            include_bibliography_collections=payload.include_bibliography_collections,
+            include_research_links=payload.include_research_links,
+            include_teaching_links=payload.include_teaching_links,
+            semantic_threshold=payload.semantic_threshold,
+            semantic_top_k=payload.semantic_top_k,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BibliographyGraphRead(
+        nodes=[BibliographyGraphNodeRead(**item) for item in graph["nodes"]],
+        edges=[BibliographyGraphEdgeRead(**item) for item in graph["edges"]],
+    )
+
+
 @bibliography_router.get("/tags", response_model=BibliographyTagListRead)
 def list_global_bibliography_tags(
     search: str | None = Query(default=None, alias="q"),
@@ -1236,6 +1288,42 @@ def ingest_global_bibliography_attachment(
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _bibliography_read_global(svc, item)
+
+
+@bibliography_router.post("/{bibliography_reference_id}/extract-abstract", response_model=BibliographyReferenceRead)
+def extract_global_bibliography_abstract(
+    bibliography_reference_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> BibliographyReferenceRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.extract_bibliography_abstract(bibliography_reference_id)
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _bibliography_read_global(svc, item)
+
+
+@bibliography_router.post("/{bibliography_reference_id}/extract-concepts", response_model=BibliographyReferenceRead)
+def extract_global_bibliography_concepts(
+    bibliography_reference_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> BibliographyReferenceRead:
+    from app.services.research_ai_service import ResearchAIService
+
+    svc = ResearchService(db)
+    try:
+        svc.get_bibliography_reference_visible_to_user(bibliography_reference_id, user_id=current_user.id)
+        labels = ResearchAIService(db).extract_bibliography_concepts(bibliography_reference_id)
+        item = svc.set_bibliography_reference_concepts(bibliography_reference_id, labels)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI concept extraction failed: {exc}") from exc
     return _bibliography_read_global(svc, item)
 
 
@@ -1716,8 +1804,8 @@ def _reference_read(svc: ResearchService, item) -> ReferenceRead:
         ),
         reading_status=item.reading_status.value if hasattr(item.reading_status, "value") else str(item.reading_status),
         added_by_member_id=str(item.added_by_member_id) if item.added_by_member_id else None,
-        ai_summary=item.ai_summary,
-        ai_summary_at=item.ai_summary_at,
+        ai_summary=bibliography.ai_summary if bibliography and bibliography.ai_summary else item.ai_summary,
+        ai_summary_at=bibliography.ai_summary_at if bibliography and bibliography.ai_summary_at else item.ai_summary_at,
         note_count=svc._ref_note_count(item.id),
         annotation_count=svc._ref_annotation_count(item.id),
         created_at=item.created_at,
@@ -1739,16 +1827,20 @@ def _bibliography_read(svc: ResearchService, project_id: uuid.UUID, item: Biblio
         abstract=item.abstract,
         bibtex_raw=item.bibtex_raw,
         tags=svc.bibliography_tags_for_reference(item.id),
+        concepts=svc.bibliography_concepts_for_reference(item.id),
         visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         attachment_filename=item.attachment_filename,
         document_status=svc.bibliography_document_status(item.id),
+        warning=svc.bibliography_ingestion_warning(item.id),
         attachment_url=(
             f"/projects/{project_id}/research/bibliography/{item.id}/file"
             if item.attachment_path
             else None
         ),
         linked_project_count=svc.bibliography_link_count(item.id),
+        ai_summary=item.ai_summary,
+        ai_summary_at=item.ai_summary_at,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -1775,14 +1867,18 @@ def _bibliography_read_global(
         abstract=item.abstract,
         bibtex_raw=item.bibtex_raw,
         tags=svc.bibliography_tags_for_reference(item.id),
+        concepts=svc.bibliography_concepts_for_reference(item.id),
         visibility=item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility),
         created_by_user_id=str(item.created_by_user_id) if item.created_by_user_id else None,
         attachment_filename=item.attachment_filename,
         document_status=svc.bibliography_document_status(item.id),
+        warning=svc.bibliography_ingestion_warning(item.id),
         attachment_url=(f"/bibliography/{item.id}/file" if (item.document_key or item.attachment_path) else None),
         linked_project_count=svc.bibliography_link_count(item.id),
         note_count=note_counts.get(item.id, 0) if note_counts else svc.bibliography_note_count(item.id),
         reading_status=reading_statuses.get(item.id, "unread") if reading_statuses else "unread",
+        ai_summary=item.ai_summary,
+        ai_summary_at=item.ai_summary_at,
         semantic_evidence=[
             BibliographySemanticEvidenceRead(
                 text=str(entry.get("text") or ""),

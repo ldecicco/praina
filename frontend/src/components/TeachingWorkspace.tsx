@@ -12,6 +12,7 @@ import {
   faPaperclip,
   faPenToSquare,
   faPlus,
+  faShareNodes,
   faTrash,
   faWandMagicSparkles,
   faXmark,
@@ -19,6 +20,7 @@ import {
 
 import { api } from "../lib/api";
 import { renderMarkdown } from "../lib/renderMarkdown";
+import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import { ProjectResourcesPanel } from "./ProjectResourcesPanel";
 import { ProposalRichEditor } from "./ProposalRichEditor";
 import type {
@@ -124,6 +126,8 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
   const [backgroundUploadFile, setBackgroundUploadFile] = useState<File | null>(null);
   const [backgroundUploading, setBackgroundUploading] = useState(false);
   const [bibliography, setBibliography] = useState<BibliographyReference[]>([]);
+  const [bibliographyGraphOpen, setBibliographyGraphOpen] = useState(false);
+  const [bibliographyGraphReferences, setBibliographyGraphReferences] = useState<BibliographyReference[]>([]);
 
   const [artifactType, setArtifactType] = useState("report");
   const [artifactLabel, setArtifactLabel] = useState("");
@@ -178,6 +182,41 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
   const bibliographyMap = useMemo(
     () => new Map(bibliography.map((item) => [item.id, item])),
     [bibliography]
+  );
+  const linkedBackgroundBibliography = useMemo(
+    () =>
+      (workspace?.background_materials || [])
+        .filter((item) => item.bibliography_reference_id)
+        .map((item) => bibliographyMap.get(item.bibliography_reference_id!) || {
+          id: item.bibliography_reference_id!,
+          source_project_id: null,
+          document_key: item.document_key,
+          title: item.bibliography_title || item.title,
+          authors: [],
+          year: null,
+          venue: null,
+          doi: null,
+          url: item.bibliography_url || item.external_url,
+          abstract: null,
+          bibtex_raw: null,
+          tags: [],
+          concepts: [],
+          visibility: "shared",
+          created_by_user_id: null,
+          attachment_filename: null,
+          attachment_url: item.bibliography_url || item.external_url,
+          document_status: item.document_key ? "indexed" : "no_pdf",
+          warning: null,
+          linked_project_count: 0,
+          note_count: 0,
+          reading_status: "unread",
+          ai_summary: null,
+          ai_summary_at: null,
+          semantic_evidence: [],
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+        }),
+    [workspace?.background_materials, bibliographyMap]
   );
 
   const loadWorkspace = useCallback(async (projectId = selectedProjectId) => {
@@ -1052,9 +1091,22 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         <div className="card teaching-card">
           <div className="proposal-card-head">
             <strong>Background</strong>
-            <button type="button" className="meetings-new-btn" onClick={() => openModal("background")}>
-              <FontAwesomeIcon icon={faPlus} /> Add
-            </button>
+            <div className="teaching-assessment-head-right">
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                disabled={linkedBackgroundBibliography.length === 0}
+                onClick={() => {
+                  setBibliographyGraphReferences(linkedBackgroundBibliography);
+                  setBibliographyGraphOpen(true);
+                }}
+              >
+                <FontAwesomeIcon icon={faShareNodes} /> Show Graph
+              </button>
+              <button type="button" className="meetings-new-btn" onClick={() => openModal("background")}>
+                <FontAwesomeIcon icon={faPlus} /> Add
+              </button>
+            </div>
           </div>
           <div className="simple-table-wrap">
             <table className="simple-table compact-table">
@@ -1749,6 +1801,25 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {bibliographyGraphOpen ? (
+        <BibliographyGraphModal
+          references={bibliographyGraphReferences}
+          onClose={() => {
+            setBibliographyGraphOpen(false);
+            setBibliographyGraphReferences([]);
+          }}
+          onOpenPaper={(reference) => {
+            const target = reference.attachment_url || reference.url;
+            if (target) window.open(target, "_blank", "noopener,noreferrer");
+          }}
+          onOpenAttachment={(reference) => {
+            const target = reference.attachment_url || reference.url;
+            if (target) window.open(target, "_blank", "noopener,noreferrer");
+          }}
+          openingAttachmentId={null}
+        />
       ) : null}
     </div>
   );

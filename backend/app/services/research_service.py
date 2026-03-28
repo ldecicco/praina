@@ -25,6 +25,7 @@ from app.models.organization import PartnerOrganization, TeamMember
 from app.models.project import Project, ProjectKind
 from app.models.research import (
     BibliographyCollection,
+    BibliographyConcept,
     BibliographyNote,
     BibliographyReference,
     BibliographyTag,
@@ -41,6 +42,7 @@ from app.models.research import (
     ResearchNote,
     ResearchReference,
     bibliography_collection_references,
+    bibliography_reference_concepts,
     bibliography_reference_tags,
     research_collection_deliverables,
     research_collection_meetings,
@@ -50,8 +52,10 @@ from app.models.research import (
 )
 from app.models.teaching import TeachingProjectBackgroundMaterial
 from app.services.onboarding_service import NotFoundError, ValidationError
+from app.services.auth_service import AuthService
 from app.services.document_service import DocumentService
 from app.services.document_ingestion_service import DocumentIngestionService
+from app.services.text_extraction import extract_pdf_abstract
 from app.schemas.document import DocumentUploadPayload
 
 logger = logging.getLogger(__name__)
@@ -152,6 +156,26 @@ class ResearchService:
         slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
         return slug[:64] or "tag"
 
+    @staticmethod
+    def _normalize_concept_labels(labels: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in labels or []:
+            label = " ".join((raw or "").strip().split())
+            if not label:
+                continue
+            canonical = label.lower()
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            normalized.append(label)
+        return normalized
+
+    @staticmethod
+    def _concept_slug(label: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+        return slug[:96] or "concept"
+
     def _ensure_bibliography_tags(self, labels: list[str]) -> list[BibliographyTag]:
         if not labels:
             return []
@@ -205,6 +229,61 @@ class ResearchService:
             return [row[0] for row in rows]
         except ProgrammingError as exc:
             if "bibliography_tags" in str(exc) or "bibliography_reference_tags" in str(exc):
+                self.db.rollback()
+                return []
+            raise
+
+    def _ensure_bibliography_concepts(self, labels: list[str]) -> list[BibliographyConcept]:
+        if not labels:
+            return []
+        normalized = self._normalize_concept_labels(labels)
+        lowered = [label.lower() for label in normalized]
+        existing = list(
+            self.db.scalars(select(BibliographyConcept).where(func.lower(BibliographyConcept.label).in_(lowered))).all()
+        )
+        by_lower = {item.label.lower(): item for item in existing}
+        existing_slugs = set(self.db.scalars(select(BibliographyConcept.slug)).all())
+        for label in normalized:
+            key = label.lower()
+            if key in by_lower:
+                continue
+            base_slug = self._concept_slug(label)
+            slug = base_slug
+            suffix = 2
+            while slug in existing_slugs:
+                slug = f"{base_slug[: max(1, 96 - len(str(suffix)) - 1)]}-{suffix}"
+                suffix += 1
+            item = BibliographyConcept(label=label, slug=slug)
+            self.db.add(item)
+            self.db.flush()
+            by_lower[key] = item
+            existing_slugs.add(slug)
+        return [by_lower[label.lower()] for label in normalized]
+
+    def _set_bibliography_reference_concepts(self, reference_id: uuid.UUID, labels: list[str]) -> None:
+        concepts = self._ensure_bibliography_concepts(labels)
+        self.db.execute(
+            delete(bibliography_reference_concepts).where(bibliography_reference_concepts.c.reference_id == reference_id)
+        )
+        for concept in concepts:
+            self.db.execute(
+                insert(bibliography_reference_concepts).values(reference_id=reference_id, concept_id=concept.id)
+            )
+
+    def bibliography_concepts_for_reference(self, reference_id: uuid.UUID) -> list[str]:
+        try:
+            rows = self.db.execute(
+                select(BibliographyConcept.label)
+                .join(
+                    bibliography_reference_concepts,
+                    bibliography_reference_concepts.c.concept_id == BibliographyConcept.id,
+                )
+                .where(bibliography_reference_concepts.c.reference_id == reference_id)
+                .order_by(func.lower(BibliographyConcept.label))
+            ).all()
+            return [row[0] for row in rows]
+        except ProgrammingError as exc:
+            if "bibliography_concepts" in str(exc) or "bibliography_reference_concepts" in str(exc):
                 self.db.rollback()
                 return []
             raise
@@ -1055,6 +1134,248 @@ class ResearchService:
             raise NotFoundError("Bibliography reference not found.")
         return item
 
+    def get_bibliography_reference_visible_to_user(
+        self,
+        bibliography_reference_id: uuid.UUID,
+        *,
+        user_id: uuid.UUID,
+    ) -> BibliographyReference:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        visibility = item.visibility.value if hasattr(item.visibility, "value") else str(item.visibility)
+        if visibility == BibliographyVisibility.shared.value:
+            return item
+        if item.created_by_user_id == user_id:
+            return item
+        raise NotFoundError("Bibliography reference not found.")
+
+    def bibliography_graph(
+        self,
+        *,
+        user_id: uuid.UUID,
+        reference_ids: list[uuid.UUID],
+        include_authors: bool = True,
+        include_concepts: bool = True,
+        include_tags: bool = False,
+        include_semantic: bool = True,
+        include_bibliography_collections: bool = True,
+        include_research_links: bool = True,
+        include_teaching_links: bool = True,
+        semantic_threshold: float = 0.78,
+        semantic_top_k: int = 3,
+    ) -> dict[str, list[dict[str, object]]]:
+        if not reference_ids:
+            return {"nodes": [], "edges": []}
+
+        visible_stmt = select(BibliographyReference).where(
+            BibliographyReference.id.in_(reference_ids),
+            (
+                (BibliographyReference.visibility == BibliographyVisibility.shared)
+                | (
+                    (BibliographyReference.visibility == BibliographyVisibility.private)
+                    & (BibliographyReference.created_by_user_id == user_id)
+                )
+            ),
+        )
+        references = list(self.db.scalars(visible_stmt).all())
+        if not references:
+            return {"nodes": [], "edges": []}
+
+        tag_lookup = {item.id: self.bibliography_tags_for_reference(item.id) for item in references}
+        concept_lookup = {item.id: self.bibliography_concepts_for_reference(item.id) for item in references}
+        nodes: list[dict[str, object]] = []
+        edges: list[dict[str, object]] = []
+        node_ids: set[str] = set()
+        edge_ids: set[str] = set()
+
+        def add_node(node_id: str, label: str, node_type: str, *, ref_id: str | None = None) -> None:
+            if node_id in node_ids:
+                return
+            node_ids.add(node_id)
+            nodes.append({"id": node_id, "label": label, "node_type": node_type, "ref_id": ref_id})
+
+        def add_edge(edge_id: str, source: str, target: str, edge_type: str, *, weight: float | None = None) -> None:
+            if edge_id in edge_ids or source == target:
+                return
+            edge_ids.add(edge_id)
+            edges.append({"id": edge_id, "source": source, "target": target, "edge_type": edge_type, "weight": weight})
+
+        def can_access_project(project_id: uuid.UUID) -> bool:
+            try:
+                AuthService(self.db)._get_project_role(project_id, user_id)
+                return True
+            except NotFoundError:
+                actor = self.db.get(UserAccount, user_id)
+                return bool(actor and actor.platform_role == "super_admin")
+            except Exception:
+                return False
+
+        for item in references:
+            add_node(f"paper:{item.id}", item.title, "paper", ref_id=str(item.id))
+
+        if include_authors:
+            for item in references:
+                for raw_author in item.authors or []:
+                    author = " ".join((raw_author or "").strip().split())
+                    if not author:
+                        continue
+                    author_id = f"author:{author.lower()}"
+                    add_node(author_id, author, "author")
+                    add_edge(
+                        f"edge:paper-author:{item.id}:{author.lower()}",
+                        f"paper:{item.id}",
+                        author_id,
+                        "written_by",
+                    )
+
+        if include_tags:
+            for item in references:
+                for raw_tag in tag_lookup.get(item.id, []):
+                    tag = " ".join((raw_tag or "").strip().split())
+                    if not tag:
+                        continue
+                    tag_id = f"tag:{tag.lower()}"
+                    add_node(tag_id, tag, "tag")
+                    add_edge(
+                        f"edge:paper-tag:{item.id}:{tag.lower()}",
+                        f"paper:{item.id}",
+                        tag_id,
+                        "tagged",
+                    )
+
+        if include_concepts:
+            for item in references:
+                for raw_concept in concept_lookup.get(item.id, []):
+                    concept = " ".join((raw_concept or "").strip().split())
+                    if not concept:
+                        continue
+                    concept_id = f"concept:{concept.lower()}"
+                    add_node(concept_id, concept, "concept")
+                    add_edge(
+                        f"edge:paper-concept:{item.id}:{concept.lower()}",
+                        f"paper:{item.id}",
+                        concept_id,
+                        "mentions_concept",
+                    )
+
+        if include_bibliography_collections:
+            collection_rows = self.db.execute(
+                select(
+                    bibliography_collection_references.c.reference_id,
+                    BibliographyCollection.id,
+                    BibliographyCollection.title,
+                    BibliographyCollection.visibility,
+                    BibliographyCollection.owner_user_id,
+                )
+                .join(
+                    BibliographyCollection,
+                    BibliographyCollection.id == bibliography_collection_references.c.collection_id,
+                )
+                .where(bibliography_collection_references.c.reference_id.in_([item.id for item in references]))
+            ).all()
+            for reference_id, collection_id, title, visibility, owner_user_id in collection_rows:
+                if visibility != BibliographyVisibility.shared and owner_user_id != user_id:
+                    continue
+                node_id = f"bib-collection:{collection_id}"
+                add_node(node_id, title, "bibliography_collection")
+                add_edge(
+                    f"edge:paper-bib-collection:{reference_id}:{collection_id}",
+                    f"paper:{reference_id}",
+                    node_id,
+                    "in_bibliography_collection",
+                )
+
+        if include_research_links:
+            research_rows = self.db.execute(
+                select(
+                    ResearchReference.bibliography_reference_id,
+                    ResearchCollection.id,
+                    ResearchCollection.title,
+                    ResearchCollection.project_id,
+                    Project.title,
+                )
+                .join(ResearchCollection, ResearchCollection.id == ResearchReference.collection_id)
+                .join(Project, Project.id == ResearchCollection.project_id)
+                .where(
+                    ResearchReference.bibliography_reference_id.in_([item.id for item in references]),
+                    ResearchReference.collection_id.is_not(None),
+                )
+            ).all()
+            for reference_id, collection_id, collection_title, project_id, project_title in research_rows:
+                if not can_access_project(project_id):
+                    continue
+                project_node_id = f"research-project:{project_id}"
+                collection_node_id = f"research-collection:{collection_id}"
+                add_node(project_node_id, project_title, "research_project")
+                add_node(collection_node_id, collection_title, "research_collection")
+                add_edge(
+                    f"edge:research-project-collection:{project_id}:{collection_id}",
+                    project_node_id,
+                    collection_node_id,
+                    "contains_collection",
+                )
+                add_edge(
+                    f"edge:paper-research-collection:{reference_id}:{collection_id}",
+                    f"paper:{reference_id}",
+                    collection_node_id,
+                    "linked_to_research_collection",
+                )
+
+        if include_teaching_links:
+            teaching_rows = self.db.execute(
+                select(
+                    TeachingProjectBackgroundMaterial.bibliography_reference_id,
+                    TeachingProjectBackgroundMaterial.project_id,
+                    Project.title,
+                )
+                .join(Project, Project.id == TeachingProjectBackgroundMaterial.project_id)
+                .where(
+                    TeachingProjectBackgroundMaterial.bibliography_reference_id.in_([item.id for item in references]),
+                    TeachingProjectBackgroundMaterial.bibliography_reference_id.is_not(None),
+                )
+            ).all()
+            for reference_id, project_id, project_title in teaching_rows:
+                if not can_access_project(project_id):
+                    continue
+                node_id = f"teaching-project:{project_id}"
+                add_node(node_id, project_title, "teaching_project")
+                add_edge(
+                    f"edge:paper-teaching-project:{reference_id}:{project_id}",
+                    f"paper:{reference_id}",
+                    node_id,
+                    "used_in_teaching_project",
+                )
+
+        if include_semantic:
+            top_k = max(1, min(int(semantic_top_k or 3), 10))
+            threshold = max(0.0, min(float(semantic_threshold or 0.78), 0.999))
+            papers_with_embeddings = [item for item in references if item.embedding is not None]
+            for item in papers_with_embeddings:
+                cosine_distance = BibliographyReference.embedding.cosine_distance(item.embedding)
+                rows = self.db.execute(
+                    select(BibliographyReference.id, cosine_distance.label("distance"))
+                    .where(
+                        BibliographyReference.id.in_([other.id for other in papers_with_embeddings]),
+                        BibliographyReference.id != item.id,
+                        BibliographyReference.embedding.is_not(None),
+                    )
+                    .order_by(cosine_distance.asc())
+                    .limit(top_k)
+                ).all()
+                for other_id, distance in rows:
+                    similarity = 1.0 - float(distance)
+                    if similarity < threshold:
+                        continue
+                    left, right = sorted((str(item.id), str(other_id)))
+                    add_edge(
+                        f"edge:semantic:{left}:{right}",
+                        f"paper:{left}",
+                        f"paper:{right}",
+                        "semantic",
+                        weight=similarity,
+                    )
+
+        return {"nodes": nodes, "edges": edges}
+
     def create_bibliography_reference(
         self,
         *,
@@ -1522,6 +1843,13 @@ class ResearchService:
         item.attachment_path = document.storage_uri
         item.attachment_filename = document.original_filename
         item.attachment_mime_type = document.mime_type
+        if not item.abstract and (document.mime_type == "application/pdf" or Path(document.storage_uri).suffix.lower() == ".pdf"):
+            try:
+                abstract = extract_pdf_abstract(Path(document.storage_uri), max_pages=2)
+                if abstract:
+                    item.abstract = abstract
+            except Exception:
+                logger.warning("Failed to auto-extract abstract for bibliography reference %s", item.id, exc_info=True)
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -1911,6 +2239,49 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def extract_bibliography_abstract(self, bibliography_reference_id: uuid.UUID) -> BibliographyReference:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+
+        file_path: Path | None = None
+        if item.document_key and item.source_project_id:
+            document = self.db.scalar(
+                select(ProjectDocument)
+                .where(
+                    ProjectDocument.project_id == item.source_project_id,
+                    ProjectDocument.document_key == item.document_key,
+                )
+                .order_by(ProjectDocument.version.desc())
+                .limit(1)
+            )
+            if document and document.storage_uri:
+                file_path = Path(document.storage_uri)
+        if file_path is None and item.attachment_path:
+            file_path = Path(item.attachment_path)
+
+        if file_path is None or not file_path.exists():
+            raise ValidationError("No PDF available to extract abstract.")
+
+        abstract = extract_pdf_abstract(file_path, max_pages=2)
+        if not abstract:
+            self.db.refresh(item)
+            return item
+
+        item.abstract = abstract
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def set_bibliography_reference_concepts(
+        self,
+        bibliography_reference_id: uuid.UUID,
+        labels: list[str],
+    ) -> BibliographyReference:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        self._set_bibliography_reference_concepts(item.id, labels)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def update_bibliography_note(
         self,
         note_id: uuid.UUID,
@@ -2154,3 +2525,10 @@ class ResearchService:
             .limit(1)
         )
         return str(document) if document else "pending"
+
+    def bibliography_ingestion_warning(self, bibliography_reference_id: uuid.UUID) -> str | None:
+        item = self.get_bibliography_reference(bibliography_reference_id)
+        has_attachment = bool(item.document_key or item.attachment_path or item.attachment_filename)
+        if has_attachment and not item.abstract:
+            return "Failed to automatically extract the abstract. Please manually add the abstract."
+        return None

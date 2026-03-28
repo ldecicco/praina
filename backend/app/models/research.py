@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
@@ -102,6 +103,13 @@ bibliography_reference_tags = Table(
     Column("tag_id", UUID(as_uuid=True), ForeignKey("bibliography_tags.id", ondelete="CASCADE"), primary_key=True),
 )
 
+bibliography_reference_concepts = Table(
+    "bibliography_reference_concepts",
+    Base.metadata,
+    Column("reference_id", UUID(as_uuid=True), ForeignKey("bibliography_references.id", ondelete="CASCADE"), primary_key=True),
+    Column("concept_id", UUID(as_uuid=True), ForeignKey("bibliography_concepts.id", ondelete="CASCADE"), primary_key=True),
+)
+
 bibliography_collection_references = Table(
     "bibliography_collection_references",
     Base.metadata,
@@ -177,7 +185,7 @@ class ResearchReference(Base, IdMixin, TimestampMixin):
         ForeignKey("team_members.id", ondelete="SET NULL"), nullable=True,
     )
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ai_summary_at: Mapped[uuid.UUID | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_summary_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BibliographyReference(Base, IdMixin, TimestampMixin):
@@ -206,6 +214,8 @@ class BibliographyReference(Base, IdMixin, TimestampMixin):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary_at: Mapped[uuid.UUID | None] = mapped_column(DateTime(timezone=True), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
 
 
@@ -229,6 +239,13 @@ class BibliographyTag(Base, IdMixin, TimestampMixin):
 
     label: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+
+class BibliographyConcept(Base, IdMixin, TimestampMixin):
+    __tablename__ = "bibliography_concepts"
+
+    label: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    slug: Mapped[str] = mapped_column(String(96), unique=True, index=True)
 
 
 class BibliographyNote(Base, IdMixin, TimestampMixin):

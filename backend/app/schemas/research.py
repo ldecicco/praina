@@ -223,14 +223,18 @@ class BibliographyReferenceRead(BaseModel):
     abstract: str | None = None
     bibtex_raw: str | None = None
     tags: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
     visibility: str
     created_by_user_id: str | None = None
     attachment_filename: str | None = None
     attachment_url: str | None = None
     document_status: str | None = None
+    warning: str | None = None
     linked_project_count: int = 0
     note_count: int = 0
     reading_status: str = "unread"
+    ai_summary: str | None = None
+    ai_summary_at: datetime | None = None
     semantic_evidence: list[BibliographySemanticEvidenceRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -252,6 +256,39 @@ class BibliographyDuplicateMatchRead(BaseModel):
 
 class BibliographyDuplicateCheckRead(BaseModel):
     matches: list[BibliographyDuplicateMatchRead] = Field(default_factory=list)
+
+
+class BibliographyGraphRequest(BaseModel):
+    reference_ids: list[str] = Field(default_factory=list)
+    include_authors: bool = True
+    include_concepts: bool = True
+    include_tags: bool = False
+    include_semantic: bool = True
+    include_bibliography_collections: bool = True
+    include_research_links: bool = True
+    include_teaching_links: bool = True
+    semantic_threshold: float = 0.78
+    semantic_top_k: int = 3
+
+
+class BibliographyGraphNodeRead(BaseModel):
+    id: str
+    label: str
+    node_type: str
+    ref_id: str | None = None
+
+
+class BibliographyGraphEdgeRead(BaseModel):
+    id: str
+    source: str
+    target: str
+    edge_type: str
+    weight: float | None = None
+
+
+class BibliographyGraphRead(BaseModel):
+    nodes: list[BibliographyGraphNodeRead] = Field(default_factory=list)
+    edges: list[BibliographyGraphEdgeRead] = Field(default_factory=list)
 
 
 class BibliographyCollectionCreate(BaseModel):

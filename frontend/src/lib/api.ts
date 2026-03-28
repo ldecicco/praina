@@ -56,6 +56,7 @@ import type {
   DashboardScopeOptions,
   SearchResponse,
   BibliographyDuplicateMatch,
+  BibliographyGraph,
   BibliographyNote,
   BibliographyReference,
   BibliographyCollection,
@@ -2355,6 +2356,23 @@ export const api = {
       body: JSON.stringify(data),
     });
   },
+  buildBibliographyGraph(data: {
+    reference_ids: string[];
+    include_authors?: boolean;
+    include_concepts?: boolean;
+    include_tags?: boolean;
+    include_semantic?: boolean;
+    include_bibliography_collections?: boolean;
+    include_research_links?: boolean;
+    include_teaching_links?: boolean;
+    semantic_threshold?: number;
+    semantic_top_k?: number;
+  }): Promise<BibliographyGraph> {
+    return request("/bibliography/graph", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
   uploadGlobalBibliographyAttachment(bibliographyReferenceId: string, sourceProjectId: string, file: File): Promise<BibliographyReference> {
     const formData = new FormData();
     formData.append("file", file);
@@ -2368,6 +2386,12 @@ export const api = {
     if (sourceProjectId) query.set("source_project_id", sourceProjectId);
     const suffix = query.toString() ? `?${query.toString()}` : "";
     return request(`/bibliography/${bibliographyReferenceId}/ingest${suffix}`, { method: "POST" });
+  },
+  extractGlobalBibliographyAbstract(bibliographyReferenceId: string): Promise<BibliographyReference> {
+    return request(`/bibliography/${bibliographyReferenceId}/extract-abstract`, { method: "POST" });
+  },
+  extractGlobalBibliographyConcepts(bibliographyReferenceId: string): Promise<BibliographyReference> {
+    return request(`/bibliography/${bibliographyReferenceId}/extract-concepts`, { method: "POST" });
   },
   getGlobalBibliographyAttachment(bibliographyReferenceId: string): Promise<Blob> {
     return requestBlob(`/bibliography/${bibliographyReferenceId}/file`);
@@ -2445,6 +2469,9 @@ export const api = {
 
   summarizeReference(projectId: string, refId: string): Promise<{ ai_summary: string; ai_summary_at: string }> {
     return request(`/projects/${projectId}/research/references/${refId}/summarize`, { method: "POST" });
+  },
+  summarizeBibliographyReference(bibliographyReferenceId: string): Promise<{ ai_summary: string; ai_summary_at: string }> {
+    return request(`/bibliography/${bibliographyReferenceId}/summarize`, { method: "POST" });
   },
   extractPdfMetadata(projectId: string, documentKey: string): Promise<{ title: string | null; authors: string[]; year: number | null; venue: string | null; abstract: string | null }> {
     return request(`/projects/${projectId}/research/references/extract-from-pdf?document_key=${documentKey}`, { method: "POST" });

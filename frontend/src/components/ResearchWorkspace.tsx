@@ -15,6 +15,7 @@ import {
   faMagicWandSparkles,
   faPen,
   faPlus,
+  faShareNodes,
   faTrash,
   faUsers,
   faXmark,
@@ -22,6 +23,7 @@ import {
 
 import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import type {
   BibliographyCollection,
   BibliographyDuplicateMatch,
@@ -286,6 +288,10 @@ export function ResearchWorkspace({
   const [bibliographyPreview, setBibliographyPreview] = useState<{ title: string; filename: string; url: string } | null>(null);
   const [openingBibliographyAttachmentId, setOpeningBibliographyAttachmentId] = useState<string | null>(null);
   const [ingestingBibliographyId, setIngestingBibliographyId] = useState<string | null>(null);
+  const [extractingBibliographyAbstractId, setExtractingBibliographyAbstractId] = useState<string | null>(null);
+  const [extractingBibliographyConceptsId, setExtractingBibliographyConceptsId] = useState<string | null>(null);
+  const [bibliographyGraphOpen, setBibliographyGraphOpen] = useState(false);
+  const [bibliographyGraphReferences, setBibliographyGraphReferences] = useState<BibliographyReference[]>([]);
 
   const activeCollections = collections.filter((item) => item.status === "active");
   const archivedCollections = collections.filter((item) => item.status !== "active");
@@ -1000,6 +1006,11 @@ export function ResearchWorkspace({
 
   async function handleSummarize(referenceId: string) {
     if (!selectedProjectId) return;
+    const reference = references.find((item) => item.id === referenceId) ?? allReferences.find((item) => item.id === referenceId);
+    if (reference?.bibliography_reference_id) {
+      await handleSummarizeBibliography(reference.bibliography_reference_id);
+      return;
+    }
     setSummarizingId(referenceId);
     setError("");
     setStatus("");
@@ -1016,6 +1027,78 @@ export function ResearchWorkspace({
       setError(err instanceof Error ? err.message : "Summarization failed");
     } finally {
       setSummarizingId(null);
+    }
+  }
+
+  async function handleSummarizeBibliography(bibliographyReferenceId: string) {
+    setSummarizingId(bibliographyReferenceId);
+    setError("");
+    setStatus("");
+    try {
+      const result = await api.summarizeBibliographyReference(bibliographyReferenceId);
+      setBibliography((items) =>
+        items.map((item) => (item.id === bibliographyReferenceId ? { ...item, ai_summary: result.ai_summary, ai_summary_at: result.ai_summary_at } : item))
+      );
+      setReferences((items) =>
+        items.map((item) =>
+          item.bibliography_reference_id === bibliographyReferenceId ? { ...item, ai_summary: result.ai_summary, ai_summary_at: result.ai_summary_at } : item
+        )
+      );
+      setAllReferences((items) =>
+        items.map((item) =>
+          item.bibliography_reference_id === bibliographyReferenceId ? { ...item, ai_summary: result.ai_summary, ai_summary_at: result.ai_summary_at } : item
+        )
+      );
+      setStatus("Paper summarized.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Summarization failed");
+    } finally {
+      setSummarizingId(null);
+    }
+  }
+
+  async function handleExtractBibliographyAbstract(bibliographyReferenceId: string) {
+    setExtractingBibliographyAbstractId(bibliographyReferenceId);
+    setError("");
+    setStatus("");
+    try {
+      const result = await api.extractGlobalBibliographyAbstract(bibliographyReferenceId);
+      setBibliography((items) => items.map((item) => (item.id === bibliographyReferenceId ? result : item)));
+      setReferences((items) =>
+        items.map((item) =>
+          item.bibliography_reference_id === bibliographyReferenceId
+            ? { ...item, abstract: result.abstract || item.abstract }
+            : item
+        )
+      );
+      setAllReferences((items) =>
+        items.map((item) =>
+          item.bibliography_reference_id === bibliographyReferenceId
+            ? { ...item, abstract: result.abstract || item.abstract }
+            : item
+        )
+      );
+      setBibliographyAbstract(result.abstract || "");
+      setStatus(result.abstract ? "Abstract extracted." : result.warning || "Abstract not found.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to extract abstract");
+    } finally {
+      setExtractingBibliographyAbstractId(null);
+    }
+  }
+
+  async function handleExtractBibliographyConcepts(bibliographyReferenceId: string) {
+    setExtractingBibliographyConceptsId(bibliographyReferenceId);
+    setError("");
+    setStatus("");
+    try {
+      const result = await api.extractGlobalBibliographyConcepts(bibliographyReferenceId);
+      setBibliography((items) => items.map((item) => (item.id === bibliographyReferenceId ? result : item)));
+      setStatus(result.concepts.length > 0 ? "Concepts extracted." : "No concepts extracted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to extract concepts");
+    } finally {
+      setExtractingBibliographyConceptsId(null);
     }
   }
 
@@ -1081,10 +1164,11 @@ export function ResearchWorkspace({
         bibliographyModalMode === "create"
           ? await api.createGlobalBibliography(payload)
           : await api.updateGlobalBibliography(editingBibliographyId!, payload);
+      let finalItem = item;
       if (bibliographyAttachmentFile) {
         if (!selectedProjectId) throw new Error("Select a project before attaching a PDF.");
         if (!item.attachment_url || options?.allowDuplicate) {
-          await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
+          finalItem = await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
         }
       }
       await Promise.all([loadBibliography(), loadBibliographyTags()]);
@@ -1093,11 +1177,12 @@ export function ResearchWorkspace({
       setBibliographyDuplicateMatches([]);
       resetBibliographyForm();
       setStatus(
-        bibliographyModalMode === "create"
+        finalItem.warning ||
+        (bibliographyModalMode === "create"
           ? options?.reuseExistingId
             ? "Existing paper reused."
             : "Paper added."
-          : "Paper updated."
+          : "Paper updated.")
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save paper");
@@ -1147,7 +1232,8 @@ export function ResearchWorkspace({
         errors: result.errors,
       });
       await Promise.all([loadBibliography(), loadBibliographyTags()]);
-      setStatus("Import completed.");
+      const abstractWarning = [...result.created, ...result.reused].find((item) => item.warning)?.warning;
+      setStatus(abstractWarning || "Import completed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Identifier import failed");
     } finally {
@@ -1492,6 +1578,55 @@ export function ResearchWorkspace({
     }
   }
 
+  function buildBibliographyFallbackReference(reference: ResearchReference): BibliographyReference {
+    return (
+      bibliography.find((item) => item.id === reference.bibliography_reference_id) || {
+        id: reference.bibliography_reference_id || reference.id,
+        source_project_id: null,
+        document_key: reference.document_key,
+        title: reference.title,
+        authors: reference.authors,
+        year: reference.year,
+        venue: reference.venue,
+        doi: reference.doi,
+        url: reference.url,
+        abstract: reference.abstract,
+        bibtex_raw: null,
+        tags: reference.tags,
+        concepts: [],
+        visibility: reference.bibliography_visibility || "shared",
+        created_by_user_id: null,
+        attachment_filename: reference.bibliography_attachment_filename,
+        attachment_url: reference.bibliography_attachment_url,
+        document_status: reference.document_key ? "indexed" : "no_pdf",
+        warning: null,
+        linked_project_count: 0,
+        note_count: 0,
+        reading_status: reference.reading_status,
+        ai_summary: reference.ai_summary,
+        ai_summary_at: reference.ai_summary_at,
+        semantic_evidence: [],
+        created_at: reference.created_at,
+        updated_at: reference.updated_at,
+      }
+    );
+  }
+
+  function openBibliographyGraph(referencesToGraph: BibliographyReference[]) {
+    setBibliographyGraphReferences(referencesToGraph);
+    setBibliographyGraphOpen(true);
+  }
+
+  async function handleOpenBibliographyCollectionGraph(collectionId: string) {
+    try {
+      setError("");
+      const response = await api.listGlobalBibliography({ bibliography_collection_id: collectionId, page_size: 100 });
+      openBibliographyGraph(response.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load collection graph.");
+    }
+  }
+
   async function handleIngestBibliographyAttachment(item: BibliographyReference) {
     const documentStatus = item.document_status || "";
     if (!["uploaded", "failed", "pending"].includes(documentStatus)) return;
@@ -1737,7 +1872,7 @@ export function ResearchWorkspace({
             <strong>{collectionDetail.title}</strong>
             <span className={`chip small ${collectionDetail.status === "active" ? "status-ok" : ""}`}>{collectionDetail.status}</span>
             <span className="chip small">{collectionDetail.output_status.replace(/_/g, " ")}</span>
-            <span className="muted-small">{collectionDetail.reference_count} refs</span>
+            <span className="muted-small">{collectionDetail.reference_count} linked papers</span>
             <span className="setup-summary-sep" />
             <span className="muted-small">{collectionDetail.note_count} notes</span>
             <span className="setup-summary-sep" />
@@ -1745,12 +1880,6 @@ export function ResearchWorkspace({
           </div>
           {collectionDetail.hypothesis ? <p className="muted-small research-hypothesis">{collectionDetail.hypothesis}</p> : null}
           <div className="research-header-actions">
-            <button type="button" className="meetings-new-btn" onClick={() => openCreateReferenceModal("manual")}>
-              <FontAwesomeIcon icon={faPlus} /> Add Reference
-            </button>
-            <button type="button" className="meetings-new-btn" onClick={() => openCreateReferenceModal("pdf")}>
-              <FontAwesomeIcon icon={faFileArrowUp} /> Upload PDF
-            </button>
             <button type="button" className="meetings-new-btn" onClick={openCreateNoteModal}>
               <FontAwesomeIcon icon={faPlus} /> Add Note
             </button>
@@ -1772,7 +1901,7 @@ export function ResearchWorkspace({
 
       {!bibliographyOnly ? <div className="delivery-tabs">
         <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
-          References <span className="delivery-tab-count">{references.length}</span>
+          Linked Papers <span className="delivery-tab-count">{references.length}</span>
         </button>
         <button className={`delivery-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
           Notes <span className="delivery-tab-count">{notes.length}</span>
@@ -1781,24 +1910,14 @@ export function ResearchWorkspace({
           Overview
         </button>
         {tab === "references" ? (
-          <>
-            <button
-              type="button"
-              className="meetings-new-btn delivery-tab-action"
-              onClick={openBibliographyPicker}
-              disabled={!selectedCollectionId}
-            >
-              <FontAwesomeIcon icon={faFileImport} /> Import
-            </button>
-            <button
-              type="button"
-              className="meetings-new-btn delivery-tab-action"
-              onClick={() => openCreateReferenceModal("manual")}
-              disabled={!selectedCollectionId}
-            >
-              <FontAwesomeIcon icon={faPlus} /> Add Reference
-            </button>
-          </>
+          <button
+            type="button"
+            className="meetings-new-btn delivery-tab-action"
+            onClick={openBibliographyPicker}
+            disabled={!selectedCollectionId}
+          >
+            <FontAwesomeIcon icon={faFileImport} /> Import
+          </button>
         ) : null}
         {tab === "notes" ? (
           <button
@@ -1823,6 +1942,23 @@ export function ResearchWorkspace({
       {bibliographyModalOpen ? renderBibliographyModal() : null}
       {bibliographyDuplicateModalOpen ? renderBibliographyDuplicateModal() : null}
       {bibliographyPreview ? renderBibliographyPreviewModal() : null}
+      {bibliographyGraphOpen ? (
+        <BibliographyGraphModal
+          references={bibliographyGraphReferences}
+          onClose={() => {
+            setBibliographyGraphOpen(false);
+            setBibliographyGraphReferences([]);
+          }}
+          onOpenPaper={(reference) => {
+            setBibliographyGraphOpen(false);
+            openEditBibliographyModal(reference);
+          }}
+          onOpenAttachment={(reference) => {
+            void handleOpenBibliographyAttachment(reference);
+          }}
+          openingAttachmentId={openingBibliographyAttachmentId}
+        />
+      ) : null}
       {bibliographyCollectionModalOpen ? renderBibliographyCollectionModal() : null}
       {addToCollectionModalOpen ? renderAddToCollectionModal() : null}
       {!bibliographyOnly && bibliographyPickerOpen ? renderBibliographyPickerModal() : null}
@@ -1834,8 +1970,12 @@ export function ResearchWorkspace({
 
   function renderReferencesTab() {
     if (!selectedCollectionId) {
-      return <p className="empty-message">Select a collection to add and manage references.</p>;
+      return <p className="empty-message">Select a collection to import and manage linked papers.</p>;
     }
+
+    const linkedBibliographyReferences = references
+      .filter((item) => item.bibliography_reference_id)
+      .map((item) => buildBibliographyFallbackReference(item));
 
     return (
       <>
@@ -1851,25 +1991,31 @@ export function ResearchWorkspace({
             <input
               className="meetings-search"
               type="text"
-              placeholder="Search references"
+              placeholder="Search linked papers"
               value={refSearch}
               onChange={(event) => setRefSearch(event.target.value)}
             />
+            <button
+              type="button"
+              className="ghost icon-text-button small"
+              disabled={linkedBibliographyReferences.length === 0}
+              onClick={() => openBibliographyGraph(linkedBibliographyReferences)}
+            >
+              <FontAwesomeIcon icon={faShareNodes} /> Show Graph
+            </button>
           </div>
         </div>
 
         {references.length === 0 ? (
-          <p className="empty-message">No references in this collection.</p>
+          <p className="empty-message">No linked papers in this collection.</p>
         ) : (
           <div className="simple-table-wrap">
             <table className="simple-table compact-table">
               <thead>
                 <tr>
-                  <th>Title</th>
+                  <th>Paper</th>
                   <th>Year</th>
                   <th>Status</th>
-                  <th>Source</th>
-                  <th className="col-icon" />
                   <th className="col-icon" />
                   <th className="col-icon" />
                 </tr>
@@ -1923,22 +2069,17 @@ export function ResearchWorkspace({
                       </select>
                     </td>
                     <td>
-                      <span className="muted-small">{reference.document_key ? "PDF" : "Manual"}</span>
-                    </td>
-                    <td className="col-icon">
                       <button
                         type="button"
                         className="ghost docs-action-btn"
-                        title="Summarize"
-                        disabled={summarizingId === reference.id}
-                        onClick={() => handleSummarize(reference.id)}
+                        title={reference.bibliography_reference_id ? "Open paper" : "Edit reference"}
+                        onClick={() =>
+                          reference.bibliography_reference_id
+                            ? openEditBibliographyModal(buildBibliographyFallbackReference(reference))
+                            : openEditReferenceModal(reference)
+                        }
                       >
-                        <FontAwesomeIcon icon={faMagicWandSparkles} spin={summarizingId === reference.id} />
-                      </button>
-                    </td>
-                    <td className="col-icon">
-                      <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEditReferenceModal(reference)}>
-                        <FontAwesomeIcon icon={faPen} />
+                        <FontAwesomeIcon icon={reference.bibliography_reference_id ? faBookOpen : faPen} />
                       </button>
                     </td>
                     <td className="col-icon">
@@ -2000,6 +2141,14 @@ export function ResearchWorkspace({
               >
                 <FontAwesomeIcon icon={faFilter} />
               </button>
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                onClick={() => openBibliographyGraph(filteredBibliography)}
+                disabled={filteredBibliography.length === 0}
+              >
+                <FontAwesomeIcon icon={faShareNodes} /> Show Graph
+              </button>
               <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyModal}>
                 <FontAwesomeIcon icon={faPlus} /> Add Paper
               </button>
@@ -2017,7 +2166,7 @@ export function ResearchWorkspace({
   }
 
   function renderBibliographyPapersView() {
-    const totalColSpan = bibliographyOnly ? 5 : 6;
+    const totalColSpan = bibliographyOnly ? 6 : 7;
     return (
       <>
         {selectedBibIds.size > 0 ? (
@@ -2097,6 +2246,7 @@ export function ResearchWorkspace({
                   <th>Title</th>
                   <th>Year</th>
                   <th>Status</th>
+                  <th className="col-icon" />
                   {!bibliographyOnly ? <th className="col-icon" /> : null}
                   <th className="col-icon" />
                 </tr>
@@ -2195,6 +2345,17 @@ export function ResearchWorkspace({
                           <option value="reviewed">Reviewed</option>
                         </select>
                       </td>
+                      <td className="col-icon" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="ghost docs-action-btn"
+                          title="Summarize"
+                          disabled={summarizingId === item.id}
+                          onClick={() => void handleSummarizeBibliography(item.id)}
+                        >
+                          <FontAwesomeIcon icon={faMagicWandSparkles} spin={summarizingId === item.id} />
+                        </button>
+                      </td>
                       {!bibliographyOnly ? (
                         <td className="col-icon" onClick={(event) => event.stopPropagation()}>
                           <button
@@ -2216,6 +2377,39 @@ export function ResearchWorkspace({
                       <tr className="bib-expanded-row">
                         <td colSpan={totalColSpan}>
                           <div className="bib-expanded-content">
+                            {item.ai_summary ? (() => {
+                              const summary = parseSummaryPayload(item.ai_summary);
+                              return (
+                                <details className="research-inline-summary" open>
+                                  <summary>AI Summary</summary>
+                                  {summary?.summary ? <p>{summary.summary}</p> : <p>{item.ai_summary}</p>}
+                                  {summary?.contributions?.length ? (
+                                    <div className="research-bullet-stack">
+                                      {summary.contributions.slice(0, 3).map((entry) => (
+                                        <span key={entry} className="chip small">{entry}</span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                  {summary?.results?.length ? (
+                                    <div className="research-bullet-stack">
+                                      {summary.results.slice(0, 3).map((entry) => (
+                                        <span key={entry} className="chip small">{entry}</span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </details>
+                              );
+                            })() : null}
+                            {item.concepts.length > 0 ? (
+                              <details className="research-inline-summary" open>
+                                <summary>Concepts</summary>
+                                <div className="research-chip-group">
+                                  {item.concepts.map((concept) => (
+                                    <span key={`${item.id}-concept-${concept}`} className="chip small">{concept}</span>
+                                  ))}
+                                </div>
+                              </details>
+                            ) : null}
                             {item.abstract ? (
                               <div className="bib-abstract-section">
                                 <span className="bib-section-label">Abstract</span>
@@ -2328,6 +2522,7 @@ export function ResearchWorkspace({
                   {currentProject ? <th>Import</th> : null}
                   <th className="col-icon" />
                   <th className="col-icon" />
+                  <th className="col-icon" />
                 </tr>
               </thead>
               <tbody>
@@ -2423,6 +2618,11 @@ export function ResearchWorkspace({
                         </div>
                       </td>
                     ) : null}
+                    <td className="col-icon">
+                      <button type="button" className="ghost docs-action-btn" title="Show Graph" onClick={() => void handleOpenBibliographyCollectionGraph(item.id)}>
+                        <FontAwesomeIcon icon={faShareNodes} />
+                      </button>
+                    </td>
                     <td className="col-icon">
                       <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEditBibliographyCollectionModal(item)}>
                         <FontAwesomeIcon icon={faPen} />
@@ -3269,6 +3469,9 @@ export function ResearchWorkspace({
     const isBatchMode = isCreate && bibliographyCreateTab === "batch";
     const isBibtexMode = isCreate && bibliographyCreateTab === "manual" && bibliographyBibtexInput.trim();
     const canSave = isBatchMode ? bibliographyIdentifierInput.trim() : (isBibtexMode || bibliographyTitle.trim());
+    const editingBibliography = editingBibliographyId ? bibliography.find((item) => item.id === editingBibliographyId) ?? null : null;
+    const canExtractAbstract = !isCreate && !bibliographyAbstract.trim() && !!editingBibliography && editingBibliography.document_status !== "no_pdf";
+    const canExtractConcepts = !isCreate && !!editingBibliography && !!bibliographyAbstract.trim();
 
     return (
       <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setBibliographyModalOpen(false)}>
@@ -3487,8 +3690,45 @@ export function ResearchWorkspace({
               {/* Right: abstract fills full height */}
               <div className="bib-modal-col">
                 <label className="bib-abstract-label">
-                  Abstract
+                  <span className="bib-abstract-head">
+                    <span>Abstract</span>
+                    <span className="bib-abstract-actions">
+                      {canExtractAbstract ? (
+                        <button
+                          type="button"
+                          className="ghost docs-action-btn"
+                          disabled={extractingBibliographyAbstractId === editingBibliographyId}
+                          onClick={() => void handleExtractBibliographyAbstract(editingBibliographyId!)}
+                        >
+                          <FontAwesomeIcon icon={faMagicWandSparkles} spin={extractingBibliographyAbstractId === editingBibliographyId} />
+                          {extractingBibliographyAbstractId === editingBibliographyId ? "Extracting..." : "Extract"}
+                        </button>
+                      ) : null}
+                      {canExtractConcepts ? (
+                        <button
+                          type="button"
+                          className="ghost docs-action-btn"
+                          disabled={extractingBibliographyConceptsId === editingBibliographyId}
+                          onClick={() => void handleExtractBibliographyConcepts(editingBibliographyId!)}
+                        >
+                          <FontAwesomeIcon icon={faMagicWandSparkles} spin={extractingBibliographyConceptsId === editingBibliographyId} />
+                          {extractingBibliographyConceptsId === editingBibliographyId
+                            ? "Extracting..."
+                            : editingBibliography?.concepts.length
+                              ? "Re-extract Concepts"
+                              : "Extract Concepts"}
+                        </button>
+                      ) : null}
+                    </span>
+                  </span>
                   <textarea className="bib-abstract-fill" value={bibliographyAbstract} onChange={(event) => setBibliographyAbstract(event.target.value)} placeholder="Paper abstract…" />
+                  {editingBibliography?.concepts.length ? (
+                    <span className="research-chip-group bib-concept-list">
+                      {editingBibliography.concepts.map((concept) => (
+                        <span key={`${editingBibliography.id}-modal-concept-${concept}`} className="chip small">{concept}</span>
+                      ))}
+                    </span>
+                  ) : null}
                 </label>
               </div>
             </div>

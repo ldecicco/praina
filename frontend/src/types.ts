@@ -1241,14 +1241,18 @@ export type BibliographyReference = {
   abstract: string | null;
   bibtex_raw: string | null;
   tags: string[];
+  concepts: string[];
   visibility: string;
   created_by_user_id: string | null;
   attachment_filename: string | null;
   attachment_url: string | null;
   document_status: string | null;
+  warning: string | null;
   linked_project_count: number;
   note_count: number;
   reading_status: string;
+  ai_summary: string | null;
+  ai_summary_at: string | null;
   semantic_evidence: BibliographySemanticEvidence[];
   created_at: string;
   updated_at: string;
@@ -1262,6 +1266,44 @@ export type BibliographySemanticEvidence = {
 export type BibliographyDuplicateMatch = {
   match_reason: string;
   reference: BibliographyReference;
+};
+
+export type BibliographyGraphNode = {
+  id: string;
+  label: string;
+  node_type:
+    | "paper"
+    | "author"
+    | "concept"
+    | "tag"
+    | "bibliography_collection"
+    | "research_collection"
+    | "research_project"
+    | "teaching_project"
+    | string;
+  ref_id: string | null;
+};
+
+export type BibliographyGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  edge_type:
+    | "written_by"
+    | "mentions_concept"
+    | "tagged"
+    | "semantic"
+    | "in_bibliography_collection"
+    | "linked_to_research_collection"
+    | "used_in_teaching_project"
+    | "contains_collection"
+    | string;
+  weight: number | null;
+};
+
+export type BibliographyGraph = {
+  nodes: BibliographyGraphNode[];
+  edges: BibliographyGraphEdge[];
 };
 
 export type BibliographyIdentifierImportResult = {

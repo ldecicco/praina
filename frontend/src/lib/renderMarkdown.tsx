@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 function renderInlineMarkdown(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g;
+  const pattern = /(@\[([^\]]+)\]|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g;
   let cursor = 0;
   let key = 0;
 
@@ -11,8 +11,12 @@ function renderInlineMarkdown(text: string): ReactNode[] {
     if (start > cursor) {
       nodes.push(text.slice(cursor, start));
     }
-    if (match[2] && match[3]) {
-      const href = match[3];
+    if (match[2]) {
+      nodes.push(
+        <span key={`markdown-inline-${key++}`} className="mention-chip">{match[2]}</span>
+      );
+    } else if (match[3] && match[4]) {
+      const href = match[4];
       const external = /^https?:\/\//.test(href);
       nodes.push(
         <a
@@ -21,21 +25,21 @@ function renderInlineMarkdown(text: string): ReactNode[] {
           target={external ? "_blank" : undefined}
           rel={external ? "noreferrer" : undefined}
         >
-          {match[2]}
-        </a>
-      );
-    } else if (match[4]) {
-      nodes.push(
-        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[4]}`}>
-          [{match[4]}]
+          {match[3]}
         </a>
       );
     } else if (match[5]) {
-      nodes.push(<strong key={`markdown-inline-${key++}`}>{match[5]}</strong>);
+      nodes.push(
+        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[5]}`}>
+          [{match[5]}]
+        </a>
+      );
     } else if (match[6]) {
-      nodes.push(<em key={`markdown-inline-${key++}`}>{match[6]}</em>);
+      nodes.push(<strong key={`markdown-inline-${key++}`}>{match[6]}</strong>);
     } else if (match[7]) {
-      nodes.push(<code key={`markdown-inline-${key++}`}>{match[7]}</code>);
+      nodes.push(<em key={`markdown-inline-${key++}`}>{match[7]}</em>);
+    } else if (match[8]) {
+      nodes.push(<code key={`markdown-inline-${key++}`}>{match[8]}</code>);
     }
     cursor = start + match[0].length;
   }

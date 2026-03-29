@@ -74,6 +74,7 @@ from app.schemas.research import (
     ReferenceRead,
     ReferenceStatusPayload,
     ReferenceUpdate,
+    ResultComparisonRead,
     WbsLinksPayload,
     WbsLinksRead,
 )
@@ -157,7 +158,18 @@ def create_collection(
             status=payload.status,
             tags=payload.tags,
             overleaf_url=payload.overleaf_url,
+            paper_motivation=payload.paper_motivation,
             target_output_title=payload.target_output_title,
+            target_venue=payload.target_venue,
+            registration_deadline=payload.registration_deadline,
+            submission_deadline=payload.submission_deadline,
+            decision_date=payload.decision_date,
+            study_iterations=[item.model_dump(mode="json") for item in payload.study_iterations],
+            study_results=[item.model_dump(mode="json") for item in payload.study_results],
+            paper_authors=[item.model_dump(mode="json") for item in payload.paper_authors],
+            paper_questions=[item.model_dump(mode="json") for item in payload.paper_questions],
+            paper_claims=[item.model_dump(mode="json") for item in payload.paper_claims],
+            paper_sections=[item.model_dump(mode="json") for item in payload.paper_sections],
             output_status=payload.output_status,
             created_by_member_id=member_id,
         )
@@ -211,13 +223,243 @@ def update_collection(
             status=payload.status,
             tags=payload.tags,
             overleaf_url=payload.overleaf_url,
+            paper_motivation=payload.paper_motivation,
             target_output_title=payload.target_output_title,
+            target_venue=payload.target_venue,
+            registration_deadline=payload.registration_deadline,
+            submission_deadline=payload.submission_deadline,
+            decision_date=payload.decision_date,
+            study_iterations=[item.model_dump(mode="json") for item in payload.study_iterations] if payload.study_iterations is not None else None,
+            study_results=[item.model_dump(mode="json") for item in payload.study_results] if payload.study_results is not None else None,
+            paper_authors=[item.model_dump(mode="json") for item in payload.paper_authors] if payload.paper_authors is not None else None,
+            paper_questions=[item.model_dump(mode="json") for item in payload.paper_questions] if payload.paper_questions is not None else None,
+            paper_claims=[item.model_dump(mode="json") for item in payload.paper_claims] if payload.paper_claims is not None else None,
+            paper_sections=[item.model_dump(mode="json") for item in payload.paper_sections] if payload.paper_sections is not None else None,
             output_status=payload.output_status,
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     return _collection_read(svc, item)
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/paper/audit-claims", response_model=CollectionDetailRead)
+def audit_collection_paper_claims(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> CollectionDetailRead:
+    from app.agents.paper_claim_audit_agent import PaperClaimAuditAgent
+
+    svc = ResearchService(db)
+    try:
+        audits = PaperClaimAuditAgent().audit_collection_claims(project_id, collection_id, db)
+        item = svc.apply_paper_claim_audits(
+            project_id,
+            collection_id,
+            audits=[
+                {
+                    "claim_id": audit.claim_id,
+                    "audit_status": audit.audit_status,
+                    "audit_summary": audit.audit_summary,
+                    "supporting_reference_ids": audit.supporting_reference_ids,
+                    "supporting_note_ids": audit.supporting_note_ids,
+                    "missing_evidence": audit.missing_evidence,
+                    "audit_confidence": audit.audit_confidence,
+                    "audited_at": audit.audited_at,
+                }
+                for audit in audits
+            ],
+        )
+        members_data = svc.list_collection_members(project_id, collection_id)
+        wbs = svc.get_wbs_links(project_id, collection_id)
+        meetings = svc.list_collection_meetings(project_id, collection_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Claim audit failed: {exc}") from exc
+    read = _collection_read(svc, item)
+    return CollectionDetailRead(
+        **read.model_dump(),
+        members=[_member_read(d) for d in members_data],
+        wp_ids=wbs["wp_ids"],
+        task_ids=wbs["task_ids"],
+        deliverable_ids=wbs["deliverable_ids"],
+        meetings=[_meeting_read(item) for item in meetings],
+    )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/paper/build-outline", response_model=CollectionDetailRead)
+def build_collection_paper_outline(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> CollectionDetailRead:
+    from app.agents.paper_outline_agent import PaperOutlineAgent
+
+    svc = ResearchService(db)
+    try:
+        sections = PaperOutlineAgent().build_collection_outline(project_id, collection_id, db)
+        item = svc.update_collection(
+            project_id,
+            collection_id,
+            paper_sections=[
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": section.title,
+                    "question_ids": section.question_ids,
+                    "claim_ids": section.claim_ids,
+                    "reference_ids": section.reference_ids,
+                    "note_ids": section.note_ids,
+                    "status": section.status,
+                }
+                for section in sections
+            ],
+        )
+        members_data = svc.list_collection_members(project_id, collection_id)
+        wbs = svc.get_wbs_links(project_id, collection_id)
+        meetings = svc.list_collection_meetings(project_id, collection_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Outline build failed: {exc}") from exc
+    read = _collection_read(svc, item)
+    return CollectionDetailRead(
+        **read.model_dump(),
+        members=[_member_read(d) for d in members_data],
+        wp_ids=wbs["wp_ids"],
+        task_ids=wbs["task_ids"],
+        deliverable_ids=wbs["deliverable_ids"],
+        meetings=[_meeting_read(item) for item in meetings],
+    )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/paper/draft-from-gap", response_model=CollectionDetailRead)
+def draft_collection_paper_from_gap(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> CollectionDetailRead:
+    from app.agents.paper_gap_agent import PaperGapAgent
+
+    svc = ResearchService(db)
+    try:
+        current = svc.get_collection(project_id, collection_id)
+        draft = PaperGapAgent().build_gap_draft(project_id, collection_id, db)
+        existing_questions = [item for item in (current.paper_questions or []) if isinstance(item, dict)]
+        existing_texts = {
+            " ".join(str(item.get("text") or "").strip().lower().split())
+            for item in existing_questions
+            if str(item.get("text") or "").strip()
+        }
+        next_questions = list(existing_questions)
+        for text in draft.questions:
+            normalized = " ".join(text.strip().lower().split())
+            if not normalized or normalized in existing_texts:
+                continue
+            existing_texts.add(normalized)
+            next_questions.append({"id": str(uuid.uuid4()), "text": text, "note_ids": []})
+        item = svc.update_collection(
+            project_id,
+            collection_id,
+            paper_motivation=draft.motivation or current.paper_motivation,
+            paper_questions=next_questions,
+        )
+        members_data = svc.list_collection_members(project_id, collection_id)
+        wbs = svc.get_wbs_links(project_id, collection_id)
+        meetings = svc.list_collection_meetings(project_id, collection_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Gap draft failed: {exc}") from exc
+    read = _collection_read(svc, item)
+    return CollectionDetailRead(
+        **read.model_dump(),
+        members=[_member_read(d) for d in members_data],
+        wp_ids=wbs["wp_ids"],
+        task_ids=wbs["task_ids"],
+        deliverable_ids=wbs["deliverable_ids"],
+        meetings=[_meeting_read(item) for item in meetings],
+    )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/iterations/{iteration_id}/review", response_model=CollectionDetailRead)
+def review_collection_iteration(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    iteration_id: str,
+    db: Session = Depends(get_db),
+) -> CollectionDetailRead:
+    from app.agents.iteration_review_agent import IterationReviewAgent
+
+    svc = ResearchService(db)
+    try:
+        current = svc.get_collection(project_id, collection_id)
+        iterations = [item for item in (current.study_iterations or []) if isinstance(item, dict)]
+        target = next((item for item in iterations if str(item.get("id") or "") == iteration_id), None)
+        if not target:
+            raise NotFoundError("Iteration not found.")
+        review = IterationReviewAgent().review_iteration(project_id, collection_id, target, db)
+        next_iterations = []
+        for item in iterations:
+            if str(item.get("id") or "") != iteration_id:
+                next_iterations.append(item)
+                continue
+            merged = dict(item)
+            merged["summary"] = review.summary
+            merged["what_changed"] = review.what_changed
+            merged["improvements"] = review.improvements
+            merged["regressions"] = review.regressions
+            merged["unclear_points"] = review.unclear_points
+            merged["next_actions"] = review.next_actions
+            merged["reviewed_at"] = review.reviewed_at
+            next_iterations.append(merged)
+        item = svc.update_collection(project_id, collection_id, study_iterations=next_iterations)
+        members_data = svc.list_collection_members(project_id, collection_id)
+        wbs = svc.get_wbs_links(project_id, collection_id)
+        meetings = svc.list_collection_meetings(project_id, collection_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Iteration review failed: {exc}") from exc
+    read = _collection_read(svc, item)
+    return CollectionDetailRead(
+        **read.model_dump(),
+        members=[_member_read(d) for d in members_data],
+        wp_ids=wbs["wp_ids"],
+        task_ids=wbs["task_ids"],
+        deliverable_ids=wbs["deliverable_ids"],
+        meetings=[_meeting_read(item) for item in meetings],
+    )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/results/compare", response_model=ResultComparisonRead)
+def compare_collection_results(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> ResultComparisonRead:
+    from app.agents.result_comparison_agent import ResultComparisonAgent
+
+    try:
+        report = ResultComparisonAgent().compare_recent_results(project_id, collection_id, db)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Result comparison failed: {exc}") from exc
+    return ResultComparisonRead(**report.__dict__)
 
 
 @router.delete("/{project_id}/research/collections/{collection_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1545,6 +1787,7 @@ def update_reference_status(
 def list_notes(
     project_id: uuid.UUID,
     collection_id: str | None = Query(default=None),
+    lane: str | None = Query(default=None),
     note_type: str | None = Query(default=None),
     author_member_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -1556,6 +1799,7 @@ def list_notes(
         items, total = svc.list_notes(
             project_id,
             collection_id=uuid.UUID(collection_id) if collection_id else None,
+            lane=lane,
             note_type=note_type,
             author_member_id=uuid.UUID(author_member_id) if author_member_id else None,
             page=page,
@@ -1586,6 +1830,7 @@ def create_note(
             title=payload.title,
             content=payload.content,
             collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
+            lane=payload.lane,
             note_type=payload.note_type,
             tags=payload.tags,
             author_member_id=member_id,
@@ -1626,6 +1871,7 @@ def update_note(
             title=payload.title,
             content=payload.content,
             collection_id=payload.collection_id,
+            lane=payload.lane,
             note_type=payload.note_type,
             tags=payload.tags,
         )
@@ -1739,7 +1985,18 @@ def _collection_read(svc: ResearchService, item) -> CollectionRead:
         status=item.status.value if hasattr(item.status, "value") else str(item.status),
         tags=item.tags or [],
         overleaf_url=item.overleaf_url,
+        paper_motivation=item.paper_motivation,
         target_output_title=item.target_output_title,
+        target_venue=item.target_venue,
+        registration_deadline=item.registration_deadline,
+        submission_deadline=item.submission_deadline,
+        decision_date=item.decision_date,
+        study_iterations=item.study_iterations or [],
+        study_results=item.study_results or [],
+        paper_authors=item.paper_authors or [],
+        paper_questions=item.paper_questions or [],
+        paper_claims=item.paper_claims or [],
+        paper_sections=item.paper_sections or [],
         output_status=item.output_status.value if hasattr(item.output_status, "value") else str(item.output_status),
         created_by_member_id=str(item.created_by_member_id) if item.created_by_member_id else None,
         ai_synthesis=item.ai_synthesis,
@@ -1914,6 +2171,7 @@ def _note_read(svc: ResearchService, item) -> NoteRead:
         author_name=svc.get_author_name(item.author_member_id),
         title=item.title,
         content=item.content,
+        lane=item.lane,
         note_type=item.note_type.value if hasattr(item.note_type, "value") else str(item.note_type),
         tags=item.tags or [],
         linked_reference_ids=svc.get_note_reference_ids(item.id),

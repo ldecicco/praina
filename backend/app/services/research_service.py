@@ -7,6 +7,7 @@ import uuid
 import io
 from xml.etree import ElementTree as ET
 from pathlib import Path
+from datetime import date
 from typing import BinaryIO
 from urllib.parse import quote
 
@@ -107,6 +108,229 @@ class ResearchService:
             return OutputStatus(value)
         except ValueError as exc:
             raise ValidationError("Invalid output status.") from exc
+
+    @staticmethod
+    def _note_lane(value: str | None) -> str | None:
+        raw = " ".join(str(value or "").strip().lower().split())
+        if not raw:
+            return None
+        slug = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+        return slug[:32] or None
+
+    @staticmethod
+    def _paper_question_items(items: list[dict] | None, note_ids: set[str]) -> list[dict[str, object]]:
+        normalized: list[dict[str, object]] = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            text = str(raw.get("text") or "").strip()
+            if not text:
+                continue
+            note_refs = [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids]
+            normalized.append({
+                "id": str(raw.get("id") or uuid.uuid4()),
+                "text": text[:1000],
+                "note_ids": note_refs,
+            })
+        return normalized
+
+    @staticmethod
+    def _paper_claim_items(
+        items: list[dict] | None,
+        question_ids: set[str],
+        reference_ids: set[str],
+        note_ids: set[str],
+        result_ids: set[str],
+    ) -> list[dict[str, object]]:
+        normalized: list[dict[str, object]] = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            text = str(raw.get("text") or "").strip()
+            if not text:
+                continue
+            question_refs = [str(item) for item in (raw.get("question_ids") or []) if str(item) in question_ids]
+            reference_refs = [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids]
+            note_refs = [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids]
+            result_refs = [str(item) for item in (raw.get("result_ids") or []) if str(item) in result_ids]
+            supporting_reference_refs = [str(item) for item in (raw.get("supporting_reference_ids") or []) if str(item) in reference_ids]
+            supporting_note_refs = [str(item) for item in (raw.get("supporting_note_ids") or []) if str(item) in note_ids]
+            status = str(raw.get("status") or "draft").strip() or "draft"
+            audit_status = str(raw.get("audit_status") or "").strip() or None
+            audit_summary = str(raw.get("audit_summary") or "").strip() or None
+            missing_evidence = [
+                str(item).strip()[:255]
+                for item in (raw.get("missing_evidence") or [])
+                if str(item).strip()
+            ]
+            audit_confidence = raw.get("audit_confidence")
+            try:
+                audit_confidence_value = float(audit_confidence) if audit_confidence is not None else None
+            except (TypeError, ValueError):
+                audit_confidence_value = None
+            audited_at_raw = str(raw.get("audited_at") or "").strip()
+            normalized.append({
+                "id": str(raw.get("id") or uuid.uuid4()),
+                "text": text[:1600],
+                "question_ids": question_refs,
+                "reference_ids": reference_refs,
+                "note_ids": note_refs,
+                "result_ids": result_refs,
+                "status": status[:64],
+                "audit_status": audit_status[:64] if audit_status else None,
+                "audit_summary": audit_summary[:4000] if audit_summary else None,
+                "supporting_reference_ids": supporting_reference_refs,
+                "supporting_note_ids": supporting_note_refs,
+                "missing_evidence": missing_evidence,
+                "audit_confidence": audit_confidence_value,
+                "audited_at": audited_at_raw or None,
+            })
+        return normalized
+
+    @staticmethod
+    def _paper_section_items(
+        items: list[dict] | None,
+        question_ids: set[str],
+        claim_ids: set[str],
+        reference_ids: set[str],
+        note_ids: set[str],
+        result_ids: set[str],
+    ) -> list[dict[str, object]]:
+        normalized: list[dict[str, object]] = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title") or "").strip()
+            if not title:
+                continue
+            q_refs = [str(item) for item in (raw.get("question_ids") or []) if str(item) in question_ids]
+            c_refs = [str(item) for item in (raw.get("claim_ids") or []) if str(item) in claim_ids]
+            reference_refs = [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids]
+            note_refs = [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids]
+            result_refs = [str(item) for item in (raw.get("result_ids") or []) if str(item) in result_ids]
+            status = str(raw.get("status") or "not_started").strip() or "not_started"
+            normalized.append({
+                "id": str(raw.get("id") or uuid.uuid4()),
+                "title": title[:255],
+                "question_ids": q_refs,
+                "claim_ids": c_refs,
+                "reference_ids": reference_refs,
+                "note_ids": note_refs,
+                "result_ids": result_refs,
+                "status": status[:64],
+            })
+        return normalized
+
+    @staticmethod
+    def _paper_author_items(
+        items: list[dict] | None,
+        member_ids: set[str],
+    ) -> list[dict[str, object]]:
+        normalized: list[dict[str, object]] = []
+        seen_member_ids: set[str] = set()
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            member_id = str(raw.get("member_id") or "").strip()
+            display_name = str(raw.get("display_name") or "").strip()
+            if not member_id or member_id not in member_ids or member_id in seen_member_ids:
+                continue
+            seen_member_ids.add(member_id)
+            normalized.append({
+                "id": str(raw.get("id") or uuid.uuid4()),
+                "member_id": member_id,
+                "display_name": display_name[:255] or "Author",
+                "is_corresponding": bool(raw.get("is_corresponding")),
+            })
+        return normalized
+
+    @staticmethod
+    def _study_result_items(
+        items: list[dict] | None,
+        note_ids: set[str],
+        reference_ids: set[str],
+    ) -> list[dict[str, object]]:
+        normalized: list[dict[str, object]] = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title") or "").strip()
+            if not title:
+                continue
+            normalized.append({
+                "id": str(raw.get("id") or uuid.uuid4()),
+                "iteration_id": str(raw.get("iteration_id") or "").strip() or None,
+                "title": title[:255],
+                "note_ids": [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids],
+                "reference_ids": [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids],
+                "summary": str(raw.get("summary") or "").strip()[:4000] or None,
+                "what_changed": [str(item).strip()[:400] for item in (raw.get("what_changed") or []) if str(item).strip()],
+                "improvements": [str(item).strip()[:400] for item in (raw.get("improvements") or []) if str(item).strip()],
+                "regressions": [str(item).strip()[:400] for item in (raw.get("regressions") or []) if str(item).strip()],
+                "unclear_points": [str(item).strip()[:400] for item in (raw.get("unclear_points") or []) if str(item).strip()],
+                "next_actions": [str(item).strip()[:400] for item in (raw.get("next_actions") or []) if str(item).strip()],
+                "user_comments": str(raw.get("user_comments") or "").strip()[:4000] or None,
+                "created_at": str(raw.get("created_at") or "").strip() or None,
+                "updated_at": str(raw.get("updated_at") or "").strip() or None,
+            })
+        return normalized
+
+    @staticmethod
+    def _study_iteration_items(
+        items: list[dict] | None,
+        note_ids: set[str],
+        reference_ids: set[str],
+        result_ids: set[str],
+    ) -> list[dict[str, object]]:
+        normalized: list[dict[str, object]] = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title") or "").strip()
+            if not title:
+                continue
+            start_date = raw.get("start_date")
+            end_date = raw.get("end_date")
+            normalized.append({
+                "id": str(raw.get("id") or uuid.uuid4()),
+                "title": title[:255],
+                "start_date": start_date,
+                "end_date": end_date,
+                "note_ids": [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids],
+                "reference_ids": [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids],
+                "result_ids": [str(item) for item in (raw.get("result_ids") or []) if str(item) in result_ids],
+                "summary": str(raw.get("summary") or "").strip()[:4000] or None,
+                "what_changed": [str(item).strip()[:400] for item in (raw.get("what_changed") or []) if str(item).strip()],
+                "improvements": [str(item).strip()[:400] for item in (raw.get("improvements") or []) if str(item).strip()],
+                "regressions": [str(item).strip()[:400] for item in (raw.get("regressions") or []) if str(item).strip()],
+                "unclear_points": [str(item).strip()[:400] for item in (raw.get("unclear_points") or []) if str(item).strip()],
+                "next_actions": [str(item).strip()[:400] for item in (raw.get("next_actions") or []) if str(item).strip()],
+                "user_comments": str(raw.get("user_comments") or "").strip()[:4000] or None,
+                "reviewed_at": str(raw.get("reviewed_at") or "").strip() or None,
+            })
+        return normalized
+
+    def _normalize_paper_workspace(
+        self,
+        *,
+        study_results: list[dict] | None = None,
+        paper_authors: list[dict] | None = None,
+        paper_questions: list[dict] | None = None,
+        paper_claims: list[dict] | None = None,
+        paper_sections: list[dict] | None = None,
+        member_ids: set[str] | None = None,
+        reference_ids: set[str] | None = None,
+        note_ids: set[str] | None = None,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+        authors = self._paper_author_items(paper_authors, member_ids or set())
+        questions = self._paper_question_items(paper_questions, note_ids or set())
+        results = self._study_result_items(study_results, note_ids or set(), reference_ids or set())
+        result_ids = {str(item["id"]) for item in results}
+        question_ids = {str(item["id"]) for item in questions}
+        claims = self._paper_claim_items(paper_claims, question_ids, reference_ids or set(), note_ids or set(), result_ids)
+        claim_ids = {str(item["id"]) for item in claims}
+        sections = self._paper_section_items(paper_sections, question_ids, claim_ids, reference_ids or set(), note_ids or set(), result_ids)
+        return authors, questions, claims, sections, results
 
     def _member_role(self, value: str) -> CollectionMemberRole:
         try:
@@ -431,11 +655,33 @@ class ResearchService:
         status: str = "active",
         tags: list[str] | None = None,
         overleaf_url: str | None = None,
+        paper_motivation: str | None = None,
         target_output_title: str | None = None,
+        target_venue: str | None = None,
+        registration_deadline: date | None = None,
+        submission_deadline: date | None = None,
+        decision_date: date | None = None,
+        study_iterations: list[dict] | None = None,
+        study_results: list[dict] | None = None,
+        paper_authors: list[dict] | None = None,
+        paper_questions: list[dict] | None = None,
+        paper_claims: list[dict] | None = None,
+        paper_sections: list[dict] | None = None,
         output_status: str = "not_started",
         created_by_member_id: uuid.UUID | None = None,
     ) -> ResearchCollection:
         self._get_project(project_id)
+        authors, questions, claims, sections, results = self._normalize_paper_workspace(
+            study_results=study_results,
+            paper_authors=paper_authors,
+            paper_questions=paper_questions,
+            paper_claims=paper_claims,
+            paper_sections=paper_sections,
+            member_ids=set(),
+            reference_ids=set(),
+            note_ids=set(),
+        )
+        iterations = self._study_iteration_items(study_iterations, set(), set(), {str(item["id"]) for item in results})
         item = ResearchCollection(
             project_id=project_id,
             title=title[:255].strip(),
@@ -445,7 +691,18 @@ class ResearchService:
             status=self._collection_status(status),
             tags=tags or [],
             overleaf_url=(overleaf_url or "").strip() or None,
+            paper_motivation=(paper_motivation or "").strip() or None,
             target_output_title=(target_output_title or "").strip() or None,
+            target_venue=(target_venue or "").strip() or None,
+            registration_deadline=registration_deadline,
+            submission_deadline=submission_deadline,
+            decision_date=decision_date,
+            study_iterations=iterations,
+            study_results=results,
+            paper_authors=authors,
+            paper_questions=questions,
+            paper_claims=claims,
+            paper_sections=sections,
             output_status=self._output_status(output_status),
             created_by_member_id=created_by_member_id,
         )
@@ -466,7 +723,18 @@ class ResearchService:
         status: str | None = None,
         tags: list[str] | None = None,
         overleaf_url: str | None = None,
+        paper_motivation: str | None = None,
         target_output_title: str | None = None,
+        target_venue: str | None = None,
+        registration_deadline: date | None = None,
+        submission_deadline: date | None = None,
+        decision_date: date | None = None,
+        study_iterations: list[dict] | None = None,
+        study_results: list[dict] | None = None,
+        paper_authors: list[dict] | None = None,
+        paper_questions: list[dict] | None = None,
+        paper_claims: list[dict] | None = None,
+        paper_sections: list[dict] | None = None,
         output_status: str | None = None,
     ) -> ResearchCollection:
         item = self.get_collection(project_id, collection_id)
@@ -484,10 +752,121 @@ class ResearchService:
             item.tags = tags
         if overleaf_url is not None:
             item.overleaf_url = overleaf_url.strip() or None
+        if paper_motivation is not None:
+            item.paper_motivation = paper_motivation.strip() or None
         if target_output_title is not None:
             item.target_output_title = target_output_title.strip() or None
+        if target_venue is not None:
+            item.target_venue = target_venue.strip() or None
+        if registration_deadline is not None:
+            item.registration_deadline = registration_deadline
+        if submission_deadline is not None:
+            item.submission_deadline = submission_deadline
+        if decision_date is not None:
+            item.decision_date = decision_date
+        collection_reference_ids = {
+            str(ref_id)
+            for ref_id in self.db.scalars(select(ResearchReference.id).where(ResearchReference.collection_id == collection_id)).all()
+        }
+        collection_note_ids = {
+            str(note_id)
+            for note_id in self.db.scalars(select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)).all()
+        }
+        normalized_results = None
+        if study_results is not None:
+            normalized_results = self._study_result_items(study_results, collection_note_ids, collection_reference_ids)
+            item.study_results = normalized_results
+        if study_iterations is not None:
+            result_ids = {str(entry.get("id") or "") for entry in (normalized_results if normalized_results is not None else (item.study_results or [])) if isinstance(entry, dict)}
+            item.study_iterations = self._study_iteration_items(study_iterations, collection_note_ids, collection_reference_ids, result_ids)
+        if (
+            study_results is not None
+            or
+            paper_authors is not None
+            or
+            paper_questions is not None
+            or paper_claims is not None
+            or paper_sections is not None
+        ):
+            collection_member_ids = {
+                str(item)
+                for item in self.db.scalars(
+                    select(ResearchCollectionMember.member_id).where(ResearchCollectionMember.collection_id == collection_id)
+                ).all()
+            }
+            authors, questions, claims, sections, results = self._normalize_paper_workspace(
+                study_results=study_results if study_results is not None else (item.study_results or []),
+                paper_authors=paper_authors if paper_authors is not None else (item.paper_authors or []),
+                paper_questions=paper_questions if paper_questions is not None else (item.paper_questions or []),
+                paper_claims=paper_claims if paper_claims is not None else (item.paper_claims or []),
+                paper_sections=paper_sections if paper_sections is not None else (item.paper_sections or []),
+                member_ids=collection_member_ids,
+                reference_ids=collection_reference_ids,
+                note_ids=collection_note_ids,
+            )
+            if study_results is not None:
+                item.study_results = results
+            item.paper_authors = authors
+            item.paper_questions = questions
+            item.paper_claims = claims
+            item.paper_sections = sections
         if output_status is not None:
             item.output_status = self._output_status(output_status)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def apply_paper_claim_audits(
+        self,
+        project_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        audits: list[dict[str, object]],
+    ) -> ResearchCollection:
+        item = self.get_collection(project_id, collection_id)
+        current_claims = [claim for claim in (item.paper_claims or []) if isinstance(claim, dict)]
+        audit_map = {str(audit.get("claim_id") or ""): audit for audit in audits if str(audit.get("claim_id") or "").strip()}
+        next_claims: list[dict[str, object]] = []
+        for claim in current_claims:
+            claim_id = str(claim.get("id") or "")
+            audit = audit_map.get(claim_id)
+            if not audit:
+                next_claims.append(claim)
+                continue
+            merged = dict(claim)
+            merged["audit_status"] = str(audit.get("audit_status") or "").strip() or None
+            merged["audit_summary"] = str(audit.get("audit_summary") or "").strip() or None
+            merged["supporting_reference_ids"] = [str(item) for item in (audit.get("supporting_reference_ids") or []) if str(item).strip()]
+            merged["supporting_note_ids"] = [str(item) for item in (audit.get("supporting_note_ids") or []) if str(item).strip()]
+            merged["missing_evidence"] = [str(item) for item in (audit.get("missing_evidence") or []) if str(item).strip()]
+            merged["audit_confidence"] = audit.get("audit_confidence")
+            merged["audited_at"] = str(audit.get("audited_at") or "").strip() or None
+            next_claims.append(merged)
+        authors, questions, claims, sections, results = self._normalize_paper_workspace(
+            study_results=item.study_results or [],
+            paper_authors=item.paper_authors or [],
+            paper_questions=item.paper_questions or [],
+            paper_claims=next_claims,
+            paper_sections=item.paper_sections or [],
+            member_ids={
+                str(member_id)
+                for member_id in self.db.scalars(
+                    select(ResearchCollectionMember.member_id).where(ResearchCollectionMember.collection_id == collection_id)
+                ).all()
+            },
+            reference_ids={
+                str(ref_id)
+                for ref_id in self.db.scalars(select(ResearchReference.id).where(ResearchReference.collection_id == collection_id)).all()
+            },
+            note_ids={
+                str(note_id)
+                for note_id in self.db.scalars(select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)).all()
+            },
+        )
+        item.study_results = results
+        item.paper_authors = authors
+        item.paper_questions = questions
+        item.paper_claims = claims
+        item.paper_sections = sections
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -2383,6 +2762,7 @@ class ResearchService:
         project_id: uuid.UUID,
         *,
         collection_id: uuid.UUID | None = None,
+        lane: str | None = None,
         note_type: str | None = None,
         author_member_id: uuid.UUID | None = None,
         page: int = 1,
@@ -2392,6 +2772,12 @@ class ResearchService:
         stmt = select(ResearchNote).where(ResearchNote.project_id == project_id)
         if collection_id:
             stmt = stmt.where(ResearchNote.collection_id == collection_id)
+        normalized_lane = self._note_lane(lane)
+        if lane is not None:
+            if normalized_lane:
+                stmt = stmt.where(ResearchNote.lane == normalized_lane)
+            else:
+                stmt = stmt.where(ResearchNote.lane.is_(None))
         if note_type:
             stmt = stmt.where(ResearchNote.note_type == note_type)
         if author_member_id:
@@ -2424,6 +2810,7 @@ class ResearchService:
         title: str,
         content: str,
         collection_id: uuid.UUID | None = None,
+        lane: str | None = None,
         note_type: str = "observation",
         tags: list[str] | None = None,
         author_member_id: uuid.UUID | None = None,
@@ -2435,6 +2822,7 @@ class ResearchService:
             title=title[:255].strip(),
             content=content.strip(),
             collection_id=collection_id,
+            lane=self._note_lane(lane),
             note_type=self._note_type(note_type),
             tags=tags or [],
             author_member_id=author_member_id,
@@ -2458,6 +2846,7 @@ class ResearchService:
         title: str | None = None,
         content: str | None = None,
         collection_id: str | None = None,
+        lane: str | None = None,
         note_type: str | None = None,
         tags: list[str] | None = None,
     ) -> ResearchNote:
@@ -2468,6 +2857,8 @@ class ResearchService:
             item.content = content.strip()
         if collection_id is not None:
             item.collection_id = uuid.UUID(collection_id) if collection_id else None
+        if lane is not None:
+            item.lane = self._note_lane(lane)
         if note_type is not None:
             item.note_type = self._note_type(note_type)
         if tags is not None:

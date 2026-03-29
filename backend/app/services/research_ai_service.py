@@ -34,17 +34,19 @@ from app.services.onboarding_service import NotFoundError, ValidationError
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 800  # characters per chunk
-SUMMARY_BEGINNING_CHUNKS = 3
-SUMMARY_MIDDLE_CHUNKS = 2
-SUMMARY_ENDING_CHUNKS = 3
-SUMMARY_MAX_CHUNKS = 18
-SUMMARY_MAP_GROUP_SIZE = 2
+SUMMARY_BEGINNING_CHUNKS = 4
+SUMMARY_MIDDLE_CHUNKS = 3
+SUMMARY_ENDING_CHUNKS = 4
+SUMMARY_MAX_CHUNKS = 24
+SUMMARY_MAP_GROUP_SIZE = 3
 
 SUMMARY_QUERY_INTENTS = [
     "What problem does this paper solve?",
     "What is the main contribution?",
     "How does the proposed method work?",
     "What data or benchmarks are used?",
+    "What baselines or prior methods are compared against?",
+    "How is the experimental setup defined?",
     "What are the main quantitative results?",
     "What limitations or caveats are mentioned?",
     "What conclusions or future work are stated?",
@@ -112,11 +114,19 @@ Return ONLY valid JSON with this shape:
   "title": "",
   "document_type": "academic_paper",
   "summary_points": [],
+  "problem": [],
   "contributions": [],
+  "approach": [],
+  "experimental_setup": [],
+  "datasets_or_benchmarks": [],
+  "baselines": [],
   "methods": [],
   "results": [],
+  "quantitative_results": [],
   "limitations": [],
+  "failure_modes": [],
   "conclusion_points": [],
+  "takeaways": [],
   "open_questions": [],
   "evidence": [
     {
@@ -131,7 +141,7 @@ Rules:
 - Merge duplicates.
 - Resolve conflicts conservatively by preserving uncertainty.
 - Maintain chunk references for every evidence item.
-- Separate contributions, methods, results, limitations, and conclusion points.
+- Separate problem, contributions, approach, setup, datasets, baselines, methods, results, quantitative results, limitations, failure modes, conclusion points, and takeaways.
 """.strip()
 
 FINAL_SYNTHESIS_SYSTEM_PROMPT = """
@@ -141,12 +151,20 @@ Return ONLY valid JSON with this exact shape:
 {
   "title": "",
   "document_type": "academic_paper",
-  "summary": "",
+  "summary": {"text": "", "chunk_ids": []},
+  "problem": {"text": "", "chunk_ids": []},
   "contributions": [],
+  "approach": [],
+  "experimental_setup": [],
+  "datasets_or_benchmarks": [],
+  "baselines": [],
   "methods": [],
   "results": [],
+  "quantitative_results": [],
   "limitations": [],
-  "conclusion": "",
+  "failure_modes": [],
+  "conclusion": {"text": "", "chunk_ids": []},
+  "takeaways": [],
   "open_questions": [],
   "evidence": [
     {
@@ -157,9 +175,15 @@ Return ONLY valid JSON with this exact shape:
 }
 
 Rules:
+- Every list item in contributions/approach/experimental_setup/datasets_or_benchmarks/baselines/methods/results/quantitative_results/limitations/failure_modes/takeaways/open_questions must be an object with:
+  {"text": "", "chunk_ids": []}
+- `summary`, `problem`, and `conclusion` must also be objects with `text` and `chunk_ids`.
 - Every major statement must be grounded in chunk_ids.
-- Be concise but information-dense.
+- Be information-dense and specific.
 - Explicitly distinguish contributions from validated results.
+- Use the available evidence budget to provide a useful research brief, not a teaser.
+- Prefer complete technical statements over short slogans.
+- Include experimental setup, datasets/benchmarks, baselines, and quantitative results when supported.
 - Include limitations when supported.
 - Avoid hype and unsupported inferences.
 - Keep numbers only when grounded in source chunks.
@@ -264,15 +288,38 @@ class ResearchAIService:
         if not payload:
             return (value or "").strip()
 
+        def item_text(item: Any) -> str:
+            if isinstance(item, str):
+                return item.strip()
+            if isinstance(item, dict):
+                return str(item.get("text") or "").strip()
+            return str(item or "").strip()
+
         parts: list[str] = []
-        summary = str(payload.get("summary") or "").strip()
+        summary = item_text(payload.get("summary"))
         if summary:
             parts.append(summary)
-        for key in ("contributions", "methods", "results", "limitations", "open_questions"):
+        problem = item_text(payload.get("problem"))
+        if problem:
+            parts.append(problem)
+        for key in (
+            "contributions",
+            "approach",
+            "experimental_setup",
+            "datasets_or_benchmarks",
+            "baselines",
+            "methods",
+            "results",
+            "quantitative_results",
+            "limitations",
+            "failure_modes",
+            "takeaways",
+            "open_questions",
+        ):
             entries = payload.get(key)
             if isinstance(entries, list):
-                parts.extend(str(item).strip() for item in entries if str(item).strip())
-        conclusion = str(payload.get("conclusion") or "").strip()
+                parts.extend(item_text(item) for item in entries if item_text(item))
+        conclusion = item_text(payload.get("conclusion"))
         if conclusion:
             parts.append(conclusion)
         return "\n".join(parts).strip()

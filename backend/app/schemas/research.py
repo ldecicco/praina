@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,18 @@ class CollectionCreate(BaseModel):
     status: str = "active"
     tags: list[str] = Field(default_factory=list)
     overleaf_url: str | None = None
+    paper_motivation: str | None = None
     target_output_title: str | None = None
+    target_venue: str | None = None
+    registration_deadline: date | None = None
+    submission_deadline: date | None = None
+    decision_date: date | None = None
+    study_iterations: list["StudyIterationRead"] = Field(default_factory=list)
+    study_results: list["StudyResultRead"] = Field(default_factory=list)
+    paper_authors: list["PaperAuthorRead"] = Field(default_factory=list)
+    paper_questions: list["PaperQuestionRead"] = Field(default_factory=list)
+    paper_claims: list["PaperClaimRead"] = Field(default_factory=list)
+    paper_sections: list["PaperSectionRead"] = Field(default_factory=list)
     output_status: str = "not_started"
 
 
@@ -29,8 +40,104 @@ class CollectionUpdate(BaseModel):
     status: str | None = None
     tags: list[str] | None = None
     overleaf_url: str | None = None
+    paper_motivation: str | None = None
     target_output_title: str | None = None
+    target_venue: str | None = None
+    registration_deadline: date | None = None
+    submission_deadline: date | None = None
+    decision_date: date | None = None
+    study_iterations: list["StudyIterationRead"] | None = None
+    study_results: list["StudyResultRead"] | None = None
+    paper_authors: list["PaperAuthorRead"] | None = None
+    paper_questions: list["PaperQuestionRead"] | None = None
+    paper_claims: list["PaperClaimRead"] | None = None
+    paper_sections: list["PaperSectionRead"] | None = None
     output_status: str | None = None
+
+
+class StudyIterationRead(BaseModel):
+    id: str
+    title: str
+    start_date: date | None = None
+    end_date: date | None = None
+    note_ids: list[str] = Field(default_factory=list)
+    reference_ids: list[str] = Field(default_factory=list)
+    result_ids: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    what_changed: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    regressions: list[str] = Field(default_factory=list)
+    unclear_points: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    user_comments: str | None = None
+    reviewed_at: datetime | None = None
+
+
+class StudyResultRead(BaseModel):
+    id: str
+    iteration_id: str | None = None
+    title: str
+    note_ids: list[str] = Field(default_factory=list)
+    reference_ids: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    what_changed: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    regressions: list[str] = Field(default_factory=list)
+    unclear_points: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    user_comments: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ResultComparisonRead(BaseModel):
+    summary: str = ""
+    likely_improvements: list[str] = Field(default_factory=list)
+    likely_regressions: list[str] = Field(default_factory=list)
+    likely_causes: list[str] = Field(default_factory=list)
+    next_experiment_changes: list[str] = Field(default_factory=list)
+    compared_result_ids: list[str] = Field(default_factory=list)
+
+
+class PaperAuthorRead(BaseModel):
+    id: str
+    member_id: str
+    display_name: str
+    is_corresponding: bool = False
+
+
+class PaperQuestionRead(BaseModel):
+    id: str
+    text: str
+    note_ids: list[str] = Field(default_factory=list)
+
+
+class PaperClaimRead(BaseModel):
+    id: str
+    text: str
+    question_ids: list[str] = Field(default_factory=list)
+    reference_ids: list[str] = Field(default_factory=list)
+    note_ids: list[str] = Field(default_factory=list)
+    result_ids: list[str] = Field(default_factory=list)
+    status: str = "draft"
+    audit_status: str | None = None
+    audit_summary: str | None = None
+    supporting_reference_ids: list[str] = Field(default_factory=list)
+    supporting_note_ids: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    audit_confidence: float | None = None
+    audited_at: datetime | None = None
+
+
+class PaperSectionRead(BaseModel):
+    id: str
+    title: str
+    question_ids: list[str] = Field(default_factory=list)
+    claim_ids: list[str] = Field(default_factory=list)
+    reference_ids: list[str] = Field(default_factory=list)
+    note_ids: list[str] = Field(default_factory=list)
+    result_ids: list[str] = Field(default_factory=list)
+    status: str = "not_started"
 
 
 class CollectionRead(BaseModel):
@@ -43,7 +150,18 @@ class CollectionRead(BaseModel):
     status: str
     tags: list[str] = Field(default_factory=list)
     overleaf_url: str | None = None
+    paper_motivation: str | None = None
     target_output_title: str | None = None
+    target_venue: str | None = None
+    registration_deadline: date | None = None
+    submission_deadline: date | None = None
+    decision_date: date | None = None
+    study_iterations: list[StudyIterationRead] = Field(default_factory=list)
+    study_results: list[StudyResultRead] = Field(default_factory=list)
+    paper_authors: list[PaperAuthorRead] = Field(default_factory=list)
+    paper_questions: list[PaperQuestionRead] = Field(default_factory=list)
+    paper_claims: list[PaperClaimRead] = Field(default_factory=list)
+    paper_sections: list[PaperSectionRead] = Field(default_factory=list)
     output_status: str
     created_by_member_id: str | None = None
     ai_synthesis: str | None = None
@@ -400,6 +518,7 @@ class NoteCreate(BaseModel):
     title: str
     content: str
     collection_id: str | None = None
+    lane: str | None = None
     note_type: str = "observation"
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)
@@ -409,6 +528,7 @@ class NoteUpdate(BaseModel):
     title: str | None = None
     content: str | None = None
     collection_id: str | None = None
+    lane: str | None = None
     note_type: str | None = None
     tags: list[str] | None = None
 
@@ -421,6 +541,7 @@ class NoteRead(BaseModel):
     author_name: str | None = None
     title: str
     content: str
+    lane: str | None = None
     note_type: str
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)

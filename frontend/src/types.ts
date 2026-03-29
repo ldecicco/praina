@@ -1163,7 +1163,18 @@ export type ResearchCollection = {
   status: string;
   tags: string[];
   overleaf_url: string | null;
+  paper_motivation: string | null;
   target_output_title: string | null;
+  target_venue: string | null;
+  registration_deadline: string | null;
+  submission_deadline: string | null;
+  decision_date: string | null;
+  study_iterations: ResearchStudyIteration[];
+  study_results: ResearchStudyResult[];
+  paper_authors: ResearchPaperAuthor[];
+  paper_questions: ResearchPaperQuestion[];
+  paper_claims: ResearchPaperClaim[];
+  paper_sections: ResearchPaperSection[];
   output_status: string;
   created_by_member_id: string | null;
   ai_synthesis: string | null;
@@ -1173,6 +1184,91 @@ export type ResearchCollection = {
   member_count: number;
   created_at: string;
   updated_at: string;
+};
+
+export type ResearchPaperQuestion = {
+  id: string;
+  text: string;
+  note_ids: string[];
+};
+
+export type ResearchPaperAuthor = {
+  id: string;
+  member_id: string;
+  display_name: string;
+  is_corresponding: boolean;
+};
+
+export type ResearchStudyIteration = {
+  id: string;
+  title: string;
+  start_date: string | null;
+  end_date: string | null;
+  note_ids: string[];
+  reference_ids: string[];
+  result_ids: string[];
+  summary: string | null;
+  what_changed: string[];
+  improvements: string[];
+  regressions: string[];
+  unclear_points: string[];
+  next_actions: string[];
+  user_comments: string | null;
+  reviewed_at: string | null;
+};
+
+export type ResearchStudyResult = {
+  id: string;
+  iteration_id: string | null;
+  title: string;
+  note_ids: string[];
+  reference_ids: string[];
+  summary: string | null;
+  what_changed: string[];
+  improvements: string[];
+  regressions: string[];
+  unclear_points: string[];
+  next_actions: string[];
+  user_comments: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type ResearchResultComparison = {
+  summary: string;
+  likely_improvements: string[];
+  likely_regressions: string[];
+  likely_causes: string[];
+  next_experiment_changes: string[];
+  compared_result_ids: string[];
+};
+
+export type ResearchPaperClaim = {
+  id: string;
+  text: string;
+  question_ids: string[];
+  reference_ids: string[];
+  note_ids: string[];
+  result_ids: string[];
+  status: string;
+  audit_status: string | null;
+  audit_summary: string | null;
+  supporting_reference_ids: string[];
+  supporting_note_ids: string[];
+  missing_evidence: string[];
+  audit_confidence: number | null;
+  audited_at: string | null;
+};
+
+export type ResearchPaperSection = {
+  id: string;
+  title: string;
+  question_ids: string[];
+  claim_ids: string[];
+  reference_ids: string[];
+  note_ids: string[];
+  result_ids: string[];
+  status: string;
 };
 
 export type ResearchCollectionMeeting = {
@@ -1351,6 +1447,7 @@ export type ResearchNote = {
   author_name: string | null;
   title: string;
   content: string;
+  lane: string | null;
   note_type: string;
   tags: string[];
   linked_reference_ids: string[];

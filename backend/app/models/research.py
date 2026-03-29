@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -133,7 +133,18 @@ class ResearchCollection(Base, IdMixin, TimestampMixin):
     )
     tags: Mapped[list | None] = mapped_column(JSONB, default=list)
     overleaf_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    paper_motivation: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_output_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_venue: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    registration_deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
+    submission_deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
+    decision_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    study_iterations: Mapped[list | None] = mapped_column(JSONB, default=list)
+    study_results: Mapped[list | None] = mapped_column(JSONB, default=list)
+    paper_authors: Mapped[list | None] = mapped_column(JSONB, default=list)
+    paper_questions: Mapped[list | None] = mapped_column(JSONB, default=list)
+    paper_claims: Mapped[list | None] = mapped_column(JSONB, default=list)
+    paper_sections: Mapped[list | None] = mapped_column(JSONB, default=list)
     output_status: Mapped[OutputStatus] = mapped_column(
         Enum(OutputStatus, name="research_output_status"),
         default=OutputStatus.not_started,
@@ -289,6 +300,7 @@ class ResearchNote(Base, IdMixin, TimestampMixin):
     )
     title: Mapped[str] = mapped_column(String(255))
     content: Mapped[str] = mapped_column(Text)
+    lane: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     note_type: Mapped[NoteType] = mapped_column(
         Enum(NoteType, name="note_type"), default=NoteType.observation, index=True,
     )

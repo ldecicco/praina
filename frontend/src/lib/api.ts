@@ -67,6 +67,7 @@ import type {
   ResearchCollection,
   ResearchCollectionDetail,
   ResearchCollectionMember,
+  ResearchResultComparison,
   ResearchReference,
   ResearchNote,
   Equipment,
@@ -2188,6 +2189,21 @@ export const api = {
   getResearchCollection(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
     return request(`/projects/${projectId}/research/collections/${collectionId}`);
   },
+  auditResearchPaperClaims(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/audit-claims`, { method: "POST" });
+  },
+  buildResearchPaperOutline(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/build-outline`, { method: "POST" });
+  },
+  draftResearchPaperFromGap(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/draft-from-gap`, { method: "POST" });
+  },
+  reviewResearchIteration(projectId: string, collectionId: string, iterationId: string): Promise<ResearchCollectionDetail> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/iterations/${iterationId}/review`, { method: "POST" });
+  },
+  compareResearchResults(projectId: string, collectionId: string): Promise<ResearchResultComparison> {
+    return request(`/projects/${projectId}/research/collections/${collectionId}/results/compare`, { method: "POST" });
+  },
   updateResearchCollection(projectId: string, collectionId: string, data: Record<string, unknown>): Promise<ResearchCollection> {
     return request(`/projects/${projectId}/research/collections/${collectionId}`, { method: "PUT", body: JSON.stringify(data) });
   },
@@ -2442,9 +2458,10 @@ export const api = {
     return request(`/bibliography/tags?${q}`);
   },
 
-  listResearchNotes(projectId: string, opts?: { collection_id?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {
+  listResearchNotes(projectId: string, opts?: { collection_id?: string; lane?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {
     const q = new URLSearchParams();
     if (opts?.collection_id) q.set("collection_id", opts.collection_id);
+    if (opts?.lane !== undefined) q.set("lane", opts.lane);
     if (opts?.note_type) q.set("note_type", opts.note_type);
     if (opts?.author_member_id) q.set("author_member_id", opts.author_member_id);
     if (opts?.page) q.set("page", String(opts.page));

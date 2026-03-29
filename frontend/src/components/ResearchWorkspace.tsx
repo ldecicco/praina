@@ -1,16 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArchive,
   faBookOpen,
   faCalendarDay,
   faChevronRight,
+  faChevronUp,
+  faChevronDown,
   faFileArrowUp,
   faComment,
   faFileExport,
   faFileImport,
   faFilter,
   faFlask,
+  faInbox,
   faLink,
   faMagicWandSparkles,
   faPen,
@@ -24,6 +27,7 @@ import {
 import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
+import { renderMarkdown } from "../lib/renderMarkdown";
 import type {
   BibliographyCollection,
   BibliographyDuplicateMatch,
@@ -38,23 +42,28 @@ import type {
   ResearchCollectionDetail,
   ResearchCollectionMember,
   ResearchNote,
+  ResearchPaperAuthor,
+  ResearchPaperClaim,
+  ResearchPaperQuestion,
+  ResearchPaperSection,
+  ResearchStudyIteration,
+  ResearchResultComparison,
+  ResearchStudyResult,
   ResearchReference,
   WorkEntity,
 } from "../types";
 
-const NOTE_TYPE_LABELS: Record<string, string> = {
-  observation: "Observation",
-  discussion: "Discussion",
-  finding: "Finding",
-  hypothesis: "Hypothesis",
+const NOTE_LANE_LABELS: Record<string, string> = {
+  gap: "Gap",
   method: "Method",
+  evaluation: "Evaluation",
+  writing: "Writing",
   decision: "Decision",
-  action_item: "Action Item",
-  literature_review: "Lit Review",
-  conclusion: "Conclusion",
 };
 
-type Tab = "references" | "notes" | "overview";
+const NOTE_LANE_OPTIONS = Object.entries(NOTE_LANE_LABELS);
+
+type Tab = "references" | "notes" | "paper" | "iterations" | "overview";
 type CollectionModalMode = "create" | "edit";
 type ReferenceModalMode = "create" | "edit";
 type NoteModalMode = "create" | "edit";
@@ -71,6 +80,14 @@ function toggleListValue(values: string[], value: string): string[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
+function moveItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
+  if (toIndex < 0 || toIndex >= items.length || fromIndex === toIndex) return items;
+  const next = [...items];
+  const [item] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, item);
+  return next;
+}
+
 function normalizeTagLabel(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -83,24 +100,126 @@ function bibliographyDocumentStatusLabel(status: string | null): string {
   return "Pending";
 }
 
-function parseSummaryPayload(value: string | null): {
-  summary?: string;
-  contributions?: string[];
-  results?: string[];
-  limitations?: string[];
-} | null {
+type PaperSummaryPayload = {
+  summary?: string | { text?: string; chunk_ids?: string[] };
+  problem?: string | { text?: string; chunk_ids?: string[] };
+  contributions?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  approach?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  experimental_setup?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  datasets_or_benchmarks?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  baselines?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  methods?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  results?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  quantitative_results?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  limitations?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  failure_modes?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  conclusion?: string | { text?: string; chunk_ids?: string[] };
+  takeaways?: Array<string | { text?: string; chunk_ids?: string[] }>;
+  open_questions?: Array<string | { text?: string; chunk_ids?: string[] }>;
+};
+
+type SummaryItem = {
+  text: string;
+  chunkIds: string[];
+};
+
+function parseSummaryPayload(value: string | null): PaperSummaryPayload | null {
   if (!value) return null;
   try {
-    const parsed = JSON.parse(value) as {
-      summary?: string;
-      contributions?: string[];
-      results?: string[];
-      limitations?: string[];
-    };
+    const parsed = JSON.parse(value) as PaperSummaryPayload;
     return typeof parsed === "object" && parsed ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function normalizeSummaryItem(value: string | { text?: string; chunk_ids?: string[] } | undefined | null): SummaryItem | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text ? { text, chunkIds: [] } : null;
+  }
+  const text = String(value.text || "").trim();
+  if (!text) return null;
+  const chunkIds = Array.isArray(value.chunk_ids)
+    ? value.chunk_ids.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  return { text, chunkIds };
+}
+
+function renderSummarySingle(title: string, item: string | { text?: string; chunk_ids?: string[] } | undefined) {
+  const normalized = normalizeSummaryItem(item);
+  if (!normalized) return null;
+  return (
+    <section className="research-summary-section research-summary-section-single">
+      <div className="research-summary-head">
+        <span className="bib-section-label">{title}</span>
+      </div>
+      <p className="research-summary-item research-summary-item-strong">
+        {normalized.text}
+        {normalized.chunkIds.length ? normalized.chunkIds.map((chunkId) => (
+          <span key={`${title}-${chunkId}`} className="chip small research-summary-cite-inline">{chunkId}</span>
+        )) : null}
+      </p>
+    </section>
+  );
+}
+
+function renderSummaryList(title: string, items: Array<string | { text?: string; chunk_ids?: string[] }> | undefined, limit?: number) {
+  if (!items?.length) return null;
+  const normalized = items.map((item) => normalizeSummaryItem(item)).filter(Boolean) as SummaryItem[];
+  if (!normalized.length) return null;
+  const visible = typeof limit === "number" ? normalized.slice(0, limit) : normalized;
+  return (
+    <section className="research-summary-section">
+      <div className="research-summary-head">
+        <span className="bib-section-label">{title}</span>
+        <span className="delivery-tab-count">{visible.length}</span>
+      </div>
+      <div className="research-summary-list">
+        {visible.map((item, index) => (
+          <div key={`${title}-${item.text}`} className="research-summary-cited-item">
+            <div className="research-summary-row">
+              <span className="research-summary-index">{index + 1}</span>
+              <p className="research-summary-item">
+                {item.text}
+                {item.chunkIds.length ? item.chunkIds.map((chunkId) => (
+                  <span key={`${title}-${item.text}-${chunkId}`} className="chip small research-summary-cite-inline">{chunkId}</span>
+                )) : null}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function renderPaperSummary(summary: PaperSummaryPayload | null, rawValue: string, options?: { compact?: boolean }) {
+  if (!summary) {
+    return <p>{rawValue}</p>;
+  }
+
+  const compact = options?.compact ?? false;
+  return (
+    <div className={`research-summary-brief${compact ? " compact" : ""}`}>
+      {renderSummarySingle("Summary", summary.summary)}
+      {renderSummarySingle("Problem", summary.problem)}
+      {renderSummaryList("Contributions", summary.contributions, compact ? 3 : undefined)}
+      {renderSummaryList("Approach", summary.approach, compact ? 2 : undefined)}
+      {renderSummaryList("Setup", summary.experimental_setup, compact ? 2 : undefined)}
+      {renderSummaryList("Data", summary.datasets_or_benchmarks, compact ? 2 : undefined)}
+      {renderSummaryList("Baselines", summary.baselines, compact ? 2 : undefined)}
+      {renderSummaryList("Methods", summary.methods, compact ? 2 : undefined)}
+      {renderSummaryList("Results", summary.results, compact ? 3 : undefined)}
+      {renderSummaryList("Numbers", summary.quantitative_results, compact ? 3 : undefined)}
+      {renderSummaryList("Limitations", summary.limitations, compact ? 2 : undefined)}
+      {renderSummaryList("Failure Modes", summary.failure_modes, compact ? 2 : undefined)}
+      {renderSummarySingle("Conclusion", summary.conclusion)}
+      {renderSummaryList("Takeaways", summary.takeaways, compact ? 3 : undefined)}
+      {renderSummaryList("Open Questions", summary.open_questions, compact ? 2 : undefined)}
+    </div>
+  );
 }
 
 function parseSynthesisPayload(value: string | null): {
@@ -139,6 +258,37 @@ function parseSynthesisPayload(value: string | null): {
   } catch {
     return null;
   }
+}
+
+function formatLogTimestamp(value: string): string {
+  const date = new Date(value);
+  return date.toLocaleString([], {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatLogDate(value: string): string {
+  const date = new Date(value);
+  return date.toLocaleDateString([], {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function deriveLogTitle(content: string): string {
+  const firstLine = content
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  const base = firstLine || content.trim();
+  const collapsed = base.replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  return collapsed.length > 72 ? `${collapsed.slice(0, 72).trimEnd()}...` : collapsed;
 }
 
 export function ResearchWorkspace({
@@ -201,12 +351,23 @@ export function ResearchWorkspace({
 
   const [collectionTitle, setCollectionTitle] = useState("");
   const [collectionDescription, setCollectionDescription] = useState("");
-  const [collectionHypothesis, setCollectionHypothesis] = useState("");
-  const [collectionOpenQuestions, setCollectionOpenQuestions] = useState("");
   const [collectionStatus, setCollectionStatus] = useState("active");
-  const [collectionOverleafUrl, setCollectionOverleafUrl] = useState("");
-  const [collectionOutputTitle, setCollectionOutputTitle] = useState("");
-  const [collectionOutputStatus, setCollectionOutputStatus] = useState("not_started");
+  const [paperTitle, setPaperTitle] = useState("");
+  const [paperMotivation, setPaperMotivation] = useState("");
+  const [paperVenue, setPaperVenue] = useState("");
+  const [paperOverleafUrl, setPaperOverleafUrl] = useState("");
+  const [paperStatus, setPaperStatus] = useState("not_started");
+  const [paperRegistrationDeadline, setPaperRegistrationDeadline] = useState("");
+  const [paperSubmissionDeadline, setPaperSubmissionDeadline] = useState("");
+  const [paperDecisionDate, setPaperDecisionDate] = useState("");
+  const [studyIterations, setStudyIterations] = useState<ResearchStudyIteration[]>([]);
+  const [studyResults, setStudyResults] = useState<ResearchStudyResult[]>([]);
+  const [resultComparison, setResultComparison] = useState<ResearchResultComparison | null>(null);
+  const [paperAuthors, setPaperAuthors] = useState<ResearchPaperAuthor[]>([]);
+  const [paperQuestions, setPaperQuestions] = useState<ResearchPaperQuestion[]>([]);
+  const [paperClaims, setPaperClaims] = useState<ResearchPaperClaim[]>([]);
+  const [paperSections, setPaperSections] = useState<ResearchPaperSection[]>([]);
+  const [paperExpanded, setPaperExpanded] = useState(false);
 
   const [referenceTitle, setReferenceTitle] = useState("");
   const [referenceAuthors, setReferenceAuthors] = useState("");
@@ -229,7 +390,12 @@ export function ResearchWorkspace({
   const [noteContent, setNoteContent] = useState("");
   const [noteType, setNoteType] = useState("observation");
   const [noteCollectionId, setNoteCollectionId] = useState("");
+  const [noteLane, setNoteLane] = useState("");
   const [noteReferenceIds, setNoteReferenceIds] = useState<string[]>([]);
+  const [quickLogContent, setQuickLogContent] = useState("");
+  const [quickLogTitle, setQuickLogTitle] = useState("");
+  const [quickLogLane, setQuickLogLane] = useState("");
+  const [quickLogRefIds, setQuickLogRefIds] = useState<string[]>([]);
 
   const [newMemberId, setNewMemberId] = useState("");
   const [newMemberRole, setNewMemberRole] = useState("contributor");
@@ -242,6 +408,12 @@ export function ResearchWorkspace({
   const [saving, setSaving] = useState(false);
   const [synthesizing, setSynthesizing] = useState(false);
   const [summarizingId, setSummarizingId] = useState<string | null>(null);
+  const [auditingPaperClaims, setAuditingPaperClaims] = useState(false);
+  const [buildingPaperOutline, setBuildingPaperOutline] = useState(false);
+  const [draftingGapPaper, setDraftingGapPaper] = useState(false);
+  const [reviewingIterationId, setReviewingIterationId] = useState<string | null>(null);
+  const [comparingResults, setComparingResults] = useState(false);
+  const [expandedIterationId, setExpandedIterationId] = useState<string | null>(null);
 
   const [refSearch, setRefSearch] = useState("");
   const [bibTab, setBibTab] = useState<BibTab>("papers");
@@ -262,7 +434,22 @@ export function ResearchWorkspace({
   const [newNoteType, setNewNoteType] = useState("comment");
   const [newNoteVisibility, setNewNoteVisibility] = useState("shared");
   const [refStatusFilter, setRefStatusFilter] = useState("");
-  const [noteTypeFilter, setNoteTypeFilter] = useState("");
+  const [noteLaneFilter, setNoteLaneFilter] = useState("");
+  const [noteSearchQuery, setNoteSearchQuery] = useState("");
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [inlineEditNoteId, setInlineEditNoteId] = useState<string | null>(null);
+  const [inlineEditTitle, setInlineEditTitle] = useState("");
+  const [inlineEditContent, setInlineEditContent] = useState("");
+  const [inlineEditLane, setInlineEditLane] = useState("");
+  const [inlineEditRefIds, setInlineEditRefIds] = useState<string[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+  const [mentionTarget, setMentionTarget] = useState<"composer" | "inline">("composer");
+  const [mentionAnchor, setMentionAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [mentionCursorStart, setMentionCursorStart] = useState(0);
+  const inlineEditContentRef = useRef<HTMLTextAreaElement | null>(null);
+  const [selectedInboxLogIds, setSelectedInboxLogIds] = useState<Set<string>>(new Set());
   const [bibliographyTitle, setBibliographyTitle] = useState("");
   const [bibliographyCollectionTitle, setBibliographyCollectionTitle] = useState("");
   const [bibliographyCollectionDescription, setBibliographyCollectionDescription] = useState("");
@@ -292,6 +479,7 @@ export function ResearchWorkspace({
   const [extractingBibliographyConceptsId, setExtractingBibliographyConceptsId] = useState<string | null>(null);
   const [bibliographyGraphOpen, setBibliographyGraphOpen] = useState(false);
   const [bibliographyGraphReferences, setBibliographyGraphReferences] = useState<BibliographyReference[]>([]);
+  const quickLogInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeCollections = collections.filter((item) => item.status === "active");
   const archivedCollections = collections.filter((item) => item.status !== "active");
@@ -332,6 +520,24 @@ export function ResearchWorkspace({
       }
     };
   }, [bibliographyPreview]);
+
+  useEffect(() => {
+    setPaperTitle(collectionDetail?.target_output_title || "");
+    setPaperMotivation(collectionDetail?.paper_motivation || "");
+    setPaperVenue(collectionDetail?.target_venue || "");
+    setPaperOverleafUrl(collectionDetail?.overleaf_url || "");
+    setPaperStatus(collectionDetail?.output_status || "not_started");
+    setPaperRegistrationDeadline(collectionDetail?.registration_deadline || "");
+    setPaperSubmissionDeadline(collectionDetail?.submission_deadline || "");
+    setPaperDecisionDate(collectionDetail?.decision_date || "");
+    setStudyIterations(collectionDetail?.study_iterations || []);
+    setStudyResults(collectionDetail?.study_results || []);
+    setResultComparison(null);
+    setPaperAuthors(collectionDetail?.paper_authors || []);
+    setPaperQuestions(collectionDetail?.paper_questions || []);
+    setPaperClaims(collectionDetail?.paper_claims || []);
+    setPaperSections(collectionDetail?.paper_sections || []);
+  }, [collectionDetail]);
 
   async function loadCollections(projectId = selectedProjectId) {
     if (!projectId) return;
@@ -435,7 +641,7 @@ export function ResearchWorkspace({
     if (!projectId) return;
     const opts: Record<string, string> = {};
     if (collectionId) opts.collection_id = collectionId;
-    if (noteTypeFilter) opts.note_type = noteTypeFilter;
+    if (noteLaneFilter !== "") opts.lane = noteLaneFilter === "__none__" ? "" : noteLaneFilter;
     const response = await api.listResearchNotes(projectId, { ...opts, page_size: 100 });
     setNotes(response.items);
   }
@@ -512,7 +718,7 @@ export function ResearchWorkspace({
     refreshWorkspace(selectedProjectId, selectedCollectionId).catch((err) => {
       setError(err instanceof Error ? err.message : "Failed to refresh research workspace");
     });
-  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteTypeFilter, bibliographyOnly]);
+  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteLaneFilter, bibliographyOnly]);
 
   useEffect(() => {
     if (!selectedProjectId && !bibliographyOnly) return;
@@ -541,18 +747,13 @@ export function ResearchWorkspace({
       return;
     }
     void refreshWorkspace();
-  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteTypeFilter, bibliographySearch, bibliographyVisibilityFilter, bibliographyOnly, selectedBibliographyCollectionId]);
+  }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteLaneFilter, bibliographySearch, bibliographyVisibilityFilter, bibliographyOnly, selectedBibliographyCollectionId]);
   useAutoRefresh(stableLoad);
 
   function resetCollectionForm() {
     setCollectionTitle("");
     setCollectionDescription("");
-    setCollectionHypothesis("");
-    setCollectionOpenQuestions("");
     setCollectionStatus("active");
-    setCollectionOverleafUrl("");
-    setCollectionOutputTitle("");
-    setCollectionOutputStatus("not_started");
     setEditingCollectionId(null);
   }
 
@@ -580,6 +781,7 @@ export function ResearchWorkspace({
     setNoteContent("");
     setNoteType("observation");
     setNoteCollectionId(collectionId || "");
+    setNoteLane("");
     setNoteReferenceIds([]);
     setEditingNoteId(null);
   }
@@ -671,19 +873,14 @@ export function ResearchWorkspace({
     setCollectionModalMode("edit");
     setEditingCollectionId(collectionDetail.id);
     setCollectionTitle(collectionDetail.title);
-    setCollectionDescription(collectionDetail.description || "");
-    setCollectionHypothesis(collectionDetail.hypothesis || "");
-    setCollectionOpenQuestions((collectionDetail.open_questions || []).join(", "));
+    setCollectionDescription(collectionDetail.description || collectionDetail.hypothesis || "");
     setCollectionStatus(collectionDetail.status);
-    setCollectionOverleafUrl(collectionDetail.overleaf_url || "");
-    setCollectionOutputTitle(collectionDetail.target_output_title || "");
-    setCollectionOutputStatus(collectionDetail.output_status || "not_started");
     setCollectionModalOpen(true);
   }
 
   function openCreateReferenceModal(tabName: ReferenceModalTab = "manual") {
     if (!selectedCollectionId) {
-      setError("Select a collection first.");
+      setError("Select a study first.");
       return;
     }
     setReferenceModalMode("create");
@@ -694,7 +891,7 @@ export function ResearchWorkspace({
 
   function openBibliographyPicker() {
     if (!selectedCollectionId) {
-      setError("Select a collection first.");
+      setError("Select a study first.");
       return;
     }
     setBibliographyPickerOpen(true);
@@ -723,12 +920,13 @@ export function ResearchWorkspace({
 
   function openCreateNoteModal() {
     if (!selectedCollectionId) {
-      setError("Select a collection first.");
+      setError("Select a study first.");
       return;
     }
-    setNoteModalMode("create");
-    resetNoteForm(selectedCollectionId);
-    setNoteModalOpen(true);
+    setTab("notes");
+    setTimeout(() => {
+      quickLogInputRef.current?.focus();
+    }, 0);
   }
 
   function openEditNoteModal(note: ResearchNote) {
@@ -738,8 +936,171 @@ export function ResearchWorkspace({
     setNoteContent(note.content);
     setNoteType(note.note_type);
     setNoteCollectionId(note.collection_id || selectedCollectionId || "");
+    setNoteLane(note.lane || "");
     setNoteReferenceIds(note.linked_reference_ids);
     setNoteModalOpen(true);
+  }
+
+  function startInlineEdit(note: ResearchNote) {
+    setInlineEditNoteId(note.id);
+    setInlineEditTitle(note.title);
+    setInlineEditContent(note.content);
+    setInlineEditLane(note.lane || "");
+    setInlineEditRefIds([...note.linked_reference_ids]);
+  }
+
+  function cancelInlineEdit() {
+    setInlineEditNoteId(null);
+    setInlineEditTitle("");
+    setInlineEditContent("");
+    setInlineEditLane("");
+    setInlineEditRefIds([]);
+    closeMention();
+  }
+
+  async function handleInlineEditSave(noteId: string) {
+    if (!selectedProjectId || !inlineEditTitle.trim() || !inlineEditContent.trim()) return;
+    setSaving(true);
+    setError("");
+    try {
+      const existingNote = notes.find((item) => item.id === noteId);
+      await api.updateResearchNote(selectedProjectId, noteId, {
+        title: inlineEditTitle.trim(),
+        content: inlineEditContent.trim(),
+        lane: inlineEditLane || null,
+        note_type: existingNote?.note_type || "observation",
+      });
+      await api.setNoteReferences(selectedProjectId, noteId, inlineEditRefIds);
+      setStatus("Log updated.");
+      cancelInlineEdit();
+      await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
+      if (selectedCollectionId) await loadCollectionDetail(selectedCollectionId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save log");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function formatRefLabel(ref: ResearchReference | BibliographyReference): string {
+    const firstAuthor = ref.authors.length > 0 ? ref.authors[0].split(",")[0].split(" ").pop() : "Unknown";
+    return ref.year ? `${firstAuthor} ${ref.year}` : `${firstAuthor}`;
+  }
+
+  const mentionResults = useMemo(() => {
+    if (!mentionOpen || !mentionQuery) return references.slice(0, 6);
+    const q = mentionQuery.toLowerCase();
+    return references
+      .filter((ref) =>
+        ref.title.toLowerCase().includes(q) ||
+        ref.authors.some((a) => a.toLowerCase().includes(q)) ||
+        (ref.year && String(ref.year).includes(q))
+      )
+      .slice(0, 6);
+  }, [mentionOpen, mentionQuery, references]);
+
+  function getTextareaCaretCoords(textarea: HTMLTextAreaElement): { top: number; left: number } {
+    const div = document.createElement("div");
+    const style = window.getComputedStyle(textarea);
+    for (const prop of ["fontFamily", "fontSize", "fontWeight", "lineHeight", "padding", "border", "letterSpacing", "wordSpacing", "whiteSpace", "overflowWrap"] as const) {
+      div.style[prop] = style[prop];
+    }
+    div.style.position = "absolute";
+    div.style.visibility = "hidden";
+    div.style.whiteSpace = "pre-wrap";
+    div.style.wordWrap = "break-word";
+    div.style.width = `${textarea.clientWidth}px`;
+    const text = textarea.value.substring(0, textarea.selectionStart);
+    div.textContent = text;
+    const span = document.createElement("span");
+    span.textContent = "|";
+    div.appendChild(span);
+    document.body.appendChild(div);
+    const rect = textarea.getBoundingClientRect();
+    const spanRect = span.getBoundingClientRect();
+    const divRect = div.getBoundingClientRect();
+    const top = rect.top + (spanRect.top - divRect.top) - textarea.scrollTop + spanRect.height;
+    const left = rect.left + (spanRect.left - divRect.left);
+    document.body.removeChild(div);
+    return { top, left };
+  }
+
+  function openMention(textarea: HTMLTextAreaElement, target: "composer" | "inline") {
+    const coords = getTextareaCaretCoords(textarea);
+    setMentionTarget(target);
+    setMentionAnchor(coords);
+    setMentionCursorStart(textarea.selectionStart);
+    setMentionQuery("");
+    setMentionActiveIndex(0);
+    setMentionOpen(true);
+  }
+
+  function closeMention() {
+    setMentionOpen(false);
+    setMentionQuery("");
+    setMentionActiveIndex(0);
+    setMentionAnchor(null);
+  }
+
+  function selectMention(ref: ResearchReference) {
+    const label = `@[${formatRefLabel(ref)}]`;
+    if (mentionTarget === "composer") {
+      const before = quickLogContent.substring(0, mentionCursorStart - 1);
+      const after = quickLogContent.substring(mentionCursorStart + mentionQuery.length);
+      setQuickLogContent(before + label + " " + after);
+      setQuickLogRefIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
+    } else {
+      const before = inlineEditContent.substring(0, mentionCursorStart - 1);
+      const after = inlineEditContent.substring(mentionCursorStart + mentionQuery.length);
+      setInlineEditContent(before + label + " " + after);
+      setInlineEditRefIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
+    }
+    closeMention();
+  }
+
+  function handleMentionKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!mentionOpen) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setMentionActiveIndex((i) => (i + 1) % Math.max(mentionResults.length, 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setMentionActiveIndex((i) => (i - 1 + mentionResults.length) % Math.max(mentionResults.length, 1));
+    } else if (event.key === "Enter" && !event.shiftKey && !(event.metaKey || event.ctrlKey)) {
+      if (mentionResults.length > 0) {
+        event.preventDefault();
+        selectMention(mentionResults[mentionActiveIndex]);
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeMention();
+    }
+  }
+
+  function handleContentChange(value: string, cursorPos: number, textarea: HTMLTextAreaElement, target: "composer" | "inline") {
+    if (target === "composer") {
+      setQuickLogContent(value);
+    } else {
+      setInlineEditContent(value);
+    }
+
+    if (mentionOpen) {
+      const textSinceAt = value.substring(mentionCursorStart, cursorPos);
+      if (textSinceAt.includes(" ") || textSinceAt.includes("\n") || cursorPos < mentionCursorStart) {
+        closeMention();
+      } else {
+        setMentionQuery(textSinceAt);
+        setMentionActiveIndex(0);
+      }
+      return;
+    }
+
+    if (cursorPos > 0 && value[cursorPos - 1] === "@") {
+      const charBefore = cursorPos > 1 ? value[cursorPos - 2] : " ";
+      if (charBefore === " " || charBefore === "\n" || cursorPos === 1) {
+        openMention(textarea, target);
+      }
+    }
   }
 
   function openWbsModal() {
@@ -749,6 +1110,310 @@ export function ResearchWorkspace({
     setWbsDeliverableIds(collectionDetail.deliverable_ids);
     setMeetingIds(collectionDetail.meetings.map((item) => item.id));
     setWbsModalOpen(true);
+  }
+
+  function newPaperQuestion(): ResearchPaperQuestion {
+    return { id: crypto.randomUUID(), text: "", note_ids: [] };
+  }
+
+  function newPaperAuthor(member: ResearchCollectionMember): ResearchPaperAuthor {
+    return {
+      id: crypto.randomUUID(),
+      member_id: member.member_id,
+      display_name: member.member_name || "Author",
+      is_corresponding: false,
+    };
+  }
+
+  function newStudyIteration(): ResearchStudyIteration {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      id: crypto.randomUUID(),
+      title: "",
+      start_date: today,
+      end_date: today,
+      note_ids: [],
+      reference_ids: [],
+      result_ids: [],
+      summary: null,
+      what_changed: [],
+      improvements: [],
+      regressions: [],
+      unclear_points: [],
+      next_actions: [],
+      user_comments: null,
+      reviewed_at: null,
+    };
+  }
+
+  function newStudyResult(): ResearchStudyResult {
+    const now = new Date().toISOString();
+    return {
+      id: crypto.randomUUID(),
+      iteration_id: null,
+      title: "",
+      note_ids: [],
+      reference_ids: [],
+      summary: null,
+      what_changed: [],
+      improvements: [],
+      regressions: [],
+      unclear_points: [],
+      next_actions: [],
+      user_comments: null,
+      created_at: now,
+      updated_at: now,
+    };
+  }
+
+  function newPaperClaim(): ResearchPaperClaim {
+    return {
+      id: crypto.randomUUID(),
+      text: "",
+      question_ids: [],
+      reference_ids: [],
+      note_ids: [],
+      result_ids: [],
+      status: "draft",
+      audit_status: null,
+      audit_summary: null,
+      supporting_reference_ids: [],
+      supporting_note_ids: [],
+      missing_evidence: [],
+      audit_confidence: null,
+      audited_at: null,
+    };
+  }
+
+  function newPaperSection(): ResearchPaperSection {
+    return { id: crypto.randomUUID(), title: "", question_ids: [], claim_ids: [], reference_ids: [], note_ids: [], result_ids: [], status: "not_started" };
+  }
+
+  function notePromotionText(note: ResearchNote): string {
+    return note.content.trim() || note.title.trim();
+  }
+
+  function noteIterationState(noteId: string) {
+    const iteration = studyIterations.find((item) => item.note_ids.includes(noteId));
+    return {
+      assigned: Boolean(iteration),
+      iterationId: iteration?.id || null,
+      iterationTitle: iteration?.title || null,
+    };
+  }
+
+  function iterationResults(iterationId: string) {
+    return studyResults.filter((item) => item.iteration_id === iterationId);
+  }
+
+  function createResultFromIteration(iteration: ResearchStudyIteration): ResearchStudyResult {
+    const now = new Date().toISOString();
+    const existing = iterationResults(iteration.id)[0];
+    const base = existing || newStudyResult();
+    return {
+      ...base,
+      iteration_id: iteration.id,
+      title: iteration.title || `Result ${studyResults.length + 1}`,
+      note_ids: [...iteration.note_ids],
+      reference_ids: [...iteration.reference_ids],
+      summary: iteration.summary,
+      what_changed: [...iteration.what_changed],
+      improvements: [...iteration.improvements],
+      regressions: [...iteration.regressions],
+      unclear_points: [...iteration.unclear_points],
+      next_actions: [...iteration.next_actions],
+      user_comments: iteration.user_comments,
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+  }
+
+  function resultTimestamp(result: ResearchStudyResult): number {
+    return Date.parse(result.updated_at || result.created_at || "") || 0;
+  }
+
+  function sortedStudyResults(items: ResearchStudyResult[] = studyResults): ResearchStudyResult[] {
+    return [...items].sort((a, b) => resultTimestamp(b) - resultTimestamp(a));
+  }
+
+  function previousStudyResult(resultId: string): ResearchStudyResult | null {
+    const ordered = sortedStudyResults().reverse();
+    const index = ordered.findIndex((item) => item.id === resultId);
+    if (index <= 0) return null;
+    return ordered[index - 1] || null;
+  }
+
+  function resultDeltaLabel(current: ResearchStudyResult, previous: ResearchStudyResult | null) {
+    if (!previous) return null;
+    const improvementDelta = current.improvements.length - previous.improvements.length;
+    const regressionDelta = current.regressions.length - previous.regressions.length;
+    const unclearDelta = current.unclear_points.length - previous.unclear_points.length;
+    const parts: string[] = [];
+    if (improvementDelta !== 0) parts.push(`${improvementDelta > 0 ? "+" : ""}${improvementDelta} improvements`);
+    if (regressionDelta !== 0) parts.push(`${regressionDelta > 0 ? "+" : ""}${regressionDelta} regressions`);
+    if (unclearDelta !== 0) parts.push(`${unclearDelta > 0 ? "+" : ""}${unclearDelta} unclear`);
+    return parts.length > 0 ? parts.join(" · ") : "No major shift";
+  }
+
+  function toggleId(values: string[], value: string): string[] {
+    return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+  }
+
+  function buildPaperWorkspacePayload(
+    overrides?: Partial<{
+      paper_motivation: string | null;
+      target_output_title: string | null;
+      target_venue: string | null;
+      overleaf_url: string | null;
+      output_status: string;
+      registration_deadline: string | null;
+      submission_deadline: string | null;
+      decision_date: string | null;
+      study_iterations: ResearchStudyIteration[];
+      study_results: ResearchStudyResult[];
+      paper_authors: ResearchPaperAuthor[];
+      paper_questions: ResearchPaperQuestion[];
+      paper_claims: ResearchPaperClaim[];
+      paper_sections: ResearchPaperSection[];
+    }>
+  ) {
+    const payload = {
+      paper_motivation: paperMotivation.trim() || null,
+      target_output_title: paperTitle.trim() || null,
+      target_venue: paperVenue.trim() || null,
+      overleaf_url: paperOverleafUrl.trim() || null,
+      output_status: paperStatus,
+      registration_deadline: paperRegistrationDeadline || null,
+      submission_deadline: paperSubmissionDeadline || null,
+      decision_date: paperDecisionDate || null,
+      study_iterations: studyIterations,
+      study_results: studyResults,
+      paper_authors: paperAuthors,
+      paper_questions: paperQuestions,
+      paper_claims: paperClaims,
+      paper_sections: paperSections,
+      ...overrides,
+    };
+
+    return {
+      paper_motivation: payload.paper_motivation,
+      target_output_title: payload.target_output_title,
+      target_venue: payload.target_venue,
+      overleaf_url: payload.overleaf_url,
+      output_status: payload.output_status,
+      registration_deadline: payload.registration_deadline,
+      submission_deadline: payload.submission_deadline,
+      decision_date: payload.decision_date,
+      study_iterations: payload.study_iterations.map((item) => ({
+        id: item.id,
+        title: item.title,
+        start_date: item.start_date,
+        end_date: item.end_date,
+        note_ids: item.note_ids,
+        reference_ids: item.reference_ids,
+        result_ids: item.result_ids,
+        summary: item.summary,
+        what_changed: item.what_changed,
+        improvements: item.improvements,
+        regressions: item.regressions,
+        unclear_points: item.unclear_points,
+        next_actions: item.next_actions,
+        user_comments: item.user_comments,
+        reviewed_at: item.reviewed_at,
+      })),
+      study_results: payload.study_results.map((item) => ({
+        id: item.id,
+        iteration_id: item.iteration_id,
+        title: item.title,
+        note_ids: item.note_ids,
+        reference_ids: item.reference_ids,
+        summary: item.summary,
+        what_changed: item.what_changed,
+        improvements: item.improvements,
+        regressions: item.regressions,
+        unclear_points: item.unclear_points,
+        next_actions: item.next_actions,
+        user_comments: item.user_comments,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      })),
+      paper_authors: payload.paper_authors.map((item) => ({
+        id: item.id,
+        member_id: item.member_id,
+        display_name: item.display_name,
+        is_corresponding: item.is_corresponding,
+      })),
+      paper_questions: payload.paper_questions.map((item) => ({ id: item.id, text: item.text, note_ids: item.note_ids })),
+      paper_claims: payload.paper_claims.map((item) => ({
+        id: item.id,
+        text: item.text,
+        question_ids: item.question_ids,
+        reference_ids: item.reference_ids,
+        note_ids: item.note_ids,
+        result_ids: item.result_ids,
+        status: item.status,
+        audit_status: item.audit_status,
+        audit_summary: item.audit_summary,
+        supporting_reference_ids: item.supporting_reference_ids,
+        supporting_note_ids: item.supporting_note_ids,
+        missing_evidence: item.missing_evidence,
+        audit_confidence: item.audit_confidence,
+        audited_at: item.audited_at,
+      })),
+      paper_sections: payload.paper_sections.map((item) => ({
+        id: item.id,
+        title: item.title,
+        question_ids: item.question_ids,
+        claim_ids: item.claim_ids,
+        reference_ids: item.reference_ids,
+        note_ids: item.note_ids,
+        result_ids: item.result_ids,
+        status: item.status,
+      })),
+    };
+  }
+
+  async function persistPaperWorkspace(
+    overrides?: Partial<{
+      paper_motivation: string | null;
+      target_output_title: string | null;
+      target_venue: string | null;
+      overleaf_url: string | null;
+      output_status: string;
+      registration_deadline: string | null;
+      submission_deadline: string | null;
+      decision_date: string | null;
+      study_iterations: ResearchStudyIteration[];
+      study_results: ResearchStudyResult[];
+      paper_authors: ResearchPaperAuthor[];
+      paper_questions: ResearchPaperQuestion[];
+      paper_claims: ResearchPaperClaim[];
+      paper_sections: ResearchPaperSection[];
+    }>,
+    options?: {
+      requireSubmissionDeadline?: boolean;
+      successMessage?: string;
+    }
+  ) {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    const requireSubmissionDeadline = options?.requireSubmissionDeadline ?? false;
+    const payload = buildPaperWorkspacePayload(overrides);
+    if (requireSubmissionDeadline && !payload.submission_deadline) {
+      setError("Submission deadline is required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      await api.updateResearchCollection(selectedProjectId, selectedCollectionId, payload);
+      await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
+      setStatus(options?.successMessage || "Paper updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update paper");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleSaveCollection() {
@@ -761,41 +1426,31 @@ export function ResearchWorkspace({
         const created = await api.createResearchCollection(selectedProjectId, {
           title: collectionTitle.trim(),
           description: collectionDescription.trim() || undefined,
-          hypothesis: collectionHypothesis.trim() || undefined,
-          open_questions: csvToList(collectionOpenQuestions),
-          overleaf_url: collectionOverleafUrl.trim() || undefined,
-          target_output_title: collectionOutputTitle.trim() || undefined,
-          output_status: collectionOutputStatus,
         });
         await loadCollections();
         setSelectedCollectionId(created.id);
-        setStatus("Collection created.");
+        setStatus("Study created.");
       } else if (editingCollectionId) {
         await api.updateResearchCollection(selectedProjectId, editingCollectionId, {
           title: collectionTitle.trim(),
           description: collectionDescription.trim() || null,
-          hypothesis: collectionHypothesis.trim() || null,
-          open_questions: csvToList(collectionOpenQuestions),
           status: collectionStatus,
-          overleaf_url: collectionOverleafUrl.trim() || null,
-          target_output_title: collectionOutputTitle.trim() || null,
-          output_status: collectionOutputStatus,
         });
         await loadCollections();
         await loadCollectionDetail(editingCollectionId);
-        setStatus("Collection updated.");
+        setStatus("Study updated.");
       }
       setCollectionModalOpen(false);
       resetCollectionForm();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save collection");
+      setError(err instanceof Error ? err.message : "Failed to save study");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDeleteCollection(collectionId: string) {
-    if (!selectedProjectId || !confirm("Delete this collection?")) return;
+    if (!selectedProjectId || !confirm("Delete this study?")) return;
     try {
       await api.deleteResearchCollection(selectedProjectId, collectionId);
       await loadCollections();
@@ -805,9 +1460,9 @@ export function ResearchWorkspace({
       } else if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
       }
-      setStatus("Collection deleted.");
+      setStatus("Study deleted.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete collection");
+      setError(err instanceof Error ? err.message : "Failed to delete study");
     }
   }
 
@@ -819,10 +1474,297 @@ export function ResearchWorkspace({
       if (selectedCollectionId === collectionId) {
         await loadCollectionDetail(collectionId);
       }
-      setStatus("Collection archived.");
+      setStatus("Study archived.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to archive collection");
+      setError(err instanceof Error ? err.message : "Failed to archive study");
     }
+  }
+
+  async function handleSavePaperWorkspace() {
+    await persistPaperWorkspace(undefined, { requireSubmissionDeadline: true, successMessage: "Paper updated." });
+  }
+
+  async function handleAuditPaperClaims() {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    setAuditingPaperClaims(true);
+    setError("");
+    setStatus("");
+    try {
+      const detail = await api.auditResearchPaperClaims(selectedProjectId, selectedCollectionId);
+      setCollectionDetail(detail);
+      setStatus("Claims audited.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to audit claims");
+    } finally {
+      setAuditingPaperClaims(false);
+    }
+  }
+
+  async function handleBuildPaperOutline() {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    setBuildingPaperOutline(true);
+    setError("");
+    setStatus("");
+    try {
+      const detail = await api.buildResearchPaperOutline(selectedProjectId, selectedCollectionId);
+      setCollectionDetail(detail);
+      setPaperExpanded(true);
+      setStatus("Outline built.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to build outline");
+    } finally {
+      setBuildingPaperOutline(false);
+    }
+  }
+
+  async function handleDraftPaperFromGap() {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    setDraftingGapPaper(true);
+    setError("");
+    setStatus("");
+    try {
+      const detail = await api.draftResearchPaperFromGap(selectedProjectId, selectedCollectionId);
+      setCollectionDetail(detail);
+      setPaperExpanded(true);
+      setStatus("Motivation and questions drafted from gap logs.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to draft from gap logs");
+    } finally {
+      setDraftingGapPaper(false);
+    }
+  }
+
+  async function handleReviewIteration(iterationId: string) {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    setReviewingIterationId(iterationId);
+    setError("");
+    setStatus("");
+    try {
+      const detail = await api.reviewResearchIteration(selectedProjectId, selectedCollectionId, iterationId);
+      setCollectionDetail(detail);
+      setStatus("Iteration reviewed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to review iteration");
+    } finally {
+      setReviewingIterationId(null);
+    }
+  }
+
+  async function handleCreateResultFromIteration(iterationId: string) {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    const iteration = studyIterations.find((item) => item.id === iterationId);
+    if (!iteration || !iteration.summary) {
+      setError("Review the iteration first.");
+      return;
+    }
+    const result = createResultFromIteration(iteration);
+    const nextResults = [
+      result,
+      ...studyResults.filter((item) => item.id !== result.id),
+    ];
+    const nextIterations = studyIterations.map((item) =>
+      item.id === iterationId
+        ? {
+            ...item,
+            result_ids: Array.from(new Set([...(item.result_ids || []), result.id])),
+          }
+        : item
+    );
+    setStudyResults(nextResults);
+    setStudyIterations(nextIterations);
+    await persistPaperWorkspace(
+      {
+        study_results: nextResults,
+        study_iterations: nextIterations,
+      },
+      { successMessage: "Result created." }
+    );
+  }
+
+  async function handleCompareResults() {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    setComparingResults(true);
+    setError("");
+    setStatus("");
+    try {
+      const report = await api.compareResearchResults(selectedProjectId, selectedCollectionId);
+      setResultComparison(report);
+      setStatus("Results compared.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to compare results");
+    } finally {
+      setComparingResults(false);
+    }
+  }
+
+  async function handleCreateIterationFromLogs(noteIds: string[]) {
+    if (!selectedCollectionId) return;
+    const logs = notes
+      .filter((item) => item.collection_id === selectedCollectionId && noteIds.includes(item.id))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    if (logs.length === 0) return;
+    const referenceIds = Array.from(new Set(logs.flatMap((item) => item.linked_reference_ids)));
+    const iteration: ResearchStudyIteration = {
+      ...newStudyIteration(),
+      title: `Iteration ${studyIterations.length + 1}`,
+      start_date: logs[0].created_at.slice(0, 10),
+      end_date: logs[logs.length - 1].created_at.slice(0, 10),
+      note_ids: logs.map((item) => item.id),
+      reference_ids: referenceIds,
+      result_ids: [],
+    };
+    const nextIterations = [iteration, ...studyIterations];
+    setTab("iterations");
+    setExpandedIterationId(iteration.id);
+    setSelectedInboxLogIds(new Set());
+    await persistPaperWorkspace(
+      { study_iterations: nextIterations },
+      { successMessage: "Iteration created." }
+    );
+  }
+
+  async function handlePromoteNoteToQuestion(note: ResearchNote) {
+    if (!selectedCollectionId || note.collection_id !== selectedCollectionId) return;
+    const text = notePromotionText(note);
+    if (!text) return;
+    setTab("paper");
+    const nextQuestions = [...paperQuestions, { id: crypto.randomUUID(), text, note_ids: [note.id] }];
+    await persistPaperWorkspace(
+      {
+        paper_questions: nextQuestions,
+      },
+      { successMessage: "Question added from note." }
+    );
+  }
+
+  async function handlePromoteNoteToClaim(note: ResearchNote) {
+    if (!selectedCollectionId || note.collection_id !== selectedCollectionId) return;
+    const text = notePromotionText(note);
+    if (!text) return;
+    setTab("paper");
+    const nextClaims = [
+      ...paperClaims,
+      {
+        ...newPaperClaim(),
+        text,
+        reference_ids: [...note.linked_reference_ids],
+        note_ids: [note.id],
+      },
+    ];
+    await persistPaperWorkspace(
+      {
+        paper_claims: nextClaims,
+      },
+      { successMessage: "Claim added from note." }
+    );
+  }
+
+  async function handlePromoteNoteToSection(note: ResearchNote) {
+    if (!selectedCollectionId || note.collection_id !== selectedCollectionId) return;
+    const title = note.title.trim() || notePromotionText(note).slice(0, 120);
+    if (!title) return;
+    setTab("paper");
+    const nextSections = [
+      ...paperSections,
+      {
+        ...newPaperSection(),
+        title,
+        reference_ids: [...note.linked_reference_ids],
+        note_ids: [note.id],
+      },
+    ];
+    await persistPaperWorkspace(
+      {
+        paper_sections: nextSections,
+      },
+      { successMessage: "Section added from note." }
+    );
+  }
+
+  async function handlePromoteReferenceToQuestion(reference: ResearchReference) {
+    if (!selectedCollectionId || reference.collection_id !== selectedCollectionId) return;
+    const text = reference.title.trim();
+    if (!text) return;
+    setTab("paper");
+    const nextQuestions = [...paperQuestions, { id: crypto.randomUUID(), text, note_ids: [] }];
+    await persistPaperWorkspace({ paper_questions: nextQuestions }, { successMessage: "Question drafted from reference." });
+  }
+
+  async function handlePromoteReferenceToClaim(reference: ResearchReference) {
+    if (!selectedCollectionId || reference.collection_id !== selectedCollectionId) return;
+    const text = reference.title.trim();
+    if (!text) return;
+    setTab("paper");
+    const nextClaims = [
+      ...paperClaims,
+      {
+        ...newPaperClaim(),
+        text,
+        reference_ids: [reference.id],
+      },
+    ];
+    await persistPaperWorkspace({ paper_claims: nextClaims }, { successMessage: "Claim drafted from reference." });
+  }
+
+  async function handleGeneratePaperFromStudy() {
+    if (!selectedCollectionId) return;
+    const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
+    const nextQuestions = [...paperQuestions];
+    const nextClaims = [...paperClaims];
+    const nextSections = [...paperSections];
+    const existingQuestionTexts = new Set(nextQuestions.map((item) => item.text.trim().toLowerCase()).filter(Boolean));
+    const existingClaimTexts = new Set(nextClaims.map((item) => item.text.trim().toLowerCase()).filter(Boolean));
+    const existingSectionTitles = new Set(nextSections.map((item) => item.title.trim().toLowerCase()).filter(Boolean));
+
+    for (const note of collectionNotes) {
+      const text = notePromotionText(note);
+      const title = note.title.trim() || text.slice(0, 120);
+      const normalizedText = text.toLowerCase();
+      const normalizedTitle = title.toLowerCase();
+      if (["hypothesis", "discussion"].includes(note.note_type) && text && !existingQuestionTexts.has(normalizedText)) {
+        nextQuestions.push({ id: crypto.randomUUID(), text, note_ids: [note.id] });
+        existingQuestionTexts.add(normalizedText);
+        continue;
+      }
+      if (["finding", "conclusion", "decision", "observation"].includes(note.note_type) && text && !existingClaimTexts.has(normalizedText)) {
+        nextClaims.push({
+          ...newPaperClaim(),
+          text,
+          reference_ids: [...note.linked_reference_ids],
+          note_ids: [note.id],
+        });
+        existingClaimTexts.add(normalizedText);
+        continue;
+      }
+      if (["method", "literature_review", "action_item"].includes(note.note_type) && title && !existingSectionTitles.has(normalizedTitle)) {
+        nextSections.push({
+          ...newPaperSection(),
+          title,
+          reference_ids: [...note.linked_reference_ids],
+          note_ids: [note.id],
+        });
+        existingSectionTitles.add(normalizedTitle);
+      }
+    }
+
+    if (
+      nextQuestions.length === paperQuestions.length &&
+      nextClaims.length === paperClaims.length &&
+      nextSections.length === paperSections.length
+    ) {
+      setStatus("No new paper items generated.");
+      return;
+    }
+
+    setPaperExpanded(true);
+    await persistPaperWorkspace(
+      {
+        paper_questions: nextQuestions,
+        paper_claims: nextClaims,
+        paper_sections: nextSections,
+      },
+      { successMessage: "Paper workspace generated from study." }
+    );
   }
 
   function buildReferencePayload(overrides?: Partial<Record<string, unknown>>) {
@@ -1412,7 +2354,7 @@ export function ResearchWorkspace({
 
   async function handleLinkBibliography(item: BibliographyReference) {
     if (!selectedProjectId || !selectedCollectionId) {
-      setError("Select a collection first.");
+      setError("Select a study first.");
       return;
     }
     try {
@@ -1673,19 +2615,21 @@ export function ResearchWorkspace({
           title: noteTitle.trim(),
           content: noteContent.trim(),
           collection_id: noteCollectionId,
-          note_type: noteType,
+          lane: noteLane || null,
+          note_type: noteType || "observation",
           linked_reference_ids: noteReferenceIds,
         });
-        setStatus("Note added.");
+        setStatus("Log added.");
       } else if (editingNoteId) {
         await api.updateResearchNote(selectedProjectId, editingNoteId, {
           title: noteTitle.trim(),
           content: noteContent.trim(),
           collection_id: noteCollectionId,
-          note_type: noteType,
+          lane: noteLane || null,
+          note_type: noteType || "observation",
         });
         await api.setNoteReferences(selectedProjectId, editingNoteId, noteReferenceIds);
-        setStatus("Note updated.");
+        setStatus("Log updated.");
       }
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
       if (selectedCollectionId) {
@@ -1694,23 +2638,56 @@ export function ResearchWorkspace({
       setNoteModalOpen(false);
       resetNoteForm(selectedCollectionId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save note");
+      setError(err instanceof Error ? err.message : "Failed to save log");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleQuickLogSubmit() {
+    if (!selectedProjectId || !selectedCollectionId || !quickLogContent.trim()) return;
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      await api.createResearchNote(selectedProjectId, {
+        title: quickLogTitle.trim() || deriveLogTitle(quickLogContent),
+        content: quickLogContent.trim(),
+        lane: quickLogLane || null,
+        collection_id: selectedCollectionId,
+        note_type: "observation",
+        linked_reference_ids: quickLogRefIds,
+      });
+      await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
+      if (selectedCollectionId) {
+        await loadCollectionDetail(selectedCollectionId);
+      }
+      setQuickLogContent("");
+      setQuickLogTitle("");
+      setQuickLogLane("");
+      setQuickLogRefIds([]);
+      setStatus("Log added.");
+      setTimeout(() => {
+        quickLogInputRef.current?.focus();
+      }, 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save log");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDeleteNote(noteId: string) {
-    if (!selectedProjectId || !confirm("Delete this note?")) return;
+    if (!selectedProjectId || !confirm("Delete this log?")) return;
     try {
       await api.deleteResearchNote(selectedProjectId, noteId);
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId)]);
       if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
       }
-      setStatus("Note deleted.");
+      setStatus("Log deleted.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete note");
+      setError(err instanceof Error ? err.message : "Failed to delete log");
     }
   }
 
@@ -1805,7 +2782,7 @@ export function ResearchWorkspace({
       {!bibliographyOnly ? (
         <div className="setup-summary-bar">
           <div className="setup-summary-stats">
-            <span>{collections.length} collections</span>
+            <span>{collections.length} studies</span>
             <span className="setup-summary-sep" />
             <span>{bibliography.length} papers</span>
             <span className="setup-summary-sep" />
@@ -1813,10 +2790,10 @@ export function ResearchWorkspace({
             <span className="setup-summary-sep" />
             <span>{readCount} read</span>
             <span className="setup-summary-sep" />
-            <span>{notes.length} notes</span>
+            <span>{notes.length} inbox</span>
           </div>
           <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
-            <FontAwesomeIcon icon={faPlus} /> New Collection
+            <FontAwesomeIcon icon={faPlus} /> New Study
           </button>
         </div>
       ) : null}
@@ -1871,19 +2848,20 @@ export function ResearchWorkspace({
           <div className="research-collection-title-row">
             <strong>{collectionDetail.title}</strong>
             <span className={`chip small ${collectionDetail.status === "active" ? "status-ok" : ""}`}>{collectionDetail.status}</span>
-            <span className="chip small">{collectionDetail.output_status.replace(/_/g, " ")}</span>
-            <span className="muted-small">{collectionDetail.reference_count} linked papers</span>
+            <span className="muted-small">{collectionDetail.reference_count} references</span>
             <span className="setup-summary-sep" />
-            <span className="muted-small">{collectionDetail.note_count} notes</span>
+            <span className="muted-small">{collectionDetail.note_count} logs</span>
             <span className="setup-summary-sep" />
             <span className="muted-small">{collectionDetail.member_count} members</span>
           </div>
-          {collectionDetail.hypothesis ? <p className="muted-small research-hypothesis">{collectionDetail.hypothesis}</p> : null}
+          {collectionDetail.description || collectionDetail.hypothesis ? (
+            <p className="muted-small research-hypothesis">{collectionDetail.description || collectionDetail.hypothesis}</p>
+          ) : null}
           <div className="research-header-actions">
             <button type="button" className="meetings-new-btn" onClick={openCreateNoteModal}>
-              <FontAwesomeIcon icon={faPlus} /> Add Note
+              <FontAwesomeIcon icon={faPlus} /> New Log
             </button>
-            <button type="button" className="ghost docs-action-btn" title="Edit Collection" onClick={openEditCollectionModal}>
+            <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
               <FontAwesomeIcon icon={faPen} />
             </button>
             <button type="button" className="ghost docs-action-btn" title="Link Context" onClick={openWbsModal}>
@@ -1900,11 +2878,17 @@ export function ResearchWorkspace({
       ) : null}
 
       {!bibliographyOnly ? <div className="delivery-tabs">
-        <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
-          Linked Papers <span className="delivery-tab-count">{references.length}</span>
+        <button className={`delivery-tab ${tab === "paper" ? "active" : ""}`} onClick={() => setTab("paper")}>
+          Paper
         </button>
-        <button className={`delivery-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
-          Notes <span className="delivery-tab-count">{notes.length}</span>
+        <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} onClick={() => setTab("iterations")}>
+          Iterations <span className="delivery-tab-count">{studyIterations.length}</span>
+        </button>
+        <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
+          References <span className="delivery-tab-count">{references.length}</span>
+        </button>
+        <button className={`delivery-tab inbox-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
+          <FontAwesomeIcon icon={faInbox} /> Inbox <span className="delivery-tab-count">{notes.length}</span>
         </button>
         <button className={`delivery-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
           Overview
@@ -1920,14 +2904,36 @@ export function ResearchWorkspace({
           </button>
         ) : null}
         {tab === "notes" ? (
-          <button
-            type="button"
-            className="meetings-new-btn delivery-tab-action"
-            onClick={openCreateNoteModal}
-            disabled={!selectedCollectionId}
-          >
-            <FontAwesomeIcon icon={faPlus} /> Add Note
-          </button>
+          <div className="bibliography-tab-tools">
+            <button
+              type="button"
+              className="meetings-new-btn delivery-tab-action"
+              disabled={selectedInboxLogIds.size === 0}
+              onClick={() => void handleCreateIterationFromLogs(Array.from(selectedInboxLogIds))}
+            >
+              <FontAwesomeIcon icon={faPlus} /> Iteration
+            </button>
+            <button
+              type="button"
+              className="meetings-new-btn delivery-tab-action"
+              onClick={openCreateNoteModal}
+              disabled={!selectedCollectionId}
+            >
+              <FontAwesomeIcon icon={faPlus} /> New Log
+            </button>
+          </div>
+        ) : null}
+        {tab === "iterations" ? (
+          <div className="bibliography-tab-tools">
+            <button
+              type="button"
+              className="ghost icon-text-button small"
+              disabled={saving || !selectedCollectionId}
+              onClick={() => void persistPaperWorkspace(undefined, { successMessage: "Iterations updated." })}
+            >
+              Save
+            </button>
+          </div>
         ) : null}
       </div>
       : null}
@@ -1935,6 +2941,8 @@ export function ResearchWorkspace({
       {tab === "references" && !bibliographyOnly ? renderReferencesTab() : null}
       {bibliographyOnly ? renderBibliographyTab() : null}
       {tab === "notes" && !bibliographyOnly ? renderNotesTab() : null}
+      {tab === "paper" && !bibliographyOnly ? renderPaperTab() : null}
+      {tab === "iterations" && !bibliographyOnly ? renderIterationsTab() : null}
       {tab === "overview" && !bibliographyOnly ? renderOverviewTab() : null}
 
       {!bibliographyOnly && collectionModalOpen ? renderCollectionModal() : null}
@@ -1970,12 +2978,18 @@ export function ResearchWorkspace({
 
   function renderReferencesTab() {
     if (!selectedCollectionId) {
-      return <p className="empty-message">Select a collection to import and manage linked papers.</p>;
+      return <p className="empty-message">Select a study to import and manage references.</p>;
     }
 
     const linkedBibliographyReferences = references
       .filter((item) => item.bibliography_reference_id)
       .map((item) => buildBibliographyFallbackReference(item));
+    const referenceUsage = (referenceId: string) => {
+      const claimCount = paperClaims.filter((item) => item.reference_ids.includes(referenceId)).length;
+      const sectionCount = paperSections.filter((item) => item.reference_ids.includes(referenceId)).length;
+      const noteCount = notes.filter((item) => item.linked_reference_ids.includes(referenceId)).length;
+      return { claimCount, sectionCount, noteCount };
+    };
 
     return (
       <>
@@ -1991,7 +3005,7 @@ export function ResearchWorkspace({
             <input
               className="meetings-search"
               type="text"
-              placeholder="Search linked papers"
+              placeholder="Search references"
               value={refSearch}
               onChange={(event) => setRefSearch(event.target.value)}
             />
@@ -2007,7 +3021,7 @@ export function ResearchWorkspace({
         </div>
 
         {references.length === 0 ? (
-          <p className="empty-message">No linked papers in this collection.</p>
+          <p className="empty-message">No references in this study.</p>
         ) : (
           <div className="simple-table-wrap">
             <table className="simple-table compact-table">
@@ -2016,7 +3030,7 @@ export function ResearchWorkspace({
                   <th>Paper</th>
                   <th>Year</th>
                   <th>Status</th>
-                  <th className="col-icon" />
+                  <th>Actions</th>
                   <th className="col-icon" />
                 </tr>
               </thead>
@@ -2027,30 +3041,22 @@ export function ResearchWorkspace({
                       <strong>{reference.title}</strong>
                       <span className="muted-small research-inline-meta">{reference.authors.join(", ") || "-"}</span>
                       {reference.venue ? <span className="muted-small research-inline-meta">{reference.venue}</span> : null}
+                      {(() => {
+                        const usage = referenceUsage(reference.id);
+                        return usage.claimCount + usage.sectionCount + usage.noteCount > 0 ? (
+                          <span className="research-chip-group">
+                            {usage.claimCount ? <span className="chip small">{usage.claimCount} claims</span> : null}
+                            {usage.sectionCount ? <span className="chip small">{usage.sectionCount} sections</span> : null}
+                            {usage.noteCount ? <span className="chip small">{usage.noteCount} notes</span> : null}
+                          </span>
+                        ) : null;
+                      })()}
                       {reference.ai_summary ? (() => {
                         const summary = parseSummaryPayload(reference.ai_summary);
                         return (
                           <details className="research-inline-summary">
                             <summary>AI Summary</summary>
-                            {summary?.summary ? <p>{summary.summary}</p> : <p>{reference.ai_summary}</p>}
-                            {summary?.contributions?.length ? (
-                              <div className="research-bullet-stack">
-                                {summary.contributions.slice(0, 2).map((item) => (
-                                  <span key={item} className="chip small">
-                                    {item}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : null}
-                            {summary?.results?.length ? (
-                              <div className="research-bullet-stack">
-                                {summary.results.slice(0, 2).map((item) => (
-                                  <span key={item} className="chip small">
-                                    {item}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : null}
+                            {renderPaperSummary(summary, reference.ai_summary, { compact: true })}
                           </details>
                         );
                       })() : null}
@@ -2069,18 +3075,34 @@ export function ResearchWorkspace({
                       </select>
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        className="ghost docs-action-btn"
-                        title={reference.bibliography_reference_id ? "Open paper" : "Edit reference"}
-                        onClick={() =>
-                          reference.bibliography_reference_id
-                            ? openEditBibliographyModal(buildBibliographyFallbackReference(reference))
-                            : openEditReferenceModal(reference)
-                        }
-                      >
-                        <FontAwesomeIcon icon={reference.bibliography_reference_id ? faBookOpen : faPen} />
-                      </button>
+                      <div className="note-row-actions">
+                        <button
+                          type="button"
+                          className="ghost icon-text-button small"
+                          onClick={() => void handlePromoteReferenceToClaim(reference)}
+                        >
+                          Claim
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost icon-text-button small"
+                          onClick={() => void handlePromoteReferenceToQuestion(reference)}
+                        >
+                          Question
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost docs-action-btn"
+                          title={reference.bibliography_reference_id ? "Open paper" : "Edit reference"}
+                          onClick={() =>
+                            reference.bibliography_reference_id
+                              ? openEditBibliographyModal(buildBibliographyFallbackReference(reference))
+                              : openEditReferenceModal(reference)
+                          }
+                        >
+                          <FontAwesomeIcon icon={reference.bibliography_reference_id ? faBookOpen : faPen} />
+                        </button>
+                      </div>
                     </td>
                     <td className="col-icon">
                       <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => handleDeleteReference(reference.id)}>
@@ -2232,7 +3254,7 @@ export function ResearchWorkspace({
         {filteredBibliography.length === 0 ? (
           <p className="empty-message">{bibliography.length === 0 ? "No papers yet." : "No papers match filters."}</p>
         ) : (
-          <div className="simple-table-wrap">
+          <div className={`simple-table-wrap bib-table-fill${bibliographyFiltersOpen ? " bib-filters-active" : ""}`}>
             <table className="simple-table compact-table">
               <thead>
                 <tr>
@@ -2382,21 +3404,7 @@ export function ResearchWorkspace({
                               return (
                                 <details className="research-inline-summary" open>
                                   <summary>AI Summary</summary>
-                                  {summary?.summary ? <p>{summary.summary}</p> : <p>{item.ai_summary}</p>}
-                                  {summary?.contributions?.length ? (
-                                    <div className="research-bullet-stack">
-                                      {summary.contributions.slice(0, 3).map((entry) => (
-                                        <span key={entry} className="chip small">{entry}</span>
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                  {summary?.results?.length ? (
-                                    <div className="research-bullet-stack">
-                                      {summary.results.slice(0, 3).map((entry) => (
-                                        <span key={entry} className="chip small">{entry}</span>
-                                      ))}
-                                    </div>
-                                  ) : null}
+                                  {renderPaperSummary(summary, item.ai_summary)}
                                 </details>
                               );
                             })() : null}
@@ -2512,7 +3520,7 @@ export function ResearchWorkspace({
         {bibliographyCollections.length === 0 ? (
           <p className="empty-message">No collections yet. Create one to organize your papers.</p>
         ) : (
-          <div className="simple-table-wrap">
+          <div className="simple-table-wrap bib-table-fill">
             <table className="simple-table compact-table">
               <thead>
                 <tr>
@@ -2789,121 +3797,1412 @@ export function ResearchWorkspace({
     );
   }
 
+  function renderLanePills(
+    value: string,
+    onChange: (next: string) => void,
+    options?: { noneLabel?: string; className?: string },
+  ) {
+    const noneLabel = options?.noneLabel || "No lane";
+    const className = options?.className ? ` ${options.className}` : "";
+    return (
+      <div className={`research-lane-pills${className}`}>
+        <button
+          type="button"
+          className={`research-lane-pill${value === "" ? " active" : ""}`}
+          onClick={() => onChange("")}
+        >
+          {noneLabel}
+        </button>
+        {NOTE_LANE_OPTIONS.map(([laneValue, laneLabel]) => (
+          <button
+            key={laneValue}
+            type="button"
+            className={`research-lane-pill${value === laneValue ? " active" : ""}`}
+            onClick={() => onChange(laneValue)}
+          >
+            {laneLabel}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
   function renderNotesTab() {
     if (!selectedCollectionId) {
-      return <p className="empty-message">Select a collection to add and manage notes.</p>;
+      return <p className="empty-message">Select a study to log work.</p>;
     }
+
+    const questionNoteIds = new Set(paperQuestions.flatMap((item) => item.note_ids));
+    const claimNoteIds = new Set(paperClaims.flatMap((item) => item.note_ids));
+    const sectionNoteIds = new Set(paperSections.flatMap((item) => item.note_ids));
+    const noteWorkflow = (note: ResearchNote) => {
+      const promotedToQuestion = questionNoteIds.has(note.id);
+      const promotedToClaim = claimNoteIds.has(note.id);
+      const promotedToSection = sectionNoteIds.has(note.id);
+      const promotionCount = [promotedToQuestion, promotedToClaim, promotedToSection].filter(Boolean).length;
+      const state = promotionCount === 0 ? "Unprocessed" : "Promoted";
+      return {
+        state,
+        promotedToQuestion,
+        promotedToClaim,
+        promotedToSection,
+      };
+    };
+    const searchLower = noteSearchQuery.toLowerCase();
+    const visibleNotes = searchLower
+      ? notes.filter((note) => note.title.toLowerCase().includes(searchLower) || note.content.toLowerCase().includes(searchLower))
+      : notes;
+    const orderedNotes = [...visibleNotes].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const unassignedLogs = notes.filter((note) => note.collection_id === selectedCollectionId && !noteIterationState(note.id).assigned);
+    const allVisibleSelected = orderedNotes.length > 0 && orderedNotes.every((note) => selectedInboxLogIds.has(note.id));
 
     return (
       <>
+        <div className={`research-log-composer${composerExpanded ? " expanded" : ""}`}>
+          {composerExpanded ? (
+            <input
+              className="research-inline-title"
+              value={quickLogTitle}
+              onChange={(event) => setQuickLogTitle(event.target.value)}
+              placeholder="Title (optional)"
+            />
+          ) : null}
+          <textarea
+            ref={quickLogInputRef}
+            className="research-log-composer-input"
+            rows={composerExpanded ? 4 : 1}
+            value={quickLogContent}
+            onChange={(event) => {
+              const textarea = event.target;
+              handleContentChange(textarea.value, textarea.selectionStart, textarea, "composer");
+            }}
+            onFocus={() => setComposerExpanded(true)}
+            onBlur={() => { if (!quickLogContent.trim() && !quickLogTitle.trim()) setComposerExpanded(false); }}
+            onKeyDown={(event) => {
+              handleMentionKeyDown(event);
+              if (mentionOpen) return;
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void handleQuickLogSubmit();
+              }
+            }}
+            placeholder={composerExpanded ? "Content (markdown, @ to cite a reference)" : "Log a finding, observation, or note..."}
+          />
+          {composerExpanded ? (
+            <div className="research-log-composer-actions">
+              {renderLanePills(quickLogLane, setQuickLogLane, { className: "research-log-lane-pills" })}
+              <button
+                type="button"
+                className="meetings-new-btn"
+                disabled={!quickLogContent.trim() || saving}
+                onClick={() => void handleQuickLogSubmit()}
+              >
+                <FontAwesomeIcon icon={faPlus} /> Log
+              </button>
+            </div>
+          ) : null}
+        </div>
+
         <div className="meetings-toolbar">
           <div className="meetings-filter-group">
-            <select value={noteTypeFilter} onChange={(event) => setNoteTypeFilter(event.target.value)}>
-              <option value="">All types</option>
-              {Object.entries(NOTE_TYPE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            <label className="research-log-select-all">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={() =>
+                  setSelectedInboxLogIds((current) => {
+                    if (allVisibleSelected) {
+                      const next = new Set(current);
+                      orderedNotes.forEach((note) => next.delete(note.id));
+                      return next;
+                    }
+                    const next = new Set(current);
+                    orderedNotes.forEach((note) => next.add(note.id));
+                    return next;
+                  })
+                }
+              />
+              <span>{selectedInboxLogIds.size > 0 ? `${selectedInboxLogIds.size} selected` : "All"}</span>
+            </label>
+            {renderLanePills(noteLaneFilter, setNoteLaneFilter, { noneLabel: "All lanes", className: "research-lane-filter-pills" })}
+            <input
+              className="meetings-search"
+              placeholder="Search logs..."
+              value={noteSearchQuery}
+              onChange={(event) => setNoteSearchQuery(event.target.value)}
+            />
+            {unassignedLogs.length > 0 ? (
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                onClick={() => setSelectedInboxLogIds(new Set(unassignedLogs.map((item) => item.id)))}
+              >
+                Select New ({unassignedLogs.length})
+              </button>
+            ) : null}
           </div>
         </div>
 
-        {notes.length === 0 ? (
-          <p className="empty-message">No notes in this collection.</p>
+        {orderedNotes.length === 0 ? (
+          <p className="empty-message">No logs in this study.</p>
         ) : (
-          <div className="simple-table-wrap">
-            <table className="simple-table compact-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Title</th>
-                  <th>Author</th>
-                  <th>Refs</th>
-                  <th className="col-icon" />
-                  <th className="col-icon" />
-                </tr>
-              </thead>
-              <tbody>
-                {notes.map((note) => (
-                  <tr key={note.id}>
-                    <td>
-                      <span className="chip small">{NOTE_TYPE_LABELS[note.note_type] || note.note_type}</span>
-                    </td>
-                    <td>
-                      <strong>{note.title}</strong>
-                      <span className="muted-small research-note-preview">
-                        {note.content.slice(0, 120)}
-                        {note.content.length > 120 ? "..." : ""}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="muted-small">{note.author_name || "-"}</span>
-                    </td>
-                    <td>{note.linked_reference_ids.length || "-"}</td>
-                    <td className="col-icon">
-                      <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEditNoteModal(note)}>
-                        <FontAwesomeIcon icon={faPen} />
-                      </button>
-                    </td>
-                    <td className="col-icon">
-                      <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => handleDeleteNote(note.id)}>
-                        <FontAwesomeIcon icon={faTrash} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="research-log-stream">
+            <div className="research-log-list">
+              {orderedNotes.map((note) => {
+                const workflow = noteWorkflow(note);
+                const iterationState = noteIterationState(note.id);
+                const isSelected = selectedInboxLogIds.has(note.id);
+                const isEditing = inlineEditNoteId === note.id;
+                const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
+                return (
+                  <article
+                    key={note.id}
+                    className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " research-log-card-unprocessed" : ""}`}
+                  >
+                    <div className="research-log-head">
+                      <label className="research-log-select">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() =>
+                            setSelectedInboxLogIds((current) => {
+                              const next = new Set(current);
+                              if (next.has(note.id)) next.delete(note.id);
+                              else next.add(note.id);
+                              return next;
+                            })
+                          }
+                        />
+                      </label>
+                      {isEditing ? (
+                        <>
+                          {renderLanePills(inlineEditLane, setInlineEditLane, { className: "research-inline-lane-pills" })}
+                        </>
+                      ) : (
+                        <div className="research-chip-group">
+                          {note.lane ? <span className="chip small">{NOTE_LANE_LABELS[note.lane] || note.lane}</span> : null}
+                          <span className="chip small">{workflow.state}</span>
+                          {workflow.promotedToQuestion ? <span className="chip small">Question</span> : null}
+                          {workflow.promotedToClaim ? <span className="chip small">Claim</span> : null}
+                          {workflow.promotedToSection ? <span className="chip small">Section</span> : null}
+                          {iterationState.assigned ? <span className="chip small">Iteration</span> : null}
+                        </div>
+                      )}
+                      <span className="research-log-timestamp">{formatLogTimestamp(note.created_at)} · {formatLogDate(note.created_at)}</span>
+                      <div className="research-log-controls">
+                        {isEditing ? (
+                          <>
+                            <button
+                              type="button"
+                              className="meetings-new-btn"
+                              disabled={!inlineEditTitle.trim() || !inlineEditContent.trim() || saving}
+                              onClick={() => void handleInlineEditSave(note.id)}
+                            >
+                              {saving ? "Saving..." : "Save"}
+                            </button>
+                            <button type="button" className="ghost icon-text-button small" onClick={cancelInlineEdit}>
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
+                              <FontAwesomeIcon icon={faPen} />
+                            </button>
+                            <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => handleDeleteNote(note.id)}>
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {isEditing ? (
+                      <div className="research-log-body">
+                        <input
+                          className="research-inline-title"
+                          value={inlineEditTitle}
+                          onChange={(event) => setInlineEditTitle(event.target.value)}
+                          placeholder="Title"
+                          autoFocus
+                        />
+                        <textarea
+                          ref={inlineEditContentRef}
+                          className="research-inline-content"
+                          value={inlineEditContent}
+                          onChange={(event) => {
+                            const textarea = event.target;
+                            handleContentChange(textarea.value, textarea.selectionStart, textarea, "inline");
+                          }}
+                          onKeyDown={(event) => {
+                            handleMentionKeyDown(event);
+                            if (mentionOpen) return;
+                            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                              event.preventDefault();
+                              void handleInlineEditSave(note.id);
+                            }
+                            if (event.key === "Escape") {
+                              cancelInlineEdit();
+                            }
+                          }}
+                          rows={4}
+                          placeholder="Content (markdown, @ to cite)"
+                        />
+                      </div>
+                    ) : (
+                      <div className="research-log-body">
+                        <strong>{note.title}</strong>
+                        <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
+                      </div>
+                    )}
+                    <div className="research-log-footer">
+                      <div className="research-log-meta">
+                        <span>{note.author_name || "Unknown author"}</span>
+                        <span>{linkedReferencesLabel}</span>
+                        {iterationState.assigned && iterationState.iterationTitle ? <span>{iterationState.iterationTitle}</span> : null}
+                      </div>
+                      <div className="note-promote-actions">
+                        <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToClaim(note)}>
+                          Claim
+                        </button>
+                        <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToQuestion(note)}>
+                          Question
+                        </button>
+                        <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToSection(note)}>
+                          Section
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </div>
         )}
+
+        {mentionOpen && mentionAnchor ? (
+          <div
+            className="mention-dropdown"
+            style={{ position: "fixed", top: mentionAnchor.top, left: mentionAnchor.left }}
+          >
+            {mentionResults.length === 0 ? (
+              <div className="mention-empty">No references found</div>
+            ) : (
+              mentionResults.map((ref, index) => (
+                <button
+                  key={ref.id}
+                  type="button"
+                  className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
+                  onMouseDown={(event) => { event.preventDefault(); selectMention(ref); }}
+                  onMouseEnter={() => setMentionActiveIndex(index)}
+                >
+                  <span className="mention-item-title">{ref.title}</span>
+                  <span className="mention-item-meta">
+                    {ref.authors.length > 0 ? ref.authors[0] : ""}{ref.year ? ` · ${ref.year}` : ""}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        ) : null}
       </>
+    );
+  }
+
+  function renderPaperTab() {
+    if (!collectionDetail || !selectedCollectionId) {
+      return <p className="empty-message">Select a study to manage its paper.</p>;
+    }
+
+    const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
+    const gapNotes = collectionNotes.filter((item) => item.lane === "gap");
+    const collectionReferences = references.filter((item) => item.collection_id === selectedCollectionId);
+    const collectionResults = studyResults;
+    const availableAuthorMembers = collectionDetail.members.filter(
+      (member) => !paperAuthors.some((author) => author.member_id === member.member_id)
+    );
+    const unprocessedInboxCount = collectionNotes.filter(
+      (note) =>
+        !paperQuestions.some((item) => item.note_ids.includes(note.id)) &&
+        !paperClaims.some((item) => item.note_ids.includes(note.id)) &&
+        !paperSections.some((item) => item.note_ids.includes(note.id))
+    ).length;
+    const unsupportedClaims = paperClaims.filter((item) => item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
+    const weakSections = paperSections.filter((item) => item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
+    const paperHasStructure =
+      Boolean(paperMotivation.trim()) ||
+      Boolean(paperTitle.trim()) ||
+      paperAuthors.length > 0 ||
+      paperQuestions.length > 0 ||
+      paperClaims.length > 0 ||
+      paperSections.length > 0 ||
+      Boolean(paperSubmissionDeadline);
+    const nextActions = [
+      !paperSubmissionDeadline ? "Set submission deadline" : null,
+      !paperMotivation.trim() && gapNotes.length > 0 ? "Draft motivation from gap logs" : null,
+      paperAuthors.length === 0 ? "Add authors" : null,
+      paperQuestions.length === 0 ? "Add a research question" : null,
+      unprocessedInboxCount > 0 ? `Process ${unprocessedInboxCount} inbox item${unprocessedInboxCount !== 1 ? "s" : ""}` : null,
+      unsupportedClaims > 0 ? `Support ${unsupportedClaims} claim${unsupportedClaims !== 1 ? "s" : ""}` : null,
+      weakSections > 0 ? `Strengthen ${weakSections} section${weakSections !== 1 ? "s" : ""}` : null,
+    ].filter(Boolean) as string[];
+
+    return (
+      <div className="paper-workspace">
+        <div className="meetings-detail-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Paper</strong>
+            </div>
+            <div className="research-header-actions">
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                disabled={draftingGapPaper || gapNotes.length === 0}
+                onClick={() => void handleDraftPaperFromGap()}
+              >
+                <FontAwesomeIcon icon={faMagicWandSparkles} spin={draftingGapPaper} /> {draftingGapPaper ? "Drafting..." : "Draft From Gap"}
+              </button>
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                disabled={buildingPaperOutline || (paperQuestions.length === 0 && paperClaims.length === 0 && collectionNotes.length === 0 && collectionReferences.length === 0)}
+                onClick={() => void handleBuildPaperOutline()}
+              >
+                <FontAwesomeIcon icon={faMagicWandSparkles} spin={buildingPaperOutline} /> {buildingPaperOutline ? "Building..." : "Build Outline"}
+              </button>
+              <button type="button" className="ghost icon-text-button small" disabled={auditingPaperClaims || paperClaims.length === 0} onClick={() => void handleAuditPaperClaims()}>
+                <FontAwesomeIcon icon={faMagicWandSparkles} spin={auditingPaperClaims} /> {auditingPaperClaims ? "Auditing..." : "Audit Claims"}
+              </button>
+              <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void handleSavePaperWorkspace()}>
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+          <div className="paper-health-row">
+            <span className={`chip small${!paperSubmissionDeadline ? " paper-health-alert" : ""}`}>
+              {paperSubmissionDeadline ? `Submission ${new Date(paperSubmissionDeadline).toLocaleDateString()}` : "No deadline"}
+            </span>
+            <span className="chip small">{paperAuthors.length} authors</span>
+            <span className="chip small">{paperQuestions.length} questions</span>
+            <span className="chip small">{gapNotes.length} gap logs</span>
+            <span className={`chip small${unsupportedClaims > 0 ? " paper-health-alert" : ""}`}>
+              {unsupportedClaims} unsupported claims
+            </span>
+            <span className={`chip small${weakSections > 0 ? " paper-health-alert" : ""}`}>
+              {weakSections} weak sections
+            </span>
+            <span className={`chip small${unprocessedInboxCount > 0 ? " paper-health-alert" : ""}`}>
+              {unprocessedInboxCount} inbox pending
+            </span>
+          </div>
+          {nextActions.length > 0 ? (
+            <div className="paper-next-actions">
+              {nextActions.slice(0, 4).map((item) => (
+                <span key={item} className="chip small">{item}</span>
+              ))}
+            </div>
+          ) : null}
+          <div className="paper-meta-grid">
+            <label className="full-span">
+              Motivation
+              <textarea rows={4} value={paperMotivation} onChange={(event) => setPaperMotivation(event.target.value)} />
+            </label>
+            <label className="full-span">
+              Paper Title
+              <input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} />
+            </label>
+            <label>
+              Venue
+              <input value={paperVenue} onChange={(event) => setPaperVenue(event.target.value)} />
+            </label>
+            <label>
+              Status
+              <select value={paperStatus} onChange={(event) => setPaperStatus(event.target.value)}>
+                <option value="not_started">Not started</option>
+                <option value="drafting">Drafting</option>
+                <option value="internal_review">Internal review</option>
+                <option value="submitted">Submitted</option>
+                <option value="published">Published</option>
+              </select>
+            </label>
+            <label>
+              Registration Deadline
+              <input type="date" value={paperRegistrationDeadline} onChange={(event) => setPaperRegistrationDeadline(event.target.value)} />
+            </label>
+            <label>
+              Submission Deadline
+              <input type="date" value={paperSubmissionDeadline} onChange={(event) => setPaperSubmissionDeadline(event.target.value)} />
+            </label>
+            <label>
+              Decision Date
+              <input type="date" value={paperDecisionDate} onChange={(event) => setPaperDecisionDate(event.target.value)} />
+            </label>
+            <label className="full-span">
+              Overleaf
+              <input value={paperOverleafUrl} onChange={(event) => setPaperOverleafUrl(event.target.value)} />
+            </label>
+          </div>
+        </div>
+
+        {!paperExpanded && !paperHasStructure ? (
+          <div className="meetings-detail-section">
+            <div className="paper-stack">
+              <div className="paper-compact-grid">
+                <label>
+                  Main Question
+                  <textarea
+                    rows={3}
+                    value={paperQuestions[0]?.text || ""}
+                    onChange={(event) =>
+                      setPaperQuestions((items) =>
+                        items.length > 0
+                          ? items.map((item, index) => (index === 0 ? { ...item, text: event.target.value } : item))
+                          : [{ id: crypto.randomUUID(), text: event.target.value, note_ids: [] }]
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <div className="row-actions">
+                <button type="button" className="ghost icon-text-button small" onClick={() => void handleGeneratePaperFromStudy()}>
+                  <FontAwesomeIcon icon={faMagicWandSparkles} /> Generate From Study
+                </button>
+                <button type="button" className="meetings-new-btn" onClick={() => setPaperExpanded(true)}>
+                  Open Full Workspace
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {paperExpanded || paperHasStructure ? (
+          <>
+
+        <div className="meetings-detail-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Authors</strong>
+            </div>
+          </div>
+          <div className="paper-stack">
+            <div className="paper-author-add-row">
+              <select
+                value=""
+                onChange={(event) => {
+                  const member = collectionDetail.members.find((entry) => entry.member_id === event.target.value);
+                  if (!member) return;
+                  setPaperAuthors((items) => [...items, newPaperAuthor(member)]);
+                }}
+              >
+                <option value="">Add author</option>
+                {availableAuthorMembers.map((member) => (
+                  <option key={member.member_id} value={member.member_id}>
+                    {member.member_name || "Member"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {paperAuthors.length === 0 ? <p className="muted-small">No authors.</p> : null}
+            {paperAuthors.map((author, index) => (
+                <div key={author.id} className="paper-item-card paper-author-card">
+                  <div className="paper-item-head">
+                    <strong>
+                      {index + 1}. {author.display_name}
+                    </strong>
+                  <div className="paper-author-actions">
+                    <button
+                      type="button"
+                      className={`ghost paper-author-flag${author.is_corresponding ? " active" : ""}`}
+                      onClick={() =>
+                        setPaperAuthors((items) =>
+                          items.map((entry) =>
+                            entry.id === author.id ? { ...entry, is_corresponding: !entry.is_corresponding } : entry
+                          )
+                        )
+                      }
+                    >
+                      Corresponding
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost docs-action-btn"
+                      title="Move up"
+                      disabled={index === 0}
+                      onClick={() =>
+                        setPaperAuthors((items) => {
+                          const next = [...items];
+                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                          return next;
+                        })
+                      }
+                    >
+                      <FontAwesomeIcon icon={faChevronUp} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost docs-action-btn"
+                      title="Move down"
+                      disabled={index === paperAuthors.length - 1}
+                      onClick={() =>
+                        setPaperAuthors((items) => {
+                          const next = [...items];
+                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                          return next;
+                        })
+                      }
+                    >
+                      <FontAwesomeIcon icon={faChevronDown} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost docs-action-btn"
+                      title="Remove"
+                      onClick={() => setPaperAuthors((items) => items.filter((entry) => entry.id !== author.id))}
+                    >
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="paper-columns">
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>Research Questions</strong>
+              </div>
+              <button type="button" className="meetings-new-btn" onClick={() => setPaperQuestions((items) => [...items, newPaperQuestion()])}>
+                <FontAwesomeIcon icon={faPlus} /> Add
+              </button>
+            </div>
+            <div className="paper-stack">
+              {paperQuestions.length === 0 ? <p className="muted-small">No questions.</p> : null}
+              {paperQuestions.map((item, index) => (
+                <div key={item.id} className="paper-item-card">
+                  <div className="paper-item-head">
+                    <strong>Question {index + 1}</strong>
+                    <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperQuestions((items) => items.filter((entry) => entry.id !== item.id))}>
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  </div>
+                  <div className="paper-evidence-strip">
+                    <span className="chip small">{item.note_ids.length} notes</span>
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={item.text}
+                    onChange={(event) =>
+                      setPaperQuestions((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
+                    }
+                  />
+                  <div className="paper-link-block">
+                    <strong>Notes</strong>
+                    <div className="paper-link-group">
+                      {collectionNotes.map((note) => (
+                        <label key={`${item.id}-question-note-${note.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.note_ids.includes(note.id)}
+                            onChange={() =>
+                              setPaperQuestions((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) } : entry
+                                )
+                              )
+                            }
+                          />
+                          <span>{note.title || "Note"}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>Claims</strong>
+              </div>
+              <button type="button" className="meetings-new-btn" onClick={() => setPaperClaims((items) => [...items, newPaperClaim()])}>
+                <FontAwesomeIcon icon={faPlus} /> Add
+              </button>
+            </div>
+            <div className="paper-stack">
+              {paperClaims.length === 0 ? <p className="muted-small">No claims.</p> : null}
+              {paperClaims.map((item, index) => (
+                <div key={item.id} className={`paper-item-card${item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? " paper-item-card-alert" : ""}`}>
+                  <div className="paper-item-head">
+                    <strong>Claim {index + 1}</strong>
+                    <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperClaims((items) => items.filter((entry) => entry.id !== item.id))}>
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  </div>
+                  <div className="paper-evidence-strip">
+                    <span className="chip small">{item.question_ids.length} questions</span>
+                    <span className="chip small">{item.reference_ids.length} references</span>
+                    <span className="chip small">{item.note_ids.length} notes</span>
+                    <span className="chip small">{item.result_ids.length} results</span>
+                    {item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? (
+                      <span className="chip small paper-health-alert">Missing evidence</span>
+                    ) : null}
+                    {item.audit_status ? (
+                      <span className={`chip small paper-audit-status paper-audit-status-${item.audit_status}`}>{item.audit_status.replace(/_/g, " ")}</span>
+                    ) : null}
+                  </div>
+                  {item.audit_summary ? (
+                    <div className="paper-audit-box">
+                      <p>{item.audit_summary}</p>
+                      <div className="paper-audit-meta">
+                        {item.supporting_reference_ids.length ? <span className="muted-small">{item.supporting_reference_ids.length} supporting references</span> : null}
+                        {item.supporting_note_ids.length ? <span className="muted-small">{item.supporting_note_ids.length} supporting notes</span> : null}
+                        {item.audit_confidence !== null ? <span className="muted-small">{Math.round(item.audit_confidence * 100)}% confidence</span> : null}
+                        {item.audited_at ? <span className="muted-small">{new Date(item.audited_at).toLocaleString()}</span> : null}
+                      </div>
+                      {item.missing_evidence.length > 0 ? (
+                        <div className="research-chip-group">
+                          {item.missing_evidence.map((entry) => (
+                            <span key={`${item.id}-${entry}`} className="chip small paper-health-alert">{entry}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <textarea
+                    rows={3}
+                    value={item.text}
+                    onChange={(event) =>
+                      setPaperClaims((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
+                    }
+                  />
+                  <label>
+                    Status
+                    <select
+                      value={item.status}
+                      onChange={(event) =>
+                        setPaperClaims((items) => items.map((entry) => (entry.id === item.id ? { ...entry, status: event.target.value } : entry)))
+                      }
+                    >
+                      <option value="draft">Draft</option>
+                      <option value="supported">Supported</option>
+                      <option value="missing_evidence">Missing evidence</option>
+                    </select>
+                  </label>
+                  <div className="paper-link-group">
+                    {paperQuestions.map((question) => (
+                      <label key={`${item.id}-${question.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.question_ids.includes(question.id)}
+                          onChange={() =>
+                            setPaperClaims((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) }
+                                  : entry
+                              )
+                            )
+                          }
+                        />
+                        <span>{question.text || "Question"}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>References</strong>
+                    <div className="paper-link-group">
+                      {collectionReferences.map((reference) => (
+                        <label key={`${item.id}-ref-${reference.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.reference_ids.includes(reference.id)}
+                            onChange={() =>
+                              setPaperClaims((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id
+                                    ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) }
+                                    : entry
+                                )
+                              )
+                            }
+                          />
+                          <span>{reference.title || "Reference"}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>Notes</strong>
+                    <div className="paper-link-group">
+                      {collectionNotes.map((note) => (
+                        <label key={`${item.id}-note-${note.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.note_ids.includes(note.id)}
+                            onChange={() =>
+                              setPaperClaims((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id
+                                    ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) }
+                                    : entry
+                                )
+                              )
+                            }
+                        />
+                          <span>{note.title || "Note"}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>Results</strong>
+                    <div className="paper-link-group">
+                      {collectionResults.map((result) => (
+                        <label key={`${item.id}-result-${result.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.result_ids.includes(result.id)}
+                            onChange={() =>
+                              setPaperClaims((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id
+                                    ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) }
+                                    : entry
+                                )
+                              )
+                            }
+                          />
+                          <span>{result.title || "Result"}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="meetings-detail-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Sections</strong>
+            </div>
+            <button type="button" className="meetings-new-btn" onClick={() => setPaperSections((items) => [...items, newPaperSection()])}>
+              <FontAwesomeIcon icon={faPlus} /> Add
+            </button>
+          </div>
+          <div className="paper-stack">
+            {paperSections.length === 0 ? <p className="muted-small">No sections.</p> : null}
+              {paperSections.map((item, index) => (
+              <div
+                key={item.id}
+                className={`paper-item-card${item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? " paper-item-card-alert" : ""}`}
+              >
+                <div className="paper-item-head">
+                  <strong>Section {index + 1}</strong>
+                  <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperSections((items) => items.filter((entry) => entry.id !== item.id))}>
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+                <div className="paper-evidence-strip">
+                  <span className="chip small">{item.question_ids.length} questions</span>
+                  <span className="chip small">{item.claim_ids.length} claims</span>
+                  <span className="chip small">{item.reference_ids.length} references</span>
+                  <span className="chip small">{item.note_ids.length} notes</span>
+                  <span className="chip small">{item.result_ids.length} results</span>
+                  {item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? (
+                    <span className="chip small paper-health-alert">Weak section</span>
+                  ) : null}
+                </div>
+                <div className="paper-section-grid">
+                  <label>
+                    Title
+                    <input
+                      value={item.title}
+                      onChange={(event) =>
+                        setPaperSections((items) => items.map((entry) => (entry.id === item.id ? { ...entry, title: event.target.value } : entry)))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Status
+                    <select
+                      value={item.status}
+                      onChange={(event) =>
+                        setPaperSections((items) => items.map((entry) => (entry.id === item.id ? { ...entry, status: event.target.value } : entry)))
+                      }
+                    >
+                      <option value="not_started">Not started</option>
+                      <option value="drafting">Drafting</option>
+                      <option value="ready">Ready</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="paper-link-block">
+                  <strong>Questions</strong>
+                  <div className="paper-link-group">
+                    {paperQuestions.map((question) => (
+                      <label key={`${item.id}-q-${question.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.question_ids.includes(question.id)}
+                          onChange={() =>
+                            setPaperSections((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) }
+                                  : entry
+                              )
+                            )
+                          }
+                        />
+                        <span>{question.text || "Question"}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="paper-link-block">
+                  <strong>Claims</strong>
+                  <div className="paper-link-group">
+                    {paperClaims.map((claim) => (
+                      <label key={`${item.id}-c-${claim.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.claim_ids.includes(claim.id)}
+                          onChange={() =>
+                            setPaperSections((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, claim_ids: toggleId(entry.claim_ids, claim.id) }
+                                  : entry
+                              )
+                            )
+                          }
+                        />
+                        <span>{claim.text || "Claim"}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="paper-link-block">
+                  <strong>References</strong>
+                  <div className="paper-link-group">
+                    {collectionReferences.map((reference) => (
+                      <label key={`${item.id}-section-ref-${reference.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.reference_ids.includes(reference.id)}
+                          onChange={() =>
+                            setPaperSections((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) }
+                                  : entry
+                              )
+                            )
+                          }
+                        />
+                        <span>{reference.title || "Reference"}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="paper-link-block">
+                  <strong>Notes</strong>
+                  <div className="paper-link-group">
+                    {collectionNotes.map((note) => (
+                      <label key={`${item.id}-section-note-${note.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.note_ids.includes(note.id)}
+                          onChange={() =>
+                            setPaperSections((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) }
+                                  : entry
+                              )
+                            )
+                          }
+                        />
+                        <span>{note.title || "Note"}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="paper-link-block">
+                  <strong>Results</strong>
+                  <div className="paper-link-group">
+                    {collectionResults.map((result) => (
+                      <label key={`${item.id}-section-result-${result.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.result_ids.includes(result.id)}
+                          onChange={() =>
+                            setPaperSections((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) }
+                                  : entry
+                              )
+                            )
+                          }
+                        />
+                        <span>{result.title || "Result"}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderIterationsTab() {
+    if (!collectionDetail || !selectedCollectionId) {
+      return <p className="empty-message">Select a study to manage its iterations.</p>;
+    }
+
+    const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
+    const orderedResults = sortedStudyResults();
+
+    return (
+      <div className="paper-workspace">
+        {orderedResults.length > 0 ? (
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>Results</strong>
+              </div>
+              <div className="research-header-actions">
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  disabled={comparingResults || orderedResults.length < 2}
+                  onClick={() => void handleCompareResults()}
+                >
+                  <FontAwesomeIcon icon={faMagicWandSparkles} spin={comparingResults} /> {comparingResults ? "Comparing..." : "Compare Results"}
+                </button>
+              </div>
+            </div>
+            <div className="paper-stack">
+              {resultComparison ? (
+                <div className="paper-item-card">
+                  <div className="paper-item-head">
+                    <strong>Comparison</strong>
+                    <span className="chip small">{resultComparison.compared_result_ids.length} results</span>
+                  </div>
+                  <p>{resultComparison.summary || "No comparison summary."}</p>
+                  <div className="paper-columns">
+                    <div className="paper-link-block">
+                      <strong>Likely Improvements</strong>
+                      <div className="research-bullet-stack">
+                        {resultComparison.likely_improvements.length === 0 ? <span className="muted-small">None</span> : null}
+                        {resultComparison.likely_improvements.map((entry) => (
+                          <span key={`comparison-improvement-${entry}`} className="chip small">{entry}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="paper-link-block">
+                      <strong>Likely Regressions</strong>
+                      <div className="research-bullet-stack">
+                        {resultComparison.likely_regressions.length === 0 ? <span className="muted-small">None</span> : null}
+                        {resultComparison.likely_regressions.map((entry) => (
+                          <span key={`comparison-regression-${entry}`} className="chip small">{entry}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="paper-link-block">
+                      <strong>Likely Causes</strong>
+                      <div className="research-bullet-stack">
+                        {resultComparison.likely_causes.length === 0 ? <span className="muted-small">None</span> : null}
+                        {resultComparison.likely_causes.map((entry) => (
+                          <span key={`comparison-cause-${entry}`} className="chip small">{entry}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="paper-link-block">
+                      <strong>Next Experiment Changes</strong>
+                      <div className="research-bullet-stack">
+                        {resultComparison.next_experiment_changes.length === 0 ? <span className="muted-small">None</span> : null}
+                        {resultComparison.next_experiment_changes.map((entry) => (
+                          <span key={`comparison-next-${entry}`} className="chip small">{entry}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {orderedResults.map((result) => {
+                const previous = previousStudyResult(result.id);
+                const delta = resultDeltaLabel(result, previous);
+                return (
+                  <div key={result.id} className="paper-item-card">
+                    <div className="paper-item-head">
+                      <strong>{result.title}</strong>
+                      <span className="chip small">{result.updated_at ? formatLogDate(result.updated_at) : "Result"}</span>
+                    </div>
+                    <div className="paper-evidence-strip">
+                      <span className="chip small">{result.note_ids.length} logs</span>
+                      <span className="chip small">{result.reference_ids.length} references</span>
+                      {result.improvements.length ? <span className="chip small">{result.improvements.length} improvements</span> : null}
+                      {result.regressions.length ? <span className="chip small">{result.regressions.length} regressions</span> : null}
+                    </div>
+                    <p>{result.summary || "No summary."}</p>
+                    {delta ? <span className="muted-small">{delta}</span> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+        {studyIterations.length === 0 ? (
+          <div className="meetings-detail-section">
+            <div className="paper-stack">
+              <p className="empty-message">No iterations yet.</p>
+            </div>
+          </div>
+        ) : null}
+        {studyIterations.map((iteration, index) => (
+          <div key={iteration.id} className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>{iteration.title || `Iteration ${index + 1}`}</strong>
+              </div>
+              <div className="research-header-actions">
+                <span className="chip small">
+                  {iteration.start_date || "?"} {iteration.end_date ? `- ${iteration.end_date}` : ""}
+                </span>
+                <span className="chip small">{iteration.note_ids.length} logs</span>
+                <span className="chip small">{iterationResults(iteration.id).length} results</span>
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  disabled={reviewingIterationId === iteration.id}
+                  onClick={() => void handleReviewIteration(iteration.id)}
+                >
+                  <FontAwesomeIcon icon={faMagicWandSparkles} spin={reviewingIterationId === iteration.id} /> {reviewingIterationId === iteration.id ? "Reviewing..." : "Review"}
+                </button>
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  disabled={!iteration.summary}
+                  onClick={() => void handleCreateResultFromIteration(iteration.id)}
+                >
+                  <FontAwesomeIcon icon={faPlus} /> {iterationResults(iteration.id).length > 0 ? "Update Result" : "Create Result"}
+                </button>
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  onClick={() => setExpandedIterationId((current) => (current === iteration.id ? null : iteration.id))}
+                >
+                  {expandedIterationId === iteration.id ? "Close" : "Open"}
+                </button>
+                <button
+                  type="button"
+                  className="ghost docs-action-btn"
+                  title="Remove"
+                  onClick={() => setStudyIterations((items) => items.filter((entry) => entry.id !== iteration.id))}
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            </div>
+            <div className="paper-stack">
+              <div className="paper-evidence-strip">
+                {iteration.reviewed_at ? <span className="chip small">Reviewed</span> : <span className="chip small paper-health-alert">Review pending</span>}
+                {iteration.improvements.length ? <span className="chip small">{iteration.improvements.length} improvements</span> : null}
+                {iteration.regressions.length ? <span className="chip small">{iteration.regressions.length} regressions</span> : null}
+                {iteration.next_actions.length ? <span className="chip small">{iteration.next_actions.length} next actions</span> : null}
+              </div>
+              <p>{iteration.summary || "No review yet."}</p>
+            </div>
+            {expandedIterationId === iteration.id ? (
+              <div className="paper-stack">
+                <div className="paper-section-grid">
+                  <label>
+                    Title
+                    <input
+                      value={iteration.title}
+                      onChange={(event) =>
+                        setStudyIterations((items) =>
+                          items.map((entry) => (entry.id === iteration.id ? { ...entry, title: event.target.value } : entry))
+                        )
+                      }
+                    />
+                  </label>
+                  <label>
+                    Start
+                    <input
+                      type="date"
+                      value={iteration.start_date || ""}
+                      onChange={(event) =>
+                        setStudyIterations((items) =>
+                          items.map((entry) => (entry.id === iteration.id ? { ...entry, start_date: event.target.value || null } : entry))
+                        )
+                      }
+                    />
+                  </label>
+                  <label>
+                    End
+                    <input
+                      type="date"
+                      value={iteration.end_date || ""}
+                      onChange={(event) =>
+                        setStudyIterations((items) =>
+                          items.map((entry) => (entry.id === iteration.id ? { ...entry, end_date: event.target.value || null } : entry))
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="paper-link-block">
+                  <strong>Logs</strong>
+                  <div className="research-bullet-stack">
+                    {collectionNotes
+                      .filter((note) => iteration.note_ids.includes(note.id))
+                      .map((note) => (
+                        <span key={`${iteration.id}-log-${note.id}`} className="chip small">
+                          {note.title || "Log"}
+                        </span>
+                      ))}
+                  </div>
+                </div>
+                {iteration.what_changed.length > 0 ? (
+                  <div className="paper-link-block">
+                    <strong>What Changed</strong>
+                    <div className="research-bullet-stack">
+                      {iteration.what_changed.map((entry) => (
+                        <span key={`${iteration.id}-changed-${entry}`} className="chip small">{entry}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="paper-columns">
+                  <div className="paper-link-block">
+                    <strong>Improvements</strong>
+                    <div className="research-bullet-stack">
+                      {iteration.improvements.length === 0 ? <span className="muted-small">None</span> : null}
+                      {iteration.improvements.map((entry) => (
+                        <span key={`${iteration.id}-improvement-${entry}`} className="chip small">{entry}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>Regressions</strong>
+                    <div className="research-bullet-stack">
+                      {iteration.regressions.length === 0 ? <span className="muted-small">None</span> : null}
+                      {iteration.regressions.map((entry) => (
+                        <span key={`${iteration.id}-regression-${entry}`} className="chip small">{entry}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>Unclear</strong>
+                    <div className="research-bullet-stack">
+                      {iteration.unclear_points.length === 0 ? <span className="muted-small">None</span> : null}
+                      {iteration.unclear_points.map((entry) => (
+                        <span key={`${iteration.id}-unclear-${entry}`} className="chip small">{entry}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>Next Actions</strong>
+                    <div className="research-bullet-stack">
+                      {iteration.next_actions.length === 0 ? <span className="muted-small">None</span> : null}
+                      {iteration.next_actions.map((entry) => (
+                        <span key={`${iteration.id}-next-${entry}`} className="chip small">{entry}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <label>
+                  Comments
+                  <textarea
+                    rows={4}
+                    value={iteration.user_comments || ""}
+                    onChange={(event) =>
+                      setStudyIterations((items) =>
+                        items.map((entry) => (entry.id === iteration.id ? { ...entry, user_comments: event.target.value || null } : entry))
+                      )
+                    }
+                  />
+                </label>
+                {iterationResults(iteration.id).length > 0 ? (
+                  <div className="paper-link-block">
+                    <strong>Results</strong>
+                    <div className="paper-stack">
+                      {iterationResults(iteration.id).map((result) => (
+                        <div key={result.id} className="paper-item-card">
+                          <div className="paper-item-head">
+                            <strong>{result.title}</strong>
+                            <span className="chip small">{result.updated_at ? formatLogDate(result.updated_at) : "Result"}</span>
+                          </div>
+                          <div className="paper-evidence-strip">
+                            <span className="chip small">{result.note_ids.length} logs</span>
+                            <span className="chip small">{result.reference_ids.length} references</span>
+                            {result.improvements.length ? <span className="chip small">{result.improvements.length} improvements</span> : null}
+                            {result.regressions.length ? <span className="chip small">{result.regressions.length} regressions</span> : null}
+                          </div>
+                          <p>{result.summary || "No summary."}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="meetings-new-btn"
+                    onClick={() => void persistPaperWorkspace({ study_iterations: studyIterations, study_results: studyResults }, { successMessage: "Iteration updated." })}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
     );
   }
 
   function renderOverviewTab() {
     if (!collectionDetail || !selectedCollectionId) {
-      return <p className="empty-message">Select a collection to manage it.</p>;
+      return <p className="empty-message">Select a study to manage it.</p>;
     }
 
     const synthesis = parseSynthesisPayload(collectionDetail.ai_synthesis);
+    const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
+    const recentNotes = [...collectionNotes].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
+    const recentReferences = [...references].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
+    const recentResults = sortedStudyResults().slice(0, 4);
+    const unprocessedInboxCount = collectionNotes.filter(
+      (note) =>
+        !paperQuestions.some((item) => item.note_ids.includes(note.id)) &&
+        !paperClaims.some((item) => item.note_ids.includes(note.id)) &&
+        !paperSections.some((item) => item.note_ids.includes(note.id))
+    ).length;
+    const unsupportedClaims = paperClaims.filter((item) => item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
+    const weakSections = paperSections.filter((item) => item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
+    const nextActions = [
+      !paperSubmissionDeadline ? "Set the paper submission deadline." : null,
+      unprocessedInboxCount > 0 ? `Process ${unprocessedInboxCount} inbox item${unprocessedInboxCount !== 1 ? "s" : ""}.` : null,
+      studyResults.length === 0 ? "Create the first result from an iteration review." : null,
+      unsupportedClaims > 0 ? `Add evidence for ${unsupportedClaims} unsupported claim${unsupportedClaims !== 1 ? "s" : ""}.` : null,
+      weakSections > 0 ? `Strengthen ${weakSections} weak section${weakSections !== 1 ? "s" : ""}.` : null,
+      references.length === 0 ? "Import the first references from Bibliography." : null,
+    ].filter(Boolean) as string[];
 
     return (
       <div className="research-overview">
         <div className="meetings-detail-section">
           <div className="meetings-detail-head">
             <div className="meetings-detail-info">
-              <strong>Collection</strong>
+              <strong>Dashboard</strong>
+            </div>
+          </div>
+          <div className="research-overview-body">
+            <div className="paper-health-row">
+              <span className={`chip small${!paperSubmissionDeadline ? " paper-health-alert" : ""}`}>
+                {paperSubmissionDeadline ? `Submission ${new Date(paperSubmissionDeadline).toLocaleDateString()}` : "No deadline"}
+              </span>
+              <span className={`chip small${unprocessedInboxCount > 0 ? " paper-health-alert" : ""}`}>{unprocessedInboxCount} inbox pending</span>
+              <span className={`chip small${studyResults.length === 0 ? " paper-health-alert" : ""}`}>{studyResults.length} results</span>
+              <span className={`chip small${unsupportedClaims > 0 ? " paper-health-alert" : ""}`}>{unsupportedClaims} unsupported claims</span>
+              <span className={`chip small${weakSections > 0 ? " paper-health-alert" : ""}`}>{weakSections} weak sections</span>
+            </div>
+            {nextActions.length > 0 ? (
+              <div className="research-bullet-stack">
+                {nextActions.map((item) => (
+                  <span key={item} className="chip small">{item}</span>
+                ))}
+              </div>
+            ) : (
+              <p>Study is in a good state.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="meetings-detail-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Study</strong>
             </div>
             <button type="button" className="meetings-new-btn" onClick={openEditCollectionModal}>
               <FontAwesomeIcon icon={faPen} /> Edit
             </button>
           </div>
           <div className="research-overview-body">
-            <p>{collectionDetail.description || "No description."}</p>
-            {collectionDetail.hypothesis ? <p className="research-hypothesis">{collectionDetail.hypothesis}</p> : null}
-            {collectionDetail.open_questions.length > 0 ? (
-              <div className="research-bullet-stack">
-                {collectionDetail.open_questions.map((item) => (
-                  <span key={item} className="chip small">
-                    {item}
-                  </span>
-                ))}
-              </div>
-            ) : null}
+            <p>{collectionDetail.description || collectionDetail.hypothesis || "No focus."}</p>
             <div className="research-meta-grid">
-              <span className="muted-small">Output: {collectionDetail.target_output_title || "-"}</span>
-              <span className="muted-small">Status: {collectionDetail.output_status.replace(/_/g, " ")}</span>
-              <span className="muted-small">
-                Overleaf:{" "}
-                {collectionDetail.overleaf_url ? (
-                  <a href={collectionDetail.overleaf_url} target="_blank" rel="noreferrer">
-                    Open
-                  </a>
-                ) : (
-                  "-"
-                )}
-              </span>
+              <span className="muted-small">Status: {collectionDetail.status}</span>
+              <span className="muted-small">{collectionDetail.reference_count} references</span>
+              <span className="muted-small">{collectionDetail.note_count} inbox</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="paper-columns">
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>Recent Results</strong>
+              </div>
+            </div>
+            <div className="paper-stack">
+              {recentResults.length === 0 ? <p className="muted-small">No results.</p> : null}
+              {recentResults.map((result) => (
+                <div key={result.id} className="paper-item-card">
+                  <strong>{result.title}</strong>
+                  <span className="muted-small">{result.summary || "No summary."}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>Recent References</strong>
+              </div>
+            </div>
+            <div className="paper-stack">
+              {recentReferences.length === 0 ? <p className="muted-small">No references.</p> : null}
+              {recentReferences.map((reference) => (
+                <div key={reference.id} className="paper-item-card">
+                  <strong>{reference.title}</strong>
+                  <span className="muted-small">{reference.authors.join(", ") || "-"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info">
+                <strong>Recent Inbox</strong>
+              </div>
+            </div>
+            <div className="paper-stack">
+              {recentNotes.length === 0 ? <p className="muted-small">No inbox items.</p> : null}
+              {recentNotes.map((note) => (
+                <div key={note.id} className="paper-item-card">
+                  <strong>{note.title}</strong>
+                  <span className="muted-small">{formatLogDate(note.created_at)}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -3212,7 +5511,7 @@ export function ResearchWorkspace({
       <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setCollectionModalOpen(false)}>
         <div className="modal-card" onClick={(event) => event.stopPropagation()}>
           <div className="modal-head">
-            <h3>{collectionModalMode === "create" ? "New Collection" : "Edit Collection"}</h3>
+            <h3>{collectionModalMode === "create" ? "New Study" : "Edit Study"}</h3>
             <button type="button" className="ghost" onClick={() => setCollectionModalOpen(false)}>
               Close
             </button>
@@ -3223,34 +5522,8 @@ export function ResearchWorkspace({
               <input value={collectionTitle} onChange={(event) => setCollectionTitle(event.target.value)} autoFocus />
             </label>
             <label className="full-span">
-              Description
+              Focus
               <textarea value={collectionDescription} onChange={(event) => setCollectionDescription(event.target.value)} rows={4} />
-            </label>
-            <label className="full-span">
-              Hypothesis
-              <textarea value={collectionHypothesis} onChange={(event) => setCollectionHypothesis(event.target.value)} rows={3} />
-            </label>
-            <label className="full-span">
-              Open Questions
-              <input value={collectionOpenQuestions} onChange={(event) => setCollectionOpenQuestions(event.target.value)} />
-            </label>
-            <label className="full-span">
-              Output Title
-              <input value={collectionOutputTitle} onChange={(event) => setCollectionOutputTitle(event.target.value)} />
-            </label>
-            <label className="full-span">
-              Overleaf URL
-              <input value={collectionOverleafUrl} onChange={(event) => setCollectionOverleafUrl(event.target.value)} />
-            </label>
-            <label>
-              Output Status
-              <select value={collectionOutputStatus} onChange={(event) => setCollectionOutputStatus(event.target.value)}>
-                <option value="not_started">Not started</option>
-                <option value="drafting">Drafting</option>
-                <option value="internal_review">Internal review</option>
-                <option value="submitted">Submitted</option>
-                <option value="published">Published</option>
-              </select>
             </label>
             {collectionModalMode === "edit" ? (
               <label>
@@ -3265,7 +5538,7 @@ export function ResearchWorkspace({
           </div>
           <div className="row-actions">
             <button type="button" disabled={!collectionTitle.trim() || saving} onClick={handleSaveCollection}>
-              {saving ? "Saving..." : collectionModalMode === "create" ? "Create Collection" : "Save"}
+              {saving ? "Saving..." : collectionModalMode === "create" ? "Create Study" : "Save"}
             </button>
           </div>
         </div>
@@ -3747,16 +6020,16 @@ export function ResearchWorkspace({
       <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setNoteModalOpen(false)}>
         <div className="modal-card settings-modal-card" onClick={(event) => event.stopPropagation()}>
           <div className="modal-head">
-            <h3>{noteModalMode === "create" ? "Note" : "Edit Note"}</h3>
-            <button type="button" className="ghost" onClick={() => setNoteModalOpen(false)}>
-              Close
+            <h3>{noteModalMode === "create" ? "New Log" : "Edit Log"}</h3>
+            <button type="button" className="ghost docs-action-btn" onClick={() => setNoteModalOpen(false)} title="Close">
+              <FontAwesomeIcon icon={faXmark} />
             </button>
           </div>
           <div className="form-grid">
             <label className="full-span">
-              Collection *
+              Study *
               <select value={noteCollectionId} onChange={(event) => setNoteCollectionId(event.target.value)}>
-                <option value="">Select collection</option>
+                <option value="">Select study</option>
                 {activeCollections.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.title}
@@ -3769,14 +6042,8 @@ export function ResearchWorkspace({
               <input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} autoFocus />
             </label>
             <label>
-              Type
-              <select value={noteType} onChange={(event) => setNoteType(event.target.value)}>
-                {Object.entries(NOTE_TYPE_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+              Lane
+              {renderLanePills(noteLane, setNoteLane)}
             </label>
             <label className="full-span">
               Content *
@@ -3801,7 +6068,7 @@ export function ResearchWorkspace({
           </div>
           <div className="row-actions">
             <button type="button" disabled={!noteCollectionId || !noteTitle.trim() || !noteContent.trim() || saving} onClick={handleSaveNote}>
-              {saving ? "Saving..." : noteModalMode === "create" ? "Add Note" : "Save"}
+              {saving ? "Saving..." : noteModalMode === "create" ? "Add Log" : "Save Log"}
             </button>
           </div>
         </div>

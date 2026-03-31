@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Toaster } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBars,
@@ -116,8 +117,38 @@ export default function App() {
   const notifDropdownRef = useRef<HTMLDivElement>(null);
   const [pendingDocumentKey, setPendingDocumentKey] = useState<string | null>(null);
   const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
+  const [pendingBibliographyReferenceId, setPendingBibliographyReferenceId] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [proposalCallBrief, setProposalCallBrief] = useState<ProposalCallBrief | null>(null);
+
+  // Dynamic page title per view
+  useEffect(() => {
+    const titles: Record<View, string> = {
+      "my-work": "My Work",
+      dashboard: "Dashboard",
+      call: "Call",
+      proposal: "Proposal",
+      submission: "Submission",
+      delivery: "Delivery Board",
+      workbench: "Workbench",
+      meetings: "Meetings",
+      "project-chat": "Chat",
+      assistant: "Assistant",
+      wizard: "Wizard",
+      matrix: "Risk Matrix",
+      documents: "Documents",
+      planning: "Planning",
+      admin: "Admin",
+      todos: "Todos",
+      search: "Search",
+      research: "Research",
+      teaching: "Teaching",
+      courses: "Courses",
+      resources: "Resources",
+      bibliography: "Bibliography",
+    };
+    document.title = `${titles[view] || "Praina"} — Praina`;
+  }, [view]);
 
   async function bootstrapAuthSession() {
     if (typeof window === "undefined") return;
@@ -146,6 +177,12 @@ export default function App() {
       setAuthTokens(null);
       setMe(null);
     }
+  }
+
+  function clearPermalinkSearch() {
+    if (typeof window === "undefined") return;
+    const nextUrl = `${window.location.pathname}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", nextUrl);
   }
 
   async function loadProjects() {
@@ -193,6 +230,25 @@ export default function App() {
 
   useEffect(() => {
     void bootstrapAuthSession();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const requestedView = params.get("view");
+    const requestedProjectId = params.get("project");
+    const requestedPaperId = params.get("paper");
+    if (requestedProjectId) {
+      setSelectedProjectId(requestedProjectId);
+      window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, requestedProjectId);
+    }
+    if (requestedView === "bibliography") {
+      setView("bibliography");
+      setPlatformSection("research");
+    }
+    if (requestedPaperId) {
+      setPendingBibliographyReferenceId(requestedPaperId);
+    }
   }, []);
 
   // Poll unread count every 30 seconds
@@ -921,7 +977,19 @@ export default function App() {
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
           {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} currentProject={activeProject} isAdmin={isSuperAdmin} /> : null}
-          {view === "bibliography" ? <ResearchWorkspace selectedProjectId={selectedProjectId} currentProject={activeProject} bibliographyOnly isAdmin={isSuperAdmin} /> : null}
+          {view === "bibliography" ? (
+            <ResearchWorkspace
+              selectedProjectId={selectedProjectId}
+              currentProject={activeProject}
+              bibliographyOnly
+              isAdmin={isSuperAdmin}
+              openBibliographyReferenceId={pendingBibliographyReferenceId}
+              onOpenBibliographyReferenceConsumed={() => {
+                setPendingBibliographyReferenceId(null);
+                clearPermalinkSearch();
+              }}
+            />
+          ) : null}
           {view === "resources" ? (
             <ResourcesWorkspace
               currentUser={currentUser}
@@ -969,6 +1037,21 @@ export default function App() {
           }}
         />
       ) : null}
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--line-strong)",
+            color: "var(--text)",
+            fontFamily: "var(--font)",
+            fontSize: "12px",
+            borderRadius: "var(--radius)",
+            boxShadow: "var(--shadow-md)",
+          },
+        }}
+        theme="dark"
+      />
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { renderMarkdown } from "../lib/renderMarkdown";
 import { ProposalRichEditor } from "./ProposalRichEditor";
 import { renderHealthIndicator } from "./TeachingHealthIndicator";
 import type { AuthUser, Course, CourseMaterial, Project, TeachingWorkspace } from "../types";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   currentUser: AuthUser;
@@ -56,8 +57,7 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
   const [courseTeacherUserId, setCourseTeacherUserId] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [projectSearch, setProjectSearch] = useState("");
   const [expandedMaterials, setExpandedMaterials] = useState<Set<string>>(new Set());
   const [materialTypeFilter, setMaterialTypeFilter] = useState("");

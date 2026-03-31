@@ -5,6 +5,7 @@ import { faBoxArchive, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons
 
 import { api } from "../lib/api";
 import type { AuthUser, Course, MembershipWithUser, Project, ProposalCallLibraryEntry } from "../types";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   selectedProjectId: string;
@@ -45,8 +46,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
   const [courseHasProjectDeadlines, setCourseHasProjectDeadlines] = useState(true);
   const [courseTeacherUserId, setCourseTeacherUserId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [projectAction, setProjectAction] = useState<{ mode: "archive" | "delete"; project: Project } | null>(null);
   const [callAction, setCallAction] = useState<ProposalCallLibraryEntry | null>(null);
   const [courseAction, setCourseAction] = useState<Course | null>(null);

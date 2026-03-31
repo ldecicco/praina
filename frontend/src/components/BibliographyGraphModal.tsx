@@ -83,7 +83,7 @@ function drawGraphLabel(
   const textBright = cssVar("--text-bright", "#ededf0");
   const textSecondary = cssVar("--text-secondary", "#8e8e9a");
   const size = typeof data.size === "number" ? data.size : 10;
-  const accent = data.color || cssVar("--brand", "#7c5cfc");
+  const accent = data.color || cssVar("--brand", "#3AAFA8");
   const fontSize = Math.max(11, Math.round(size * 0.92));
   const padX = 8;
   const padY = 5;
@@ -239,7 +239,7 @@ export function BibliographyGraphModal({
 
     const graph = new Graph();
     const positions = buildInitialPositions(graphData.nodes.map((item) => item.id));
-    const brand = cssVar("--brand", "#7c5cfc");
+    const brand = cssVar("--brand", "#3AAFA8");
     const textBright = cssVar("--text-bright", "#ededf0");
     const textSecondary = cssVar("--text-secondary", "#8e8e9a");
     const text = cssVar("--text", "#b4b4bd");

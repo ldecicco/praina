@@ -14,6 +14,7 @@ import {
 
 import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { useStatusToast } from "../lib/useStatusToast";
 import type { CalendarImportBatch, CalendarIntegration, DocumentListItem, MeetingActionItem, MeetingRecord, Member, WorkEntity } from "../types";
 
 type Props = {
@@ -46,8 +47,7 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
   const [transcriptFile, setTranscriptFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [showActionForm, setShowActionForm] = useState(false);

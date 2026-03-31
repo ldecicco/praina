@@ -12,6 +12,7 @@ import {
 import { api } from "../lib/api";
 import { currentProjectMonth } from "../lib/utils";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { useStatusToast } from "../lib/useStatusToast";
 import type { Member, Partner, Project, ProjectRisk, WorkEntity } from "../types";
 import { ProjectActivityFeed } from "./ProjectActivityFeed";
 
@@ -45,8 +46,7 @@ function pressureLabel(currentMonth: number | null, reviewDueMonth: number | nul
 
 export function DeliveryBoard({ selectedProjectId, project }: Props) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [partners, setPartners] = useState<Partner[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [deliverables, setDeliverables] = useState<WorkEntity[]>([]);

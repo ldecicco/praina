@@ -1,8 +1,23 @@
 import type { ReactNode } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
+
+function renderMath(expression: string, displayMode: boolean, key: string): ReactNode {
+  try {
+    const html = katex.renderToString(expression.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: "ignore",
+    });
+    return <span key={key} className={displayMode ? "markdown-math-block" : "markdown-math-inline"} dangerouslySetInnerHTML={{ __html: html }} />;
+  } catch {
+    return <code key={key}>{displayMode ? `\\[${expression}\\]` : `$${expression}$`}</code>;
+  }
+}
 
 function renderInlineMarkdown(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(@\[([^\]]+)\]|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g;
+  const pattern = /(@\[([^\]]+)\]|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\$([^$\n]+?)\$)/g;
   let cursor = 0;
   let key = 0;
 
@@ -40,6 +55,8 @@ function renderInlineMarkdown(text: string): ReactNode[] {
       nodes.push(<em key={`markdown-inline-${key++}`}>{match[7]}</em>);
     } else if (match[8]) {
       nodes.push(<code key={`markdown-inline-${key++}`}>{match[8]}</code>);
+    } else if (match[9]) {
+      nodes.push(renderMath(match[9], false, `markdown-inline-${key++}`));
     }
     cursor = start + match[0].length;
   }
@@ -63,6 +80,21 @@ export function renderMarkdown(content: string): ReactNode[] {
     const line = lines[i];
     if (!line.trim()) {
       i += 1;
+      continue;
+    }
+
+    if (line.trim().startsWith("\\[")) {
+      const mathLines: string[] = [line.trim().replace(/^\\\[\s*/, "")];
+      i += 1;
+      while (i < lines.length && !lines[i].trim().endsWith("\\]")) {
+        mathLines.push(lines[i]);
+        i += 1;
+      }
+      if (i < lines.length) {
+        mathLines.push(lines[i].trim().replace(/\s*\\\]$/, ""));
+        i += 1;
+      }
+      output.push(renderMath(mathLines.join("\n"), true, `markdown-block-${key++}`));
       continue;
     }
 

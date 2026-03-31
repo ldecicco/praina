@@ -19,6 +19,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { SkeletonCards } from "./Skeleton";
 import { renderMarkdown } from "../lib/renderMarkdown";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import { ProjectResourcesPanel } from "./ProjectResourcesPanel";
@@ -34,6 +35,7 @@ import type {
   TeachingWorkspace,
 } from "../types";
 import { renderHealthIndicator } from "./TeachingHealthIndicator";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   selectedProjectId: string;
@@ -97,8 +99,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
   const [loading, setLoading] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [modal, setModal] = useState<EntityModal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedReports, setExpandedReports] = useState<Set<string>>(new Set());
@@ -861,7 +862,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
         ) : null}
       </div>
 
-      {loading || !workspace || !profile ? <div className="card">Loading...</div> : null}
+      {loading || !workspace || !profile ? <SkeletonCards count={3} /> : null}
 
       {!loading && workspace && profile && tab === "overview" ? (
         <div className="teaching-section-stack">

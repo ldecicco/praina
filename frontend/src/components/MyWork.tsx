@@ -14,6 +14,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { SkeletonCards } from "./Skeleton";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import type { MyWorkItem, MyWorkProjectGroup, MyWorkResponse } from "../types";
 
@@ -153,7 +154,7 @@ export function MyWork() {
       </div>
 
       {error ? <p className="error">{error}</p> : null}
-      {loading ? <p className="muted-small">Loading...</p> : null}
+      {loading ? <SkeletonCards count={4} /> : null}
 
       {!loading && data && data.groups.length === 0 ? (
         <div className="mw-empty">

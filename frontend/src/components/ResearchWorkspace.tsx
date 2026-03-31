@@ -26,8 +26,10 @@ import {
 
 import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { useStatusToast } from "../lib/useStatusToast";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import { renderMarkdown } from "../lib/renderMarkdown";
+import { SkeletonTable, SkeletonCards } from "./Skeleton";
 import type {
   BibliographyCollection,
   BibliographyDuplicateMatch,
@@ -296,11 +298,15 @@ export function ResearchWorkspace({
   bibliographyOnly = false,
   isAdmin = false,
   currentProject = null,
+  openBibliographyReferenceId = null,
+  onOpenBibliographyReferenceConsumed,
 }: {
   selectedProjectId: string;
   bibliographyOnly?: boolean;
   isAdmin?: boolean;
   currentProject?: Project | null;
+  openBibliographyReferenceId?: string | null;
+  onOpenBibliographyReferenceConsumed?: () => void;
 }) {
   const [collections, setCollections] = useState<ResearchCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
@@ -321,10 +327,9 @@ export function ResearchWorkspace({
   const [tasks, setTasks] = useState<WorkEntity[]>([]);
   const [deliverables, setDeliverables] = useState<WorkEntity[]>([]);
 
-  const [tab, setTab] = useState<Tab>("references");
+  const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [showArchived, setShowArchived] = useState(false);
 
   const [collectionModalOpen, setCollectionModalOpen] = useState(false);
@@ -750,6 +755,15 @@ export function ResearchWorkspace({
   }, [selectedProjectId, selectedCollectionId, refStatusFilter, refSearch, noteLaneFilter, bibliographySearch, bibliographyVisibilityFilter, bibliographyOnly, selectedBibliographyCollectionId]);
   useAutoRefresh(stableLoad);
 
+  useEffect(() => {
+    if (!openBibliographyReferenceId || bibliography.length === 0) return;
+    const target = bibliography.find((item) => item.id === openBibliographyReferenceId);
+    if (!target) return;
+    openEditBibliographyModal(target);
+    setExpandedBibId(target.id);
+    onOpenBibliographyReferenceConsumed?.();
+  }, [openBibliographyReferenceId, bibliography]);
+
   function resetCollectionForm() {
     setCollectionTitle("");
     setCollectionDescription("");
@@ -857,6 +871,21 @@ export function ResearchWorkspace({
     setBibliographyIdentifierResult(null);
     setBibliographyAttachmentFile(null);
     setBibliographyModalOpen(true);
+  }
+
+  async function handleCopyBibliographyPermalink(item: BibliographyReference) {
+    if (typeof window === "undefined" || !selectedProjectId) return;
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.searchParams.set("view", "bibliography");
+    url.searchParams.set("project", selectedProjectId);
+    url.searchParams.set("paper", item.id);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setStatus("Link copied.");
+    } catch {
+      setError("Failed to copy link.");
+    }
   }
 
   function openEditBibliographyCollectionModal(item: BibliographyCollection) {
@@ -2775,7 +2804,7 @@ export function ResearchWorkspace({
   }
 
   if (!selectedProjectId && !bibliographyOnly) return <p className="empty-message">Select a project to manage research.</p>;
-  if (loading) return <p className="muted-small">Loading...</p>;
+  if (loading) return <SkeletonTable rows={6} cols={4} />;
 
   return (
     <>
@@ -2822,6 +2851,9 @@ export function ResearchWorkspace({
               <span className="delivery-tab-count">{item.reference_count + item.note_count}</span>
             </button>
           ))}
+          {activeCollections.length === 0 ? (
+            <span className="muted-small" style={{ padding: "0 4px" }}>Create a study to start organizing your research.</span>
+          ) : null}
           {archivedCollections.length > 0 ? (
             <button type="button" className="chip small" onClick={() => setShowArchived((value) => !value)}>
               <FontAwesomeIcon icon={faChevronRight} className={showArchived ? "research-chevron-open" : ""} />
@@ -2870,7 +2902,7 @@ export function ResearchWorkspace({
             <button type="button" className="ghost docs-action-btn" title="Archive" onClick={() => handleArchiveCollection(selectedCollection.id)}>
               <FontAwesomeIcon icon={faArchive} />
             </button>
-            <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => handleDeleteCollection(selectedCollection.id)}>
+            <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => handleDeleteCollection(selectedCollection.id)}>
               <FontAwesomeIcon icon={faTrash} />
             </button>
           </div>
@@ -2878,30 +2910,43 @@ export function ResearchWorkspace({
       ) : null}
 
       {!bibliographyOnly ? <div className="delivery-tabs">
+        <button className={`delivery-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
+          Overview
+        </button>
+        <button className={`delivery-tab inbox-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
+          <FontAwesomeIcon icon={faInbox} /> Inbox <span className="delivery-tab-count">{notes.length}</span>
+        </button>
+        <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
+          References <span className="delivery-tab-count">{references.length}</span>
+        </button>
         <button className={`delivery-tab ${tab === "paper" ? "active" : ""}`} onClick={() => setTab("paper")}>
           Paper
         </button>
         <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} onClick={() => setTab("iterations")}>
           Iterations <span className="delivery-tab-count">{studyIterations.length}</span>
         </button>
-        <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
-          References <span className="delivery-tab-count">{references.length}</span>
-        </button>
-        <button className={`delivery-tab inbox-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
-          <FontAwesomeIcon icon={faInbox} /> Inbox <span className="delivery-tab-count">{notes.length}</span>
-        </button>
-        <button className={`delivery-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
-          Overview
-        </button>
         {tab === "references" ? (
-          <button
-            type="button"
-            className="meetings-new-btn delivery-tab-action"
-            onClick={openBibliographyPicker}
-            disabled={!selectedCollectionId}
-          >
-            <FontAwesomeIcon icon={faFileImport} /> Import
-          </button>
+          <div className="bibliography-tab-tools">
+            <button
+              type="button"
+              className="ghost icon-text-button small"
+              disabled={references.length === 0}
+              onClick={() => {
+                const linked = references.filter((item) => item.bibliography_reference_id).map((item) => buildBibliographyFallbackReference(item));
+                openBibliographyGraph(linked);
+              }}
+            >
+              <FontAwesomeIcon icon={faShareNodes} /> Graph
+            </button>
+            <button
+              type="button"
+              className="meetings-new-btn delivery-tab-action"
+              onClick={openBibliographyPicker}
+              disabled={!selectedCollectionId}
+            >
+              <FontAwesomeIcon icon={faFileImport} /> Import
+            </button>
+          </div>
         ) : null}
         {tab === "notes" ? (
           <div className="bibliography-tab-tools">
@@ -2932,6 +2977,13 @@ export function ResearchWorkspace({
               onClick={() => void persistPaperWorkspace(undefined, { successMessage: "Iterations updated." })}
             >
               Save
+            </button>
+          </div>
+        ) : null}
+        {tab === "paper" ? (
+          <div className="bibliography-tab-tools">
+            <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void handleSavePaperWorkspace()}>
+              {saving ? "Saving..." : "Save"}
             </button>
           </div>
         ) : null}
@@ -2981,9 +3033,6 @@ export function ResearchWorkspace({
       return <p className="empty-message">Select a study to import and manage references.</p>;
     }
 
-    const linkedBibliographyReferences = references
-      .filter((item) => item.bibliography_reference_id)
-      .map((item) => buildBibliographyFallbackReference(item));
     const referenceUsage = (referenceId: string) => {
       const claimCount = paperClaims.filter((item) => item.reference_ids.includes(referenceId)).length;
       const sectionCount = paperSections.filter((item) => item.reference_ids.includes(referenceId)).length;
@@ -3009,21 +3058,13 @@ export function ResearchWorkspace({
               value={refSearch}
               onChange={(event) => setRefSearch(event.target.value)}
             />
-            <button
-              type="button"
-              className="ghost icon-text-button small"
-              disabled={linkedBibliographyReferences.length === 0}
-              onClick={() => openBibliographyGraph(linkedBibliographyReferences)}
-            >
-              <FontAwesomeIcon icon={faShareNodes} /> Show Graph
-            </button>
           </div>
         </div>
 
         {references.length === 0 ? (
           <p className="empty-message">No references in this study.</p>
         ) : (
-          <div className="simple-table-wrap">
+          <div className="simple-table-wrap bib-table-fill">
             <table className="simple-table compact-table">
               <thead>
                 <tr>
@@ -3368,15 +3409,25 @@ export function ResearchWorkspace({
                         </select>
                       </td>
                       <td className="col-icon" onClick={(event) => event.stopPropagation()}>
-                        <button
-                          type="button"
-                          className="ghost docs-action-btn"
-                          title="Summarize"
-                          disabled={summarizingId === item.id}
-                          onClick={() => void handleSummarizeBibliography(item.id)}
-                        >
-                          <FontAwesomeIcon icon={faMagicWandSparkles} spin={summarizingId === item.id} />
-                        </button>
+                        <div className="research-icon-actions">
+                          <button
+                            type="button"
+                            className="ghost docs-action-btn"
+                            title="Summarize"
+                            disabled={summarizingId === item.id}
+                            onClick={() => void handleSummarizeBibliography(item.id)}
+                          >
+                            <FontAwesomeIcon icon={faMagicWandSparkles} spin={summarizingId === item.id} />
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost docs-action-btn"
+                            title="Copy link"
+                            onClick={() => void handleCopyBibliographyPermalink(item)}
+                          >
+                            <FontAwesomeIcon icon={faLink} />
+                          </button>
+                        </div>
                       </td>
                       {!bibliographyOnly ? (
                         <td className="col-icon" onClick={(event) => event.stopPropagation()}>
@@ -3434,6 +3485,9 @@ export function ResearchWorkspace({
                                 <span style={{ flex: 1 }} />
                                 <button type="button" className="ghost docs-action-btn" title="Edit paper" onClick={(event) => { event.stopPropagation(); openEditBibliographyModal(item); }}>
                                   <FontAwesomeIcon icon={faPen} />
+                                </button>
+                                <button type="button" className="ghost docs-action-btn" title="Copy link" onClick={(event) => { event.stopPropagation(); void handleCopyBibliographyPermalink(item); }}>
+                                  <FontAwesomeIcon icon={faLink} />
                                 </button>
                                 <button
                                   type="button"
@@ -4278,12 +4332,8 @@ export function ResearchWorkspace({
         {paperExpanded || paperHasStructure ? (
           <>
 
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <strong>Authors</strong>
-            </div>
-          </div>
+        <details className="research-inline-summary" open>
+          <summary>Authors <span className="delivery-tab-count">{paperAuthors.length}</span></summary>
           <div className="paper-stack">
             <div className="paper-author-add-row">
               <select
@@ -4366,8 +4416,10 @@ export function ResearchWorkspace({
               </div>
             ))}
           </div>
-        </div>
+        </details>
 
+        <details className="research-inline-summary" open>
+          <summary>Research Questions & Claims <span className="delivery-tab-count">{paperQuestions.length + paperClaims.length}</span></summary>
         <div className="paper-columns">
           <div className="meetings-detail-section">
             <div className="meetings-detail-head">
@@ -4587,14 +4639,13 @@ export function ResearchWorkspace({
             </div>
           </div>
         </div>
+        </details>
 
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <strong>Sections</strong>
-            </div>
+        <details className="research-inline-summary" open>
+          <summary>Sections <span className="delivery-tab-count">{paperSections.length}</span></summary>
+          <div className="paper-section-action-row">
             <button type="button" className="meetings-new-btn" onClick={() => setPaperSections((items) => [...items, newPaperSection()])}>
-              <FontAwesomeIcon icon={faPlus} /> Add
+              <FontAwesomeIcon icon={faPlus} /> Add Section
             </button>
           </div>
           <div className="paper-stack">
@@ -4762,7 +4813,7 @@ export function ResearchWorkspace({
               </div>
             ))}
           </div>
-        </div>
+        </details>
           </>
         ) : null}
       </div>
@@ -5114,23 +5165,22 @@ export function ResearchWorkspace({
             </div>
           </div>
           <div className="research-overview-body">
-            <div className="paper-health-row">
-              <span className={`chip small${!paperSubmissionDeadline ? " paper-health-alert" : ""}`}>
-                {paperSubmissionDeadline ? `Submission ${new Date(paperSubmissionDeadline).toLocaleDateString()}` : "No deadline"}
-              </span>
-              <span className={`chip small${unprocessedInboxCount > 0 ? " paper-health-alert" : ""}`}>{unprocessedInboxCount} inbox pending</span>
-              <span className={`chip small${studyResults.length === 0 ? " paper-health-alert" : ""}`}>{studyResults.length} results</span>
-              <span className={`chip small${unsupportedClaims > 0 ? " paper-health-alert" : ""}`}>{unsupportedClaims} unsupported claims</span>
-              <span className={`chip small${weakSections > 0 ? " paper-health-alert" : ""}`}>{weakSections} weak sections</span>
+            <div className="research-meta-grid">
+              <span className="muted-small">{paperSubmissionDeadline ? `Deadline: ${new Date(paperSubmissionDeadline).toLocaleDateString()}` : "No deadline set"}</span>
+              <span className="muted-small">{references.length} references</span>
+              <span className="muted-small">{collectionNotes.length} inbox</span>
+              <span className="muted-small">{studyResults.length} results</span>
+              <span className="muted-small">{paperClaims.length} claims</span>
+              <span className="muted-small">{paperSections.length} sections</span>
             </div>
             {nextActions.length > 0 ? (
               <div className="research-bullet-stack">
                 {nextActions.map((item) => (
-                  <span key={item} className="chip small">{item}</span>
+                  <span key={item} className={`chip small${item.includes("unsupported") || item.includes("weak") || item.includes("deadline") ? " paper-health-alert" : ""}`}>{item}</span>
                 ))}
               </div>
             ) : (
-              <p>Study is in a good state.</p>
+              <p className="muted-small">Study is in a good state.</p>
             )}
           </div>
         </div>
@@ -5145,11 +5195,13 @@ export function ResearchWorkspace({
             </button>
           </div>
           <div className="research-overview-body">
-            <p>{collectionDetail.description || collectionDetail.hypothesis || "No focus."}</p>
+            {collectionDetail.description ? <p>{collectionDetail.description}</p> : null}
+            {collectionDetail.hypothesis ? (
+              <p className="muted-small"><strong>Hypothesis:</strong> {collectionDetail.hypothesis}</p>
+            ) : null}
+            {!collectionDetail.description && !collectionDetail.hypothesis ? <p className="muted-small">No description or hypothesis set.</p> : null}
             <div className="research-meta-grid">
-              <span className="muted-small">Status: {collectionDetail.status}</span>
-              <span className="muted-small">{collectionDetail.reference_count} references</span>
-              <span className="muted-small">{collectionDetail.note_count} inbox</span>
+              <span className="muted-small">Status: <span className="chip small">{collectionDetail.status}</span></span>
             </div>
           </div>
         </div>
@@ -5223,7 +5275,7 @@ export function ResearchWorkspace({
                 const item = wps.find((entry) => entry.id === id);
                 return item ? (
                   <span key={id} className="chip small">
-                    {item.code}
+                    <span className="chip-type-label">WP</span> {item.code}
                   </span>
                 ) : null;
               })}
@@ -5231,7 +5283,7 @@ export function ResearchWorkspace({
                 const item = tasks.find((entry) => entry.id === id);
                 return item ? (
                   <span key={id} className="chip small">
-                    {item.code}
+                    <span className="chip-type-label">Task</span> {item.code}
                   </span>
                 ) : null;
               })}
@@ -5239,7 +5291,7 @@ export function ResearchWorkspace({
                 const item = deliverables.find((entry) => entry.id === id);
                 return item ? (
                   <span key={id} className="chip small">
-                    {item.code}
+                    <span className="chip-type-label">Del</span> {item.code}
                   </span>
                 ) : null;
               })}
@@ -5756,6 +5808,11 @@ export function ResearchWorkspace({
                 <button type="button" className={`bib-toggle-group-btn${bibliographyVisibility === "shared" ? " active" : ""}`} onClick={() => setBibliographyVisibility("shared")}>Shared</button>
                 <button type="button" className={`bib-toggle-group-btn${bibliographyVisibility === "private" ? " active" : ""}`} onClick={() => setBibliographyVisibility("private")}>Private</button>
               </div>
+              {!isCreate && editingBibliography ? (
+                <button type="button" className="ghost docs-action-btn" title="Copy link" onClick={() => void handleCopyBibliographyPermalink(editingBibliography)}>
+                  <FontAwesomeIcon icon={faLink} />
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="meetings-new-btn"

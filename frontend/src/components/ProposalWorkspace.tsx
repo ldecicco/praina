@@ -29,6 +29,7 @@ import {
 import { api } from "../lib/api";
 import { renderMarkdown } from "../lib/renderMarkdown";
 import { ProposalRichEditor } from "./ProposalRichEditor";
+import { useStatusToast } from "../lib/useStatusToast";
 import type {
   AuthUser,
   Member,
@@ -186,8 +187,7 @@ export function ProposalWorkspace({
   workspaceMode = "proposal",
 }: Props) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [templates, setTemplates] = useState<ProposalTemplate[]>([]);
   const [members, setMembers] = useState<Member[]>([]);

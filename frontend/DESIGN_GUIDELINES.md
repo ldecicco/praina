@@ -12,36 +12,37 @@ All colors, spacing, and typography are defined as CSS custom properties in `:ro
 
 | Token | Value | Usage |
 |---|---|---|
-| `--bg` | `#111113` | Page background |
-| `--bg-elevated` | `#19191c` | Cards, sidebar, elevated surfaces |
-| `--surface` | `#222225` | Inputs, chips, nested containers |
-| `--surface-2` | `#2a2a2e` | Hover states on surface elements |
-| `--surface-3` | `#323236` | Active/selected states |
-| `--line` | `rgba(255,255,255,0.07)` | Default borders |
-| `--line-strong` | `rgba(255,255,255,0.12)` | Emphasized borders |
-| `--text` | `#b4b4bd` | Body text |
-| `--text-bright` | `#ededf0` | Headings, strong values, emphasis |
-| `--text-secondary` | `#8e8e9a` | Labels, metadata, secondary info |
-| `--muted` | `#6e6e7a` | Placeholder text, disabled, section titles |
-| `--brand` | `#7c5cfc` | Primary accent (violet) |
-| `--brand-hover` | `#6a4ce0` | Brand hover state |
-| `--brand-glow` | `rgba(124,92,252,0.10)` | Brand tinted backgrounds |
-| `--brand-subtle` | `rgba(124,92,252,0.06)` | Subtle brand tint |
-| `--success` | `#2ec97a` | Success states |
-| `--danger` | `#ef5350` | Errors, high-risk indicators |
-| `--warning` | `#e5a913` | Warnings, at-risk indicators |
+| `--bg` | `#101012` | Page background (warm charcoal) |
+| `--bg-elevated` | `#18181C` | Cards, sidebar, elevated surfaces |
+| `--surface` | `#1F1F25` | Inputs, chips, nested containers |
+| `--surface-2` | `#26262E` | Hover states on surface elements |
+| `--surface-3` | `#2E2E38` | Active/selected states |
+| `--line` | `rgba(255,255,255,0.06)` | Default borders |
+| `--line-strong` | `rgba(255,255,255,0.10)` | Emphasized borders |
+| `--text` | `#A8A8B4` | Body text |
+| `--text-bright` | `#EDEDF0` | Headings, strong values, emphasis |
+| `--text-secondary` | `#75758A` | Labels, metadata, secondary info |
+| `--muted` | `#5E5E72` | Placeholder text, disabled, section titles |
+| `--brand` | `#3AAFA8` | Primary accent (teal/viridian) |
+| `--brand-hover` | `#32998E` | Brand hover state |
+| `--brand-glow` | `rgba(58,175,168,0.14)` | Brand tinted backgrounds |
+| `--brand-subtle` | `rgba(58,175,168,0.06)` | Subtle brand tint |
+| `--success` | `#4CAE6F` | Success states |
+| `--danger` | `#D45454` | Errors, high-risk indicators |
+| `--warning` | `#D4943A` | Warnings, at-risk indicators |
 
 ### Typography
 
-- **UI font**: `var(--font)` — DM Sans. Used everywhere.
-- **Monospace**: `var(--mono)` — JetBrains Mono. **Only** for code blocks and code citations. Never for labels, values, timestamps, or badges.
+- **UI font**: `var(--font)` — Sora. Geometric, distinctive, readable at small sizes. Used everywhere.
+- **Monospace**: `var(--mono)` — IBM Plex Mono. **Only** for code blocks and code citations. Never for labels, values, timestamps, or badges.
 - **Base size**: 13px body, 12px compact elements, 11px metadata, 10px micro labels.
 - **Weights**: 400 (body), 500 (medium emphasis), 600 (section titles, labels), 700 (values, strong).
+- **Letter-spacing**: -0.01em to -0.03em for headings (tighter = more confident). Default (0) for body. 0.06em+ for micro uppercase labels.
 
 ### Spacing & Radii
 
-- `--radius`: 6px (default border-radius)
-- `--radius-lg`: 8px (cards, modals)
+- `--radius`: 6px (default border-radius — precise, not bubbly)
+- `--radius-lg`: 10px (cards, modals)
 - Padding: 12-14px for cards, 6-10px for compact items, 4-8px for chips/badges
 - Gaps: 6-10px between items, 4-6px for tight stacks
 - `--t`: 120ms ease (default transition)

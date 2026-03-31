@@ -15,6 +15,7 @@ import {
 
 import { api } from "../lib/api";
 import type { DocumentListItem, Member, ReviewFinding, WorkEntity } from "../types";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   selectedProjectId: string;
@@ -37,7 +38,6 @@ export function DeliverableWorkbench({ selectedProjectId, onOpenAssistant }: Pro
   const [findings, setFindings] = useState<ReviewFinding[]>([]);
   const [draftFile, setDraftFile] = useState<File | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
-  const [status, setStatus] = useState("");
   const [members, setMembers] = useState<Member[]>([]);
   const [selectedDeliverableId, setSelectedDeliverableId] = useState("");
   const [activeTab, setActiveTab] = useState<WorkbenchTab>("planning");
@@ -51,7 +51,7 @@ export function DeliverableWorkbench({ selectedProjectId, onOpenAssistant }: Pro
   const [findingSummary, setFindingSummary] = useState("");
   const [findingDetails, setFindingDetails] = useState("");
   const [findingCreatedByMemberId, setFindingCreatedByMemberId] = useState("");
-  const [error, setError] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {

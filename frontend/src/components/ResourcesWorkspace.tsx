@@ -13,7 +13,9 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { SkeletonTable } from "./Skeleton";
 import type { AuthUser, Equipment, EquipmentBooking, EquipmentConflict, EquipmentDowntime, EquipmentMaterial, Lab, LabClosure, Project, ProjectBroadcast } from "../types";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   currentUser: AuthUser;
@@ -88,8 +90,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [modal, setModal] = useState<ModalKind>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -948,7 +949,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
         </div>
       </div>
 
-      {loading ? <div className="card">Loading...</div> : null}
+      {loading ? <SkeletonTable rows={5} cols={4} /> : null}
 
       {!loading && tab === "equipment" && equipment.length === 0 ? (
         <div className="teaching-empty-state">

@@ -341,7 +341,7 @@ export function ProposalRichEditor({
               provider: collabProvider,
               user: {
                 name: currentUser?.display_name || "User",
-                color: String(collabProvider.awareness.getLocalState()?.user?.color || "#7c5cfc"),
+                color: String(collabProvider.awareness.getLocalState()?.user?.color || "#3AAFA8"),
               },
               render: createCollabCaret,
               selectionRender: createCollabSelection,

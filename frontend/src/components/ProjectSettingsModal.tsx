@@ -4,6 +4,7 @@ import FocusLock from "react-focus-lock";
 import { api } from "../lib/api";
 import type { AuthUser, Course, Member, Partner, Project, ProjectValidationResult } from "../types";
 import { MarkAsFundedModal } from "./MarkAsFundedModal";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   open: boolean;
@@ -30,7 +31,7 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
   const [reportingDatesText, setReportingDatesText] = useState("");
   const [validation, setValidation] = useState<ProjectValidationResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [language, setLanguage] = useState("en_GB");
   const [coordinatorPartnerId, setCoordinatorPartnerId] = useState("");
   const [principalInvestigatorId, setPrincipalInvestigatorId] = useState("");
@@ -40,7 +41,6 @@ export function ProjectSettingsModal({ open, project, currentUser, onClose, onPr
   const [teachingCourseId, setTeachingCourseId] = useState("");
   const [teachingAcademicYear, setTeachingAcademicYear] = useState("");
   const [teachingTerm, setTeachingTerm] = useState("");
-  const [status, setStatus] = useState("");
   const [fundedModalOpen, setFundedModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"archive" | "delete" | null>(null);
 

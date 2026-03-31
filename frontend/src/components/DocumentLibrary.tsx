@@ -12,6 +12,7 @@ import {
 
 import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { useStatusToast } from "../lib/useStatusToast";
 import type { DocumentListItem, DocumentVersion, Member, ProjectProposalSection, WorkEntity } from "../types";
 
 type Props = {
@@ -77,8 +78,7 @@ export function DocumentLibrary({ selectedProjectId, highlightDocumentKey, onHig
   const [linkProposalSectionId, setLinkProposalSectionId] = useState("");
 
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
 
   const scopeEntities = useMemo(() => {
     if (uploadScope === "wp") return wps;

@@ -22,6 +22,7 @@ import type {
   ProposalSubmissionRequirement,
   ProposalTemplate,
 } from "../types";
+import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
   selectedProjectId: string;
@@ -82,8 +83,7 @@ function buildSubmissionDocumentTitle(requirement: ProposalSubmissionRequirement
 
 export function ProposalSubmissionWorkspace({ selectedProjectId, callBrief, currentUser, project }: Props) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { error, setError, status, setStatus } = useStatusToast();
   const [requirements, setRequirements] = useState<ProposalSubmissionRequirement[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);

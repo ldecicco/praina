@@ -38,19 +38,19 @@ class PaperClaimAuditAgent:
     def __init__(self) -> None:
         self.last_error: str | None = None
 
-    def audit_collection_claims(self, project_id: uuid.UUID, collection_id: uuid.UUID, db: Session) -> list[PaperClaimAudit]:
+    def audit_collection_claims(self, project_id: uuid.UUID, collection_id: uuid.UUID, db: Session, *, space_id: uuid.UUID | None = None) -> list[PaperClaimAudit]:
         service = ResearchService(db)
         project = db.get(Project, project_id)
         if not project:
             raise NotFoundError("Project not found.")
-        collection = service.get_collection(project_id, collection_id)
+        collection = service.get_collection_for_space(space_id, collection_id) if space_id else service.get_collection(project_id, collection_id)
         raw_claims = collection.paper_claims or []
         claims = [item for item in raw_claims if isinstance(item, dict) and str(item.get("text") or "").strip()]
         if not claims:
             return []
 
-        references, _ = service.list_references(project_id, collection_id=collection_id, page=1, page_size=100)
-        notes, _ = service.list_notes(project_id, collection_id=collection_id, page=1, page_size=100)
+        references, _ = service.list_references_for_space(space_id, collection_id=collection_id, page=1, page_size=100) if space_id else service.list_references(project_id, collection_id=collection_id, page=1, page_size=100)
+        notes, _ = service.list_notes_for_space(space_id, collection_id=collection_id, page=1, page_size=100) if space_id else service.list_notes(project_id, collection_id=collection_id, page=1, page_size=100)
 
         prompt = self._build_prompt(project, collection, claims, references, notes, service)
         raw = self._generate_text(prompt)

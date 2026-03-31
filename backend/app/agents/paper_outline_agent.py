@@ -35,18 +35,18 @@ class PaperOutlineAgent:
     def __init__(self) -> None:
         self.last_error: str | None = None
 
-    def build_collection_outline(self, project_id: uuid.UUID, collection_id: uuid.UUID, db: Session) -> list[PaperOutlineSection]:
+    def build_collection_outline(self, project_id: uuid.UUID, collection_id: uuid.UUID, db: Session, *, space_id: uuid.UUID | None = None) -> list[PaperOutlineSection]:
         service = ResearchService(db)
         project = db.get(Project, project_id)
         if not project:
             raise NotFoundError("Project not found.")
-        collection = service.get_collection(project_id, collection_id)
+        collection = service.get_collection_for_space(space_id, collection_id) if space_id else service.get_collection(project_id, collection_id)
         questions = [item for item in (collection.paper_questions or []) if isinstance(item, dict) and str(item.get("text") or "").strip()]
         claims = [item for item in (collection.paper_claims or []) if isinstance(item, dict) and str(item.get("text") or "").strip()]
         existing_sections = [item for item in (collection.paper_sections or []) if isinstance(item, dict)]
 
-        references, _ = service.list_references(project_id, collection_id=collection_id, page=1, page_size=100)
-        notes, _ = service.list_notes(project_id, collection_id=collection_id, page=1, page_size=100)
+        references, _ = service.list_references_for_space(space_id, collection_id=collection_id, page=1, page_size=100) if space_id else service.list_references(project_id, collection_id=collection_id, page=1, page_size=100)
+        notes, _ = service.list_notes_for_space(space_id, collection_id=collection_id, page=1, page_size=100) if space_id else service.list_notes(project_id, collection_id=collection_id, page=1, page_size=100)
         if not questions and not claims and not references and not notes:
             return []
 

@@ -120,10 +120,25 @@ bibliography_collection_references = Table(
 
 # ── Models ─────────────────────────────────────────────────────────────
 
+class ResearchSpace(Base, IdMixin, TimestampMixin):
+    __tablename__ = "research_spaces"
+
+    title: Mapped[str] = mapped_column(String(255))
+    focus: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linked_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+
 class ResearchCollection(Base, IdMixin, TimestampMixin):
     __tablename__ = "research_collections"
 
-    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    research_space_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("research_spaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     hypothesis: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -173,7 +188,10 @@ class ResearchCollectionMember(Base, IdMixin, TimestampMixin):
 class ResearchReference(Base, IdMixin, TimestampMixin):
     __tablename__ = "research_references"
 
-    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    research_space_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("research_spaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
     bibliography_reference_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("bibliography_references.id", ondelete="SET NULL"), nullable=True, index=True,
     )
@@ -291,7 +309,10 @@ class BibliographyUserStatus(Base, TimestampMixin):
 class ResearchNote(Base, IdMixin, TimestampMixin):
     __tablename__ = "research_notes"
 
-    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    research_space_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("research_spaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
     collection_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("research_collections.id", ondelete="SET NULL"), nullable=True, index=True,
     )
@@ -324,7 +345,7 @@ class ResearchChunk(Base, IdMixin):
 
     source_type: Mapped[str] = mapped_column(String(32), index=True)
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, default=0)
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)

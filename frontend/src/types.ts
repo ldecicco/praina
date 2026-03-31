@@ -1151,11 +1151,22 @@ export type AppNotification = {
   updated_at: string;
 };
 
+export type ResearchSpace = {
+  id: string;
+  title: string;
+  focus: string | null;
+  linked_project_id: string | null;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
 // ── Research Workspace ────────────────────────────────────────────────
 
 export type ResearchCollection = {
   id: string;
-  project_id: string;
+  research_space_id: string | null;
+  project_id: string | null;
   title: string;
   description: string | null;
   hypothesis: string | null;
@@ -1299,7 +1310,8 @@ export type ResearchCollectionMember = {
 
 export type ResearchReference = {
   id: string;
-  project_id: string;
+  research_space_id: string | null;
+  project_id: string | null;
   bibliography_reference_id: string | null;
   collection_id: string | null;
   title: string;
@@ -1441,7 +1453,8 @@ export type BibliographyTag = {
 
 export type ResearchNote = {
   id: string;
-  project_id: string;
+  research_space_id: string | null;
+  project_id: string | null;
   collection_id: string | null;
   author_member_id: string | null;
   author_name: string | null;

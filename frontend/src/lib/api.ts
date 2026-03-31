@@ -68,6 +68,7 @@ import type {
   ResearchCollectionDetail,
   ResearchCollectionMember,
   ResearchResultComparison,
+  ResearchSpace,
   ResearchReference,
   ResearchNote,
   Equipment,
@@ -2166,13 +2167,37 @@ export const api = {
 
   // ── Research Workspace ──
 
-  listResearchCollections(projectId: string, opts?: { status?: string; member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchCollection[]; page: number; page_size: number; total: number }> {
+  listResearchCollections(projectId: string, opts?: { space_id?: string; status?: string; member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchCollection[]; page: number; page_size: number; total: number }> {
     const q = new URLSearchParams();
+    if (opts?.space_id) q.set("space_id", opts.space_id);
     if (opts?.status) q.set("status", opts.status);
     if (opts?.member_id) q.set("member_id", opts.member_id);
     if (opts?.page) q.set("page", String(opts.page));
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/projects/${projectId}/research/collections?${q}`);
+  },
+  listResearchSpaces(opts?: { page?: number; page_size?: number }): Promise<{ items: ResearchSpace[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/research/spaces?${q}`);
+  },
+  createResearchSpace(payload: {
+    title: string;
+    focus?: string | null;
+    linked_project_id?: string | null;
+  }): Promise<ResearchSpace> {
+    return request("/projects/research/spaces", { method: "POST", body: JSON.stringify(payload) });
+  },
+  updateResearchSpace(
+    spaceId: string,
+    payload: {
+      title?: string;
+      focus?: string | null;
+      linked_project_id?: string | null;
+    }
+  ): Promise<ResearchSpace> {
+    return request(`/projects/research/spaces/${spaceId}`, { method: "PUT", body: JSON.stringify(payload) });
   },
   createResearchCollection(projectId: string, data: {
     title: string;
@@ -2183,56 +2208,72 @@ export const api = {
     overleaf_url?: string;
     target_output_title?: string;
     output_status?: string;
-  }): Promise<ResearchCollection> {
-    return request(`/projects/${projectId}/research/collections`, { method: "POST", body: JSON.stringify(data) });
+  }, spaceId?: string): Promise<ResearchCollection> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections${q}`, { method: "POST", body: JSON.stringify(data) });
   },
-  getResearchCollection(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}`);
+  getResearchCollection(projectId: string, collectionId: string, spaceId?: string): Promise<ResearchCollectionDetail> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}${q}`);
   },
-  auditResearchPaperClaims(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/audit-claims`, { method: "POST" });
+  auditResearchPaperClaims(projectId: string, collectionId: string, spaceId?: string): Promise<ResearchCollectionDetail> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/audit-claims${q}`, { method: "POST" });
   },
-  buildResearchPaperOutline(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/build-outline`, { method: "POST" });
+  buildResearchPaperOutline(projectId: string, collectionId: string, spaceId?: string): Promise<ResearchCollectionDetail> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/build-outline${q}`, { method: "POST" });
   },
-  draftResearchPaperFromGap(projectId: string, collectionId: string): Promise<ResearchCollectionDetail> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/draft-from-gap`, { method: "POST" });
+  draftResearchPaperFromGap(projectId: string, collectionId: string, spaceId?: string): Promise<ResearchCollectionDetail> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/paper/draft-from-gap${q}`, { method: "POST" });
   },
-  reviewResearchIteration(projectId: string, collectionId: string, iterationId: string): Promise<ResearchCollectionDetail> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/iterations/${iterationId}/review`, { method: "POST" });
+  reviewResearchIteration(projectId: string, collectionId: string, iterationId: string, spaceId?: string): Promise<ResearchCollectionDetail> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/iterations/${iterationId}/review${q}`, { method: "POST" });
   },
-  compareResearchResults(projectId: string, collectionId: string): Promise<ResearchResultComparison> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/results/compare`, { method: "POST" });
+  compareResearchResults(projectId: string, collectionId: string, spaceId?: string): Promise<ResearchResultComparison> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/results/compare${q}`, { method: "POST" });
   },
-  updateResearchCollection(projectId: string, collectionId: string, data: Record<string, unknown>): Promise<ResearchCollection> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}`, { method: "PUT", body: JSON.stringify(data) });
+  updateResearchCollection(projectId: string, collectionId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchCollection> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}${q}`, { method: "PUT", body: JSON.stringify(data) });
   },
-  deleteResearchCollection(projectId: string, collectionId: string): Promise<void> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}`, { method: "DELETE" });
-  },
-
-  listCollectionMembers(projectId: string, collectionId: string): Promise<ResearchCollectionMember[]> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/members`);
-  },
-  addCollectionMember(projectId: string, collectionId: string, data: { member_id: string; role?: string }): Promise<ResearchCollectionMember> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/members`, { method: "POST", body: JSON.stringify(data) });
-  },
-  updateCollectionMember(projectId: string, collectionId: string, memberRecordId: string, data: { role: string }): Promise<ResearchCollectionMember> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/members/${memberRecordId}`, { method: "PUT", body: JSON.stringify(data) });
-  },
-  removeCollectionMember(projectId: string, collectionId: string, memberRecordId: string): Promise<void> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/members/${memberRecordId}`, { method: "DELETE" });
+  deleteResearchCollection(projectId: string, collectionId: string, spaceId?: string): Promise<void> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}${q}`, { method: "DELETE" });
   },
 
-  setCollectionWbsLinks(projectId: string, collectionId: string, data: { wp_ids: string[]; task_ids: string[]; deliverable_ids: string[] }): Promise<{ wp_ids: string[]; task_ids: string[]; deliverable_ids: string[] }> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/wbs-links`, { method: "PUT", body: JSON.stringify(data) });
+  listCollectionMembers(projectId: string, collectionId: string, spaceId?: string): Promise<ResearchCollectionMember[]> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members${q}`);
   },
-  setCollectionMeetings(projectId: string, collectionId: string, data: { meeting_ids: string[] }): Promise<ResearchCollectionDetail["meetings"]> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/meetings`, { method: "PUT", body: JSON.stringify(data) });
+  addCollectionMember(projectId: string, collectionId: string, data: { member_id: string; role?: string }, spaceId?: string): Promise<ResearchCollectionMember> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members${q}`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateCollectionMember(projectId: string, collectionId: string, collectionMemberId: string, data: { role: string }, spaceId?: string): Promise<ResearchCollectionMember> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members/${collectionMemberId}${q}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  removeCollectionMember(projectId: string, collectionId: string, collectionMemberId: string, spaceId?: string): Promise<void> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/members/${collectionMemberId}${q}`, { method: "DELETE" });
   },
 
-  listResearchReferences(projectId: string, opts?: { collection_id?: string; reading_status?: string; tag?: string; q?: string; page?: number; page_size?: number }): Promise<{ items: ResearchReference[]; page: number; page_size: number; total: number }> {
+  setCollectionWbsLinks(projectId: string, collectionId: string, data: { wp_ids: string[]; task_ids: string[]; deliverable_ids: string[] }, spaceId?: string): Promise<{ wp_ids: string[]; task_ids: string[]; deliverable_ids: string[] }> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/wbs-links${q}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  setCollectionMeetings(projectId: string, collectionId: string, data: { meeting_ids: string[] }, spaceId?: string): Promise<ResearchCollectionDetail["meetings"]> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/meetings${q}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+
+  listResearchReferences(projectId: string, opts?: { space_id?: string; collection_id?: string; reading_status?: string; tag?: string; q?: string; page?: number; page_size?: number }): Promise<{ items: ResearchReference[]; page: number; page_size: number; total: number }> {
     const q = new URLSearchParams();
+    if (opts?.space_id) q.set("space_id", opts.space_id);
     if (opts?.collection_id) q.set("collection_id", opts.collection_id);
     if (opts?.reading_status) q.set("reading_status", opts.reading_status);
     if (opts?.tag) q.set("tag", opts.tag);
@@ -2241,29 +2282,36 @@ export const api = {
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/projects/${projectId}/research/references?${q}`);
   },
-  createResearchReference(projectId: string, data: Record<string, unknown>): Promise<ResearchReference> {
-    return request(`/projects/${projectId}/research/references`, { method: "POST", body: JSON.stringify(data) });
+  createResearchReference(projectId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchReference> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references${q}`, { method: "POST", body: JSON.stringify(data) });
   },
-  importBibtexReferences(projectId: string, bibtex: string, collectionId?: string | null): Promise<{ created: ResearchReference[]; errors: string[] }> {
-    return request(`/projects/${projectId}/research/references/import-bibtex`, {
+  importBibtexReferences(projectId: string, bibtex: string, collectionId?: string | null, spaceId?: string): Promise<{ created: ResearchReference[]; errors: string[] }> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/import-bibtex${q}`, {
       method: "POST",
       body: JSON.stringify({ bibtex, collection_id: collectionId || null }),
     });
   },
-  getResearchReference(projectId: string, refId: string): Promise<ResearchReference> {
-    return request(`/projects/${projectId}/research/references/${refId}`);
+  getResearchReference(projectId: string, refId: string, spaceId?: string): Promise<ResearchReference> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/${refId}${q}`);
   },
-  updateResearchReference(projectId: string, refId: string, data: Record<string, unknown>): Promise<ResearchReference> {
-    return request(`/projects/${projectId}/research/references/${refId}`, { method: "PUT", body: JSON.stringify(data) });
+  updateResearchReference(projectId: string, refId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchReference> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/${refId}${q}`, { method: "PUT", body: JSON.stringify(data) });
   },
-  deleteResearchReference(projectId: string, refId: string): Promise<void> {
-    return request(`/projects/${projectId}/research/references/${refId}`, { method: "DELETE" });
+  deleteResearchReference(projectId: string, refId: string, spaceId?: string): Promise<void> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/${refId}${q}`, { method: "DELETE" });
   },
-  moveResearchReference(projectId: string, refId: string, collectionId: string | null): Promise<ResearchReference> {
-    return request(`/projects/${projectId}/research/references/${refId}/move`, { method: "PUT", body: JSON.stringify({ collection_id: collectionId }) });
+  moveResearchReference(projectId: string, refId: string, collectionId: string | null, spaceId?: string): Promise<ResearchReference> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/${refId}/move${q}`, { method: "PUT", body: JSON.stringify({ collection_id: collectionId }) });
   },
-  updateReferenceStatus(projectId: string, refId: string, readingStatus: string): Promise<ResearchReference> {
-    return request(`/projects/${projectId}/research/references/${refId}/status`, { method: "PUT", body: JSON.stringify({ reading_status: readingStatus }) });
+  updateReferenceStatus(projectId: string, refId: string, readingStatus: string, spaceId?: string): Promise<ResearchReference> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/${refId}/status${q}`, { method: "PUT", body: JSON.stringify({ reading_status: readingStatus }) });
   },
   listBibliographyReferences(
     projectId: string,
@@ -2293,9 +2341,11 @@ export const api = {
   },
   linkBibliographyReference(
     projectId: string,
-    payload: { bibliography_reference_id: string; collection_id?: string | null; reading_status?: string }
+    payload: { bibliography_reference_id: string; collection_id?: string | null; reading_status?: string },
+    spaceId?: string,
   ): Promise<ResearchReference> {
-    return request(`/projects/${projectId}/research/bibliography/link`, { method: "POST", body: JSON.stringify(payload) });
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/bibliography/link${q}`, { method: "POST", body: JSON.stringify(payload) });
   },
   uploadBibliographyAttachment(projectId: string, bibliographyReferenceId: string, file: File): Promise<BibliographyReference> {
     const formData = new FormData();
@@ -2458,8 +2508,9 @@ export const api = {
     return request(`/bibliography/tags?${q}`);
   },
 
-  listResearchNotes(projectId: string, opts?: { collection_id?: string; lane?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {
+  listResearchNotes(projectId: string, opts?: { space_id?: string; collection_id?: string; lane?: string; note_type?: string; author_member_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNote[]; page: number; page_size: number; total: number }> {
     const q = new URLSearchParams();
+    if (opts?.space_id) q.set("space_id", opts.space_id);
     if (opts?.collection_id) q.set("collection_id", opts.collection_id);
     if (opts?.lane !== undefined) q.set("lane", opts.lane);
     if (opts?.note_type) q.set("note_type", opts.note_type);
@@ -2468,24 +2519,30 @@ export const api = {
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/projects/${projectId}/research/notes?${q}`);
   },
-  createResearchNote(projectId: string, data: Record<string, unknown>): Promise<ResearchNote> {
-    return request(`/projects/${projectId}/research/notes`, { method: "POST", body: JSON.stringify(data) });
+  createResearchNote(projectId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchNote> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/notes${q}`, { method: "POST", body: JSON.stringify(data) });
   },
-  getResearchNote(projectId: string, noteId: string): Promise<ResearchNote> {
-    return request(`/projects/${projectId}/research/notes/${noteId}`);
+  getResearchNote(projectId: string, noteId: string, spaceId?: string): Promise<ResearchNote> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/notes/${noteId}${q}`);
   },
-  updateResearchNote(projectId: string, noteId: string, data: Record<string, unknown>): Promise<ResearchNote> {
-    return request(`/projects/${projectId}/research/notes/${noteId}`, { method: "PUT", body: JSON.stringify(data) });
+  updateResearchNote(projectId: string, noteId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchNote> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/notes/${noteId}${q}`, { method: "PUT", body: JSON.stringify(data) });
   },
-  deleteResearchNote(projectId: string, noteId: string): Promise<void> {
-    return request(`/projects/${projectId}/research/notes/${noteId}`, { method: "DELETE" });
+  deleteResearchNote(projectId: string, noteId: string, spaceId?: string): Promise<void> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/notes/${noteId}${q}`, { method: "DELETE" });
   },
-  setNoteReferences(projectId: string, noteId: string, referenceIds: string[]): Promise<ResearchNote> {
-    return request(`/projects/${projectId}/research/notes/${noteId}/references`, { method: "PUT", body: JSON.stringify({ reference_ids: referenceIds }) });
+  setNoteReferences(projectId: string, noteId: string, referenceIds: string[], spaceId?: string): Promise<ResearchNote> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/notes/${noteId}/references${q}`, { method: "PUT", body: JSON.stringify({ reference_ids: referenceIds }) });
   },
 
-  summarizeReference(projectId: string, refId: string): Promise<{ ai_summary: string; ai_summary_at: string }> {
-    return request(`/projects/${projectId}/research/references/${refId}/summarize`, { method: "POST" });
+  summarizeReference(projectId: string, refId: string, spaceId?: string): Promise<{ ai_summary: string; ai_summary_at: string }> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/references/${refId}/summarize${q}`, { method: "POST" });
   },
   summarizeBibliographyReference(bibliographyReferenceId: string): Promise<{ ai_summary: string; ai_summary_at: string }> {
     return request(`/bibliography/${bibliographyReferenceId}/summarize`, { method: "POST" });
@@ -2493,7 +2550,8 @@ export const api = {
   extractPdfMetadata(projectId: string, documentKey: string): Promise<{ title: string | null; authors: string[]; year: number | null; venue: string | null; abstract: string | null }> {
     return request(`/projects/${projectId}/research/references/extract-from-pdf?document_key=${documentKey}`, { method: "POST" });
   },
-  synthesizeCollection(projectId: string, collectionId: string): Promise<{ ai_synthesis: string; ai_synthesis_at: string }> {
-    return request(`/projects/${projectId}/research/collections/${collectionId}/synthesize`, { method: "POST" });
+  synthesizeCollection(projectId: string, collectionId: string, spaceId?: string): Promise<{ ai_synthesis: string; ai_synthesis_at: string }> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/synthesize${q}`, { method: "POST" });
   },
 };

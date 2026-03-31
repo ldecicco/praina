@@ -298,6 +298,7 @@ function deriveLogTitle(content: string): string {
 }
 
 export function ResearchWorkspace({
+  researchSpaceId,
   selectedProjectId,
   bibliographyOnly = false,
   isAdmin = false,
@@ -305,6 +306,7 @@ export function ResearchWorkspace({
   openBibliographyReferenceId = null,
   onOpenBibliographyReferenceConsumed,
 }: {
+  researchSpaceId: string;
   selectedProjectId: string;
   bibliographyOnly?: boolean;
   isAdmin?: boolean;
@@ -312,6 +314,8 @@ export function ResearchWorkspace({
   openBibliographyReferenceId?: string | null;
   onOpenBibliographyReferenceConsumed?: () => void;
 }) {
+  const activeResearchSpaceId = researchSpaceId || "";
+  const hasProjectContext = Boolean(currentProject?.id);
   const [collections, setCollections] = useState<ResearchCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
   const [bulkResearchTargetCollectionId, setBulkResearchTargetCollectionId] = useState("");
@@ -524,6 +528,13 @@ export function ResearchWorkspace({
     if (bibliographyStatusFilter) {
       items = items.filter((item) => item.reading_status === bibliographyStatusFilter);
     }
+    if (!semanticSearch && bibliographySearch.trim()) {
+      const query = bibliographySearch.trim().toLowerCase();
+      items = items.filter((item) =>
+        item.title.toLowerCase().includes(query) ||
+        item.authors.some((author) => author.toLowerCase().includes(query))
+      );
+    }
     const sorted = [...items].sort((a, b) => {
       let cmp = 0;
       if (bibSortKey === "title") cmp = (a.title || "").localeCompare(b.title || "");
@@ -533,7 +544,17 @@ export function ResearchWorkspace({
       return bibSortDir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [bibliography, selectedBibliographyCollectionId, selectedBibliographyCollectionPaperIds, bibliographyTagFilter, bibliographyStatusFilter, bibSortKey, bibSortDir]);
+  }, [
+    bibliography,
+    selectedBibliographyCollectionId,
+    selectedBibliographyCollectionPaperIds,
+    bibliographyTagFilter,
+    bibliographyStatusFilter,
+    semanticSearch,
+    bibliographySearch,
+    bibSortKey,
+    bibSortDir,
+  ]);
 
   const bibliographyTagsInUse = useMemo(() => {
     const tags = new Set<string>();
@@ -616,7 +637,7 @@ export function ResearchWorkspace({
 
   async function loadCollections(projectId = selectedProjectId) {
     if (!projectId) return;
-    const response = await api.listResearchCollections(projectId, { page_size: 100 });
+    const response = await api.listResearchCollections(projectId, { space_id: activeResearchSpaceId, page_size: 100 });
     setCollections(response.items);
     if (bibliographyOnly && !bulkResearchTargetCollectionId && response.items.length > 0) {
       setBulkResearchTargetCollectionId(response.items[0].id);
@@ -624,16 +645,26 @@ export function ResearchWorkspace({
   }
 
   async function loadMembers(projectId = selectedProjectId) {
-    if (!projectId) return;
+    if (!projectId || !hasProjectContext) {
+      setMembers([]);
+      return;
+    }
     const response = await api.listMembers(projectId);
     setMembers(response.items.filter((item: Member) => item.is_active));
   }
 
   async function loadSupportData(projectId = selectedProjectId) {
-    if (!projectId) return;
+    if (!projectId || !hasProjectContext) {
+      setProjectDocuments([]);
+      setProjectMeetings([]);
+      setWps([]);
+      setTasks([]);
+      setDeliverables([]);
+      return;
+    }
     const [docsRes, refsRes, meetingsRes, wpsRes, tasksRes, deliverablesRes] = await Promise.all([
       api.listDocuments(projectId),
-      api.listResearchReferences(projectId, { page_size: 100 }),
+      api.listResearchReferences(projectId, { space_id: activeResearchSpaceId, page_size: 100 }),
       api.listMeetings(projectId),
       api.listWorkPackages(projectId),
       api.listTasks(projectId),
@@ -692,13 +723,13 @@ export function ResearchWorkspace({
   }
 
   async function loadBibliographyTags() {
-    const response = await api.listBibliographyTags({ page_size: 200 });
+    const response = await api.listBibliographyTags({ page_size: 100 });
     setBibliographyTagOptions(response.items);
   }
 
   async function loadCollectionDetail(collectionId: string, projectId = selectedProjectId) {
     if (!projectId || !collectionId) return;
-    const detail = await api.getResearchCollection(projectId, collectionId);
+    const detail = await api.getResearchCollection(projectId, collectionId, activeResearchSpaceId);
     setCollectionDetail(detail);
   }
 
@@ -708,7 +739,7 @@ export function ResearchWorkspace({
     if (collectionId) opts.collection_id = collectionId;
     if (refStatusFilter) opts.reading_status = refStatusFilter;
     if (refSearch) opts.q = refSearch;
-    const response = await api.listResearchReferences(projectId, { ...opts, page_size: 100 });
+    const response = await api.listResearchReferences(projectId, { ...opts, space_id: activeResearchSpaceId, page_size: 100 });
     setReferences(response.items);
   }
 
@@ -717,7 +748,7 @@ export function ResearchWorkspace({
     const opts: Record<string, string> = {};
     if (collectionId) opts.collection_id = collectionId;
     if (noteLaneFilter !== "") opts.lane = noteLaneFilter === "__none__" ? "" : noteLaneFilter;
-    const response = await api.listResearchNotes(projectId, { ...opts, page_size: 100 });
+    const response = await api.listResearchNotes(projectId, { ...opts, space_id: activeResearchSpaceId, page_size: 100 });
     setNotes(response.items);
   }
 
@@ -739,7 +770,7 @@ export function ResearchWorkspace({
       setStatus("");
       Promise.all([
         loadBibliographyCollections(),
-        currentProject?.project_kind === "research" && selectedProjectId ? loadCollections(selectedProjectId) : Promise.resolve(),
+        activeResearchSpaceId ? loadCollections(selectedProjectId) : Promise.resolve(),
         loadBibliography(selectedProjectId),
       ])
         .then(() => loadBibliographyTags())
@@ -785,7 +816,7 @@ export function ResearchWorkspace({
         setError(err instanceof Error ? err.message : "Failed to load research workspace");
       })
       .finally(() => setLoading(false));
-  }, [selectedProjectId, bibliographyOnly, currentProject?.project_kind]);
+  }, [selectedProjectId, bibliographyOnly, currentProject?.project_kind, activeResearchSpaceId, hasProjectContext]);
 
   useEffect(() => {
     if (bibliographyOnly) return;
@@ -1084,8 +1115,8 @@ export function ResearchWorkspace({
         content: inlineEditContent.trim(),
         lane: inlineEditLane || null,
         note_type: existingNote?.note_type || "observation",
-      });
-      await api.setNoteReferences(selectedProjectId, noteId, inlineEditRefIds);
+      }, activeResearchSpaceId);
+      await api.setNoteReferences(selectedProjectId, noteId, inlineEditRefIds, activeResearchSpaceId);
       setStatus("Log updated.");
       cancelInlineEdit();
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
@@ -1521,7 +1552,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      await api.updateResearchCollection(selectedProjectId, selectedCollectionId, payload);
+      await api.updateResearchCollection(selectedProjectId, selectedCollectionId, payload, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
       setStatus(options?.successMessage || "Paper updated.");
     } catch (err) {
@@ -1541,7 +1572,7 @@ export function ResearchWorkspace({
         const created = await api.createResearchCollection(selectedProjectId, {
           title: collectionTitle.trim(),
           description: collectionDescription.trim() || undefined,
-        });
+        }, activeResearchSpaceId);
         await loadCollections();
         setSelectedCollectionId(created.id);
         setStatus("Study created.");
@@ -1550,7 +1581,7 @@ export function ResearchWorkspace({
           title: collectionTitle.trim(),
           description: collectionDescription.trim() || null,
           status: collectionStatus,
-        });
+        }, activeResearchSpaceId);
         await loadCollections();
         await loadCollectionDetail(editingCollectionId);
         setStatus("Study updated.");
@@ -1567,7 +1598,7 @@ export function ResearchWorkspace({
   async function handleDeleteCollection(collectionId: string) {
     if (!selectedProjectId) return;
     try {
-      await api.deleteResearchCollection(selectedProjectId, collectionId);
+      await api.deleteResearchCollection(selectedProjectId, collectionId, activeResearchSpaceId);
       await loadCollections();
       if (selectedCollectionId === collectionId) {
         setSelectedCollectionId(null);
@@ -1584,7 +1615,7 @@ export function ResearchWorkspace({
   async function handleArchiveCollection(collectionId: string) {
     if (!selectedProjectId) return;
     try {
-      await api.updateResearchCollection(selectedProjectId, collectionId, { status: "archived" });
+      await api.updateResearchCollection(selectedProjectId, collectionId, { status: "archived" }, activeResearchSpaceId);
       await loadCollections();
       if (selectedCollectionId === collectionId) {
         await loadCollectionDetail(collectionId);
@@ -1605,7 +1636,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      const detail = await api.auditResearchPaperClaims(selectedProjectId, selectedCollectionId);
+      const detail = await api.auditResearchPaperClaims(selectedProjectId, selectedCollectionId, activeResearchSpaceId);
       setCollectionDetail(detail);
       setStatus("Claims audited.");
     } catch (err) {
@@ -1621,7 +1652,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      const detail = await api.buildResearchPaperOutline(selectedProjectId, selectedCollectionId);
+      const detail = await api.buildResearchPaperOutline(selectedProjectId, selectedCollectionId, activeResearchSpaceId);
       setCollectionDetail(detail);
       setPaperExpanded(true);
       setStatus("Outline built.");
@@ -1638,7 +1669,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      const detail = await api.draftResearchPaperFromGap(selectedProjectId, selectedCollectionId);
+      const detail = await api.draftResearchPaperFromGap(selectedProjectId, selectedCollectionId, activeResearchSpaceId);
       setCollectionDetail(detail);
       setPaperExpanded(true);
       setStatus("Motivation and questions drafted from gap logs.");
@@ -1655,7 +1686,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      const detail = await api.reviewResearchIteration(selectedProjectId, selectedCollectionId, iterationId);
+      const detail = await api.reviewResearchIteration(selectedProjectId, selectedCollectionId, iterationId, activeResearchSpaceId);
       setCollectionDetail(detail);
       setStatus("Iteration reviewed.");
     } catch (err) {
@@ -1702,7 +1733,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      const report = await api.compareResearchResults(selectedProjectId, selectedCollectionId);
+      const report = await api.compareResearchResults(selectedProjectId, selectedCollectionId, activeResearchSpaceId);
       setResultComparison(report);
       setStatus("Results compared.");
     } catch (err) {
@@ -1916,10 +1947,10 @@ export function ResearchWorkspace({
     setStatus("");
     try {
       if (referenceModalMode === "create") {
-        await api.createResearchReference(selectedProjectId, buildReferencePayload());
+        await api.createResearchReference(selectedProjectId, buildReferencePayload(), activeResearchSpaceId);
         setStatus("Reference added.");
       } else if (editingReferenceId) {
-        await api.updateResearchReference(selectedProjectId, editingReferenceId, buildReferencePayload());
+        await api.updateResearchReference(selectedProjectId, editingReferenceId, buildReferencePayload(), activeResearchSpaceId);
         setStatus("Reference updated.");
       }
       await refreshResearchDataAfterReferenceChange(referenceCollectionId || selectedCollectionId || undefined);
@@ -1939,7 +1970,7 @@ export function ResearchWorkspace({
     setStatus("");
     setBibtexResult(null);
     try {
-      const result = await api.importBibtexReferences(selectedProjectId, bibtexInput.trim(), referenceCollectionId);
+      const result = await api.importBibtexReferences(selectedProjectId, bibtexInput.trim(), referenceCollectionId, activeResearchSpaceId);
       setBibtexResult({ created: result.created.length, errors: result.errors });
       await refreshResearchDataAfterReferenceChange(referenceCollectionId);
       setStatus(result.created.length > 0 ? "References imported." : "No references imported.");
@@ -1955,7 +1986,7 @@ export function ResearchWorkspace({
   }
 
   async function handleSaveReferenceFromExistingDocument() {
-    if (!selectedProjectId || !existingDocumentKey || !referenceCollectionId) return;
+    if (!selectedProjectId || !hasProjectContext || !existingDocumentKey || !referenceCollectionId) return;
     setSaving(true);
     setError("");
     setStatus("");
@@ -1971,9 +2002,9 @@ export function ResearchWorkspace({
         document_key: existingDocumentKey,
       });
       if (referenceModalMode === "create") {
-        await api.createResearchReference(selectedProjectId, payload);
+        await api.createResearchReference(selectedProjectId, payload, activeResearchSpaceId);
       } else if (editingReferenceId) {
-        await api.updateResearchReference(selectedProjectId, editingReferenceId, payload);
+        await api.updateResearchReference(selectedProjectId, editingReferenceId, payload, activeResearchSpaceId);
       }
       await refreshResearchDataAfterReferenceChange(referenceCollectionId);
       setReferenceModalOpen(false);
@@ -1987,7 +2018,7 @@ export function ResearchWorkspace({
   }
 
   async function handleUploadPdfReference() {
-    if (!selectedProjectId || !referencePdfFile || !referenceCollectionId) return;
+    if (!selectedProjectId || !hasProjectContext || !referencePdfFile || !referenceCollectionId) return;
     setSaving(true);
     setError("");
     setStatus("");
@@ -2012,9 +2043,9 @@ export function ResearchWorkspace({
         document_key: uploaded.document_key,
       });
       if (referenceModalMode === "create") {
-        await api.createResearchReference(selectedProjectId, payload);
+        await api.createResearchReference(selectedProjectId, payload, activeResearchSpaceId);
       } else if (editingReferenceId) {
-        await api.updateResearchReference(selectedProjectId, editingReferenceId, payload);
+        await api.updateResearchReference(selectedProjectId, editingReferenceId, payload, activeResearchSpaceId);
       }
       await Promise.all([refreshResearchDataAfterReferenceChange(referenceCollectionId), loadSupportData()]);
       setReferenceModalOpen(false);
@@ -2042,7 +2073,7 @@ export function ResearchWorkspace({
   async function handleDeleteReference(referenceId: string) {
     if (!selectedProjectId) return;
     try {
-      await api.deleteResearchReference(selectedProjectId, referenceId);
+      await api.deleteResearchReference(selectedProjectId, referenceId, activeResearchSpaceId);
       await refreshResearchDataAfterReferenceChange(selectedCollectionId || undefined);
       setStatus("Reference deleted.");
     } catch (err) {
@@ -2053,7 +2084,7 @@ export function ResearchWorkspace({
   async function handleStatusChange(referenceId: string, nextStatus: string) {
     if (!selectedProjectId) return;
     try {
-      const updated = await api.updateReferenceStatus(selectedProjectId, referenceId, nextStatus);
+      const updated = await api.updateReferenceStatus(selectedProjectId, referenceId, nextStatus, activeResearchSpaceId);
       setReferences((items) => items.map((item) => (item.id === referenceId ? updated : item)));
       setAllReferences((items) => items.map((item) => (item.id === referenceId ? updated : item)));
     } catch (err) {
@@ -2072,7 +2103,7 @@ export function ResearchWorkspace({
     setError("");
     setStatus("");
     try {
-      const result = await api.summarizeReference(selectedProjectId, referenceId);
+      const result = await api.summarizeReference(selectedProjectId, referenceId, activeResearchSpaceId);
       setReferences((items) =>
         items.map((item) => (item.id === referenceId ? { ...item, ai_summary: result.ai_summary, ai_summary_at: result.ai_summary_at } : item))
       );
@@ -2223,7 +2254,7 @@ export function ResearchWorkspace({
           : await api.updateGlobalBibliography(editingBibliographyId!, payload);
       let finalItem = item;
       if (bibliographyAttachmentFile) {
-        if (!selectedProjectId) throw new Error("Select a project before attaching a PDF.");
+        if (!hasProjectContext) throw new Error("Link a project before attaching a PDF.");
         if (!item.attachment_url || options?.allowDuplicate) {
           finalItem = await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
         }
@@ -2281,7 +2312,7 @@ export function ResearchWorkspace({
       const result = await api.importGlobalBibliographyIdentifiers({
         identifiers: bibliographyIdentifierInput.trim(),
         visibility: bibliographyVisibility,
-        source_project_id: selectedProjectId || null,
+        source_project_id: hasProjectContext ? selectedProjectId : null,
       });
       setBibliographyIdentifierResult({
         created: result.created.length,
@@ -2446,7 +2477,7 @@ export function ResearchWorkspace({
     try {
       const result = await api.importGlobalBibliographyBibtex(bibliographyBibtexInput.trim(), bibliographyVisibility);
       if (bibliographyAttachmentFile && result.created.length === 1) {
-        if (!selectedProjectId) throw new Error("Select a project before attaching a PDF.");
+        if (!hasProjectContext) throw new Error("Link a project before attaching a PDF.");
         await api.uploadGlobalBibliographyAttachment(result.created[0].id, selectedProjectId, bibliographyAttachmentFile);
       }
       setBibliographyBibtexResult({ created: result.created.length, errors: result.errors });
@@ -2477,7 +2508,7 @@ export function ResearchWorkspace({
         bibliography_reference_id: item.id,
         collection_id: selectedCollectionId,
         reading_status: "unread",
-      });
+      }, activeResearchSpaceId);
       await refreshResearchDataAfterReferenceChange(selectedCollectionId);
       await loadBibliography();
       setBibliographyPickerOpen(false);
@@ -2691,8 +2722,8 @@ export function ResearchWorkspace({
       setError("No PDF attached to this paper.");
       return;
     }
-    if (!item.source_project_id && !selectedProjectId) {
-      setError("Select a project before ingesting this paper PDF.");
+    if (!item.source_project_id && !hasProjectContext) {
+      setError("Link a project before ingesting this paper PDF.");
       return;
     }
     try {
@@ -2701,7 +2732,7 @@ export function ResearchWorkspace({
       setStatus("");
       const updated = await api.ingestGlobalBibliographyAttachment(
         item.id,
-        item.source_project_id || selectedProjectId || null,
+        item.source_project_id || (hasProjectContext ? selectedProjectId : null),
       );
       setBibliography((prev) => prev.map((entry) => (entry.id === item.id ? updated : entry)));
       setStatus(updated.document_status === "indexed" ? "Paper indexed." : "Paper ingestion started.");
@@ -2733,7 +2764,7 @@ export function ResearchWorkspace({
           lane: noteLane || null,
           note_type: noteType || "observation",
           linked_reference_ids: noteReferenceIds,
-        });
+        }, activeResearchSpaceId);
         setStatus("Log added.");
       } else if (editingNoteId) {
         await api.updateResearchNote(selectedProjectId, editingNoteId, {
@@ -2742,8 +2773,8 @@ export function ResearchWorkspace({
           collection_id: noteCollectionId,
           lane: noteLane || null,
           note_type: noteType || "observation",
-        });
-        await api.setNoteReferences(selectedProjectId, editingNoteId, noteReferenceIds);
+        }, activeResearchSpaceId);
+        await api.setNoteReferences(selectedProjectId, editingNoteId, noteReferenceIds, activeResearchSpaceId);
         setStatus("Log updated.");
       }
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
@@ -2772,7 +2803,7 @@ export function ResearchWorkspace({
         collection_id: selectedCollectionId,
         note_type: "observation",
         linked_reference_ids: quickLogRefIds,
-      });
+      }, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
       if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
@@ -2795,7 +2826,7 @@ export function ResearchWorkspace({
   async function handleDeleteNote(noteId: string) {
     if (!selectedProjectId) return;
     try {
-      await api.deleteResearchNote(selectedProjectId, noteId);
+      await api.deleteResearchNote(selectedProjectId, noteId, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId)]);
       if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
@@ -2814,7 +2845,7 @@ export function ResearchWorkspace({
       await api.addCollectionMember(selectedProjectId, selectedCollectionId, {
         member_id: newMemberId,
         role: newMemberRole,
-      });
+      }, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
       setMemberModalOpen(false);
       setNewMemberId("");
@@ -2830,7 +2861,7 @@ export function ResearchWorkspace({
   async function handleUpdateMemberRole(memberRecordId: string, role: string) {
     if (!selectedProjectId || !selectedCollectionId) return;
     try {
-      await api.updateCollectionMember(selectedProjectId, selectedCollectionId, memberRecordId, { role });
+      await api.updateCollectionMember(selectedProjectId, selectedCollectionId, memberRecordId, { role }, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
       setStatus("Member role updated.");
     } catch (err) {
@@ -2841,7 +2872,7 @@ export function ResearchWorkspace({
   async function handleRemoveMember(memberRecordId: string) {
     if (!selectedProjectId || !selectedCollectionId) return;
     try {
-      await api.removeCollectionMember(selectedProjectId, selectedCollectionId, memberRecordId);
+      await api.removeCollectionMember(selectedProjectId, selectedCollectionId, memberRecordId, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
       setStatus("Member removed.");
     } catch (err) {
@@ -2859,10 +2890,10 @@ export function ResearchWorkspace({
           wp_ids: wbsWpIds,
           task_ids: wbsTaskIds,
           deliverable_ids: wbsDeliverableIds,
-        }),
+        }, activeResearchSpaceId),
         api.setCollectionMeetings(selectedProjectId, selectedCollectionId, {
           meeting_ids: meetingIds,
-        }),
+        }, activeResearchSpaceId),
       ]);
       await loadCollectionDetail(selectedCollectionId);
       setWbsModalOpen(false);
@@ -2879,7 +2910,7 @@ export function ResearchWorkspace({
     setSynthesizing(true);
     setError("");
     try {
-      const result = await api.synthesizeCollection(selectedProjectId, selectedCollectionId);
+      const result = await api.synthesizeCollection(selectedProjectId, selectedCollectionId, activeResearchSpaceId);
       setCollectionDetail((current) => (current ? { ...current, ai_synthesis: result.ai_synthesis, ai_synthesis_at: result.ai_synthesis_at } : current));
       setStatus("Synthesis updated.");
     } catch (err) {
@@ -2889,7 +2920,7 @@ export function ResearchWorkspace({
     }
   }
 
-  if (!selectedProjectId && !bibliographyOnly) return <p className="empty-message">Select a project to manage research.</p>;
+  if (!activeResearchSpaceId && !bibliographyOnly) return <p className="empty-message">Select a research space.</p>;
   if (loading) return <SkeletonTable rows={6} cols={4} />;
 
   return (

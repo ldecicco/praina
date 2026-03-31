@@ -57,15 +57,20 @@ import { api, AUTH_EXPIRED_EVENT, PROJECT_DATA_CHANGED_EVENT } from "./lib/api";
 import { currentProjectMonth } from "./lib/utils";
 import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
-import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief } from "./types";
+import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief, ResearchSpace } from "./types";
 
-type View = "my-work" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
+type View = "my-work" | "projects-home" | "research-home" | "teaching-home" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
+type WorkspaceFamily = "projects" | "research" | "teaching";
+type NavItem = { id: View; label: string; icon: typeof faSitemap };
+type NavSection = { key: string; label: string; collapsible: boolean; items: NavItem[] };
 const ASSISTANT_PENDING_PROMPT_KEY = "assistant_pending_prompt";
 const ACTIVE_PROJECT_KEY = "active_project_id";
+const ACTIVE_RESEARCH_SPACE_KEY = "active_research_space_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
 const NAV_GROUPS_KEY = "nav_groups_collapsed";
 const ACCESS_TOKEN_KEY = "auth_access_token";
 const REFRESH_TOKEN_KEY = "auth_refresh_token";
+const RESEARCH_ROUTE_FALLBACK_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 
 const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   deliverable: "delivery",
@@ -90,13 +95,17 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
 };
 
 export default function App() {
-  const [platformSection, setPlatformSection] = useState<"research" | "teaching">("research");
-  const [view, setView] = useState<View>("dashboard");
+  const [workspaceFamily, setWorkspaceFamily] = useState<WorkspaceFamily>("projects");
+  const [view, setView] = useState<View>("projects-home");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [researchSpaces, setResearchSpaces] = useState<ResearchSpace[]>([]);
   const [authTokens, setAuthTokens] = useState<AuthTokens | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_PROJECT_KEY) || "" : "")
+  );
+  const [selectedResearchSpaceId, setSelectedResearchSpaceId] = useState<string>(
+    () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_RESEARCH_SPACE_KEY) || "" : "")
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
@@ -112,6 +121,14 @@ export default function App() {
     }
   );
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newResearchSpaceOpen, setNewResearchSpaceOpen] = useState(false);
+  const [editingResearchSpaceId, setEditingResearchSpaceId] = useState<string | null>(null);
+  const [newResearchSpaceTitle, setNewResearchSpaceTitle] = useState("");
+  const [newResearchSpaceFocus, setNewResearchSpaceFocus] = useState("");
+  const [newResearchSpaceProjectId, setNewResearchSpaceProjectId] = useState("");
+  const [newResearchSpaceError, setNewResearchSpaceError] = useState("");
+  const [savingResearchSpace, setSavingResearchSpace] = useState(false);
+  const [workspaceBrowserSearch, setWorkspaceBrowserSearch] = useState("");
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const [error, setError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
@@ -156,6 +173,9 @@ export default function App() {
   useEffect(() => {
     const titles: Record<View, string> = {
       "my-work": "My Work",
+      "projects-home": "Projects",
+      "research-home": "Research",
+      "teaching-home": "Teaching",
       dashboard: "Dashboard",
       call: "Call",
       proposal: "Proposal",
@@ -235,6 +255,24 @@ export default function App() {
     }
   }
 
+  async function loadResearchSpaces() {
+    try {
+      const response = await api.listResearchSpaces({ page: 1, page_size: 100 });
+      setResearchSpaces(response.items);
+      setSelectedResearchSpaceId((current) => {
+        const exists = response.items.some((item) => item.id === current);
+        const resolved = exists ? current : (response.items[0]?.id ?? "");
+        if (typeof window !== "undefined") {
+          if (resolved) window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, resolved);
+          else window.sessionStorage.removeItem(ACTIVE_RESEARCH_SPACE_KEY);
+        }
+        return resolved;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load research spaces.");
+    }
+  }
+
   async function pollUnreadCount() {
     try {
       const res = await api.notificationUnreadCount();
@@ -275,7 +313,7 @@ export default function App() {
     }
     if (requestedView === "bibliography") {
       setView("bibliography");
-      setPlatformSection("research");
+      setWorkspaceFamily("research");
     }
     if (requestedPaperId) {
       setPendingBibliographyReferenceId(requestedPaperId);
@@ -293,10 +331,13 @@ export default function App() {
   useEffect(() => {
     if (!me) {
       setProjects([]);
+      setResearchSpaces([]);
       setSelectedProjectId("");
+      setSelectedResearchSpaceId("");
       return;
     }
     void loadProjects();
+    void loadResearchSpaces();
   }, [me?.user.id]);
 
   function handleAuthenticated(tokens: AuthTokens, meResponse: MeResponse) {
@@ -308,6 +349,7 @@ export default function App() {
       window.localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token);
     }
     void loadProjects();
+    void loadResearchSpaces();
   }
 
   function handleLogout() {
@@ -315,12 +357,15 @@ export default function App() {
     setAuthTokens(null);
     setMe(null);
     setProjects([]);
+    setResearchSpaces([]);
     setSelectedProjectId("");
+    setSelectedResearchSpaceId("");
     setError("");
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(ACCESS_TOKEN_KEY);
       window.localStorage.removeItem(REFRESH_TOKEN_KEY);
       window.sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
+      window.sessionStorage.removeItem(ACTIVE_RESEARCH_SPACE_KEY);
     }
   }
 
@@ -336,11 +381,13 @@ export default function App() {
   function handleProjectCreated(project: Project) {
     setSelectedProjectId(project.id);
     if (project.project_kind === "teaching") {
-      setPlatformSection("teaching");
+      setWorkspaceFamily("teaching");
       setView("teaching");
     } else if (project.project_mode === "proposal") {
-      setPlatformSection("research");
+      setWorkspaceFamily("projects");
       setView("call");
+    } else {
+      setWorkspaceFamily("projects");
     }
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
@@ -350,7 +397,7 @@ export default function App() {
 
   function handleProjectUpdated(project: Project) {
     setSelectedProjectId(project.id);
-    setPlatformSection(project.project_kind === "teaching" ? "teaching" : "research");
+    setWorkspaceFamily(project.project_kind === "teaching" ? "teaching" : "projects");
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
     }
@@ -369,16 +416,40 @@ export default function App() {
     void loadProjects();
   }
 
+  function handleSelectResearchSpace(spaceId: string) {
+    setSelectedResearchSpaceId(spaceId);
+    const selected = researchSpaces.find((item) => item.id === spaceId) ?? null;
+    if (selected?.linked_project_id) {
+      setSelectedProjectId(selected.linked_project_id);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, selected.linked_project_id);
+      }
+    }
+    if (typeof window !== "undefined") {
+      if (spaceId) window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, spaceId);
+      else window.sessionStorage.removeItem(ACTIVE_RESEARCH_SPACE_KEY);
+    }
+  }
+
   function handleSelectProject(projectId: string) {
     setSelectedProjectId(projectId);
     const selected = projects.find((project) => project.id === projectId);
     if (selected) {
-      setPlatformSection(selected.project_kind === "teaching" ? "teaching" : "research");
+      if (selected.project_kind === "teaching") {
+        setWorkspaceFamily("teaching");
+      } else if (workspaceFamily === "teaching") {
+        setWorkspaceFamily("projects");
+      }
     }
     if (typeof window !== "undefined") {
       if (projectId) window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
       else window.sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
     }
+  }
+
+  function openProjectSettings(projectId: string) {
+    handleSelectProject(projectId);
+    setProjectSettingsOpen(true);
   }
 
   const stableLoadProjects = useCallback(() => { void loadProjects(); }, [me?.user.id]);
@@ -392,18 +463,29 @@ export default function App() {
     } else if (targetView === "project-chat" && entityId) {
       setPendingProjectChatRoomId(entityId);
     }
-    if (targetView !== "courses" && targetView !== "resources" && targetView !== "bibliography") {
+    let targetFamily = workspaceFamily;
+    if (targetView === "courses" || targetView === "teaching" || targetView === "teaching-home") targetFamily = "teaching";
+    else if (targetView === "research" || targetView === "research-home" || targetView === "bibliography") targetFamily = "research";
+    else if (["projects-home", "dashboard", "call", "proposal", "submission", "delivery", "workbench", "wizard", "matrix", "planning", "documents"].includes(targetView)) {
+      targetFamily = "projects";
+    }
+    if (targetFamily === "research" && targetView !== "research-home" && targetView !== "bibliography") {
+      if (!selectedResearchSpaceId && researchSpaces[0]) {
+        handleSelectResearchSpace(researchSpaces[0].id);
+      }
+    } else if (targetView !== "courses" && targetView !== "resources" && targetView !== "bibliography" && targetView !== "teaching-home" && targetView !== "projects-home") {
       const sectionProjects = projects.filter((project) =>
-        platformSection === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
+        targetFamily === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
       );
       const selected = projects.find((project) => project.id === selectedProjectId) ?? null;
       const selectedMatchesSection = selected
-        ? (platformSection === "teaching" ? selected.project_kind === "teaching" : selected.project_kind !== "teaching")
+        ? (targetFamily === "teaching" ? selected.project_kind === "teaching" : selected.project_kind !== "teaching")
         : false;
       if (!selectedMatchesSection && sectionProjects.length > 0) {
         handleSelectProject(sectionProjects[0].id);
       }
     }
+    setWorkspaceFamily(targetFamily);
     setView(targetView);
   }
 
@@ -434,16 +516,11 @@ export default function App() {
     });
   }
 
-  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
-  const projectDropdownRef = useRef<HTMLDivElement>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (projectDropdownRef.current && !projectDropdownRef.current.contains(event.target as Node)) {
-        setProjectDropdownOpen(false);
-      }
       if (notifDropdownRef.current && !notifDropdownRef.current.contains(event.target as Node)) {
         setNotifDropdownOpen(false);
       }
@@ -451,23 +528,54 @@ export default function App() {
         setUserMenuOpen(false);
       }
     }
-    if (projectDropdownOpen || notifDropdownOpen || userMenuOpen) {
+    if (notifDropdownOpen || userMenuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
       return () => document.removeEventListener("mousedown", handleClickOutside);
     }
-  }, [projectDropdownOpen, notifDropdownOpen, userMenuOpen]);
+  }, [notifDropdownOpen, userMenuOpen]);
 
   const activeProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const activeResearchSpace = researchSpaces.find((item) => item.id === selectedResearchSpaceId) ?? null;
+  const researchLinkedProject =
+    projects.find((project) => project.id === activeResearchSpace?.linked_project_id) ?? null;
 
   useEffect(() => {
-    if (view === "courses" || view === "teaching") {
-      setPlatformSection("teaching");
-      return;
-    }
-    if (view === "research" || view === "call" || view === "proposal" || view === "submission") {
-      setPlatformSection("research");
-    }
+    if (view === "courses" || view === "teaching") setWorkspaceFamily("teaching");
+    else if (view === "teaching-home") setWorkspaceFamily("teaching");
+    else if (view === "research" || view === "research-home" || view === "bibliography") setWorkspaceFamily("research");
+    else if (view === "projects-home" || ["dashboard", "call", "proposal", "submission", "delivery", "workbench", "wizard", "matrix", "planning", "documents"].includes(view)) setWorkspaceFamily("projects");
   }, [view]);
+
+  useEffect(() => {
+    if (workspaceFamily !== "research") return;
+    if (selectedProjectId && activeResearchSpace?.linked_project_id !== selectedProjectId) {
+      const matchingSpace = researchSpaces.find((item) => item.linked_project_id === selectedProjectId);
+      if (matchingSpace && matchingSpace.id !== selectedResearchSpaceId) {
+        setSelectedResearchSpaceId(matchingSpace.id);
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, matchingSpace.id);
+        }
+        return;
+      }
+    }
+    if (activeResearchSpace?.linked_project_id && activeResearchSpace.linked_project_id !== selectedProjectId) {
+      setSelectedProjectId(activeResearchSpace.linked_project_id);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, activeResearchSpace.linked_project_id);
+      }
+    }
+  }, [workspaceFamily, activeResearchSpace?.linked_project_id, selectedProjectId, researchSpaces, selectedResearchSpaceId]);
+
+  useEffect(() => {
+    if (workspaceFamily !== "research" || selectedResearchSpaceId || !selectedProjectId) return;
+    const matchingSpace = researchSpaces.find((item) => item.linked_project_id === selectedProjectId);
+    if (matchingSpace) {
+      setSelectedResearchSpaceId(matchingSpace.id);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, matchingSpace.id);
+      }
+    }
+  }, [workspaceFamily, selectedResearchSpaceId, selectedProjectId, researchSpaces]);
 
   useEffect(() => {
     function handleProjectDataChanged(event: Event) {
@@ -485,36 +593,39 @@ export default function App() {
   }, [selectedProjectId, activeProject?.project_mode]);
 
   useEffect(() => {
-    if (!selectedProjectId || activeProject?.project_mode !== "proposal") {
+    if (workspaceFamily !== "projects" || !selectedProjectId || activeProject?.project_mode !== "proposal") {
       setProposalCallBrief(null);
       return;
     }
     api.getProposalCallBrief(selectedProjectId)
       .then((res) => setProposalCallBrief(res))
       .catch(() => setProposalCallBrief(null));
-  }, [selectedProjectId, activeProject?.project_mode]);
+  }, [selectedProjectId, activeProject?.project_mode, workspaceFamily]);
 
   // Redirect to dashboard if on an execution-only view while in proposal mode
   useEffect(() => {
-    if (activeProject?.project_mode === "proposal") {
-      const proposalViews = new Set<View>(["my-work", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "resources", "bibliography", "admin"]);
+    if (workspaceFamily === "projects" && activeProject?.project_mode === "proposal") {
+      const proposalViews = new Set<View>(["my-work", "projects-home", "courses", "dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "resources", "bibliography", "admin"]);
       if (!proposalViews.has(view)) {
         setView("dashboard");
       }
     }
-  }, [activeProject?.project_mode, view]);
+  }, [activeProject?.project_mode, view, workspaceFamily]);
 
   useEffect(() => {
-    if (platformSection === "teaching" && activeProject?.project_kind === "teaching") {
-      const teachingViews = new Set<View>(["my-work", "courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "bibliography", "admin"]);
+    if (workspaceFamily === "teaching" && activeProject?.project_kind === "teaching") {
+      const teachingViews = new Set<View>(["my-work", "teaching-home", "courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "bibliography", "admin"]);
       if (!teachingViews.has(view)) {
         setView("courses");
       }
     }
-  }, [activeProject?.project_kind, view, platformSection]);
+  }, [activeProject?.project_kind, view, workspaceFamily]);
 
   const viewTitle: Record<View, string> = {
     "my-work": "My Work",
+    "projects-home": "Projects",
+    "research-home": "Research",
+    "teaching-home": "Teaching",
     dashboard: "Dashboard",
     call: "Call",
     proposal: "Proposal",
@@ -542,7 +653,8 @@ export default function App() {
   const PROPOSAL_MODE_VIEWS = new Set<View>(["dashboard", "call", "proposal", "submission", "project-chat", "assistant", "wizard", "search", "resources", "admin"]);
   const TEACHING_MODE_VIEWS = new Set<View>(["courses", "teaching", "project-chat", "assistant", "todos", "search", "resources", "admin"]);
   const EXECUTION_MODE_HIDDEN = new Set<View>(["proposal"]);
-  const researchNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
+  const researchNavItems: NavItem[] = [
+    { id: "projects-home", label: "Projects", icon: faSitemap },
     { id: "dashboard", label: "Dashboard", icon: faChartLine },
     { id: "call", label: "Call", icon: faLayerGroup },
     { id: "proposal", label: "Proposal", icon: faFileLines },
@@ -558,38 +670,37 @@ export default function App() {
     { id: "documents", label: "Documents", icon: faBook },
     { id: "todos", label: "Todos", icon: faSquareCheck },
     { id: "research", label: "Research", icon: faFlask },
-    { id: "resources", label: "Resources", icon: faWrench },
     { id: "search", label: "Search", icon: faSearch },
   ];
-  const teachingNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
+  const teachingNavItems: NavItem[] = [
+    { id: "teaching-home", label: "Teaching", icon: faGraduationCap },
     { id: "courses", label: "Courses", icon: faBook },
     { id: "teaching", label: "Projects", icon: faGraduationCap },
-    { id: "resources", label: "Resources", icon: faWrench },
     { id: "project-chat", label: "Chat", icon: faUsers },
     { id: "assistant", label: "Assistant", icon: faComments },
     { id: "todos", label: "Todos", icon: faSquareCheck },
     { id: "search", label: "Search", icon: faSearch },
   ];
-  const sharedNavItems: Array<{ id: View; label: string; icon: typeof faSitemap }> = [
+  const sharedNavItems: NavItem[] = [
     { id: "bibliography", label: "Bibliography", icon: faBook },
+  ];
+  const platformNavItems: NavItem[] = [
+    { id: "resources", label: "Resources", icon: faWrench },
   ];
 
   const isProposalMode = activeProject?.project_mode === "proposal";
   const isTeachingProject = activeProject?.project_kind === "teaching";
   const visibleProjects = projects.filter((project) =>
-    platformSection === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
+    workspaceFamily === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
   );
+  const visibleResearchProjects = projects.filter((project) => project.project_kind !== "teaching");
   const currentUser = me?.user ?? null;
   const canAccessResearch = currentUser?.can_access_research ?? false;
   const canAccessTeaching = currentUser?.can_access_teaching ?? false;
-  const availableSections = [
-    ...(canAccessResearch ? (["research"] as const) : []),
-    ...(canAccessTeaching ? (["teaching"] as const) : []),
-  ];
   const isSuperAdmin = currentUser?.platform_role === "super_admin";
   const proposalCallReady = Boolean(proposalCallBrief?.source_call_id || proposalCallBrief?.call_title?.trim());
-  const navSections =
-    platformSection === "teaching"
+  const navSections: NavSection[] =
+    workspaceFamily === "teaching"
       ? canAccessTeaching
         ? [
             {
@@ -604,16 +715,49 @@ export default function App() {
               collapsible: false,
               items: sharedNavItems,
             },
+            {
+              key: "platform",
+              label: "Platform",
+              collapsible: false,
+              items: platformNavItems,
+            },
           ]
         : []
-      : canAccessResearch
+      : workspaceFamily === "research"
+        ? canAccessResearch
+          ? [
+              {
+                key: "research-workspace",
+                label: "Research",
+                collapsible: false,
+                items: [
+                  { id: "research-home", label: "Spaces", icon: faFlask },
+                  { id: "assistant", label: "Assistant", icon: faComments },
+                  { id: "search", label: "Search", icon: faSearch },
+                ],
+              },
+              {
+                key: "library",
+                label: "Library",
+                collapsible: false,
+                items: sharedNavItems,
+              },
+              {
+                key: "platform",
+                label: "Platform",
+                collapsible: false,
+                items: platformNavItems,
+              },
+            ]
+          : []
+        : canAccessResearch
         ? [
             {
-              key: "research-project",
-              label: "Project",
+              key: "projects-project",
+              label: "Projects",
               collapsible: true,
               items: researchNavItems
-                .filter((item) => ["dashboard", "call", "proposal", "submission", "wizard", "research"].includes(item.id))
+                .filter((item) => ["dashboard", "call", "proposal", "submission", "wizard"].includes(item.id))
                 .filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
             },
             {
@@ -629,7 +773,7 @@ export default function App() {
               label: "Collaboration",
               collapsible: true,
               items: researchNavItems
-                .filter((item) => ["meetings", "project-chat", "assistant", "matrix", "resources", "search"].includes(item.id))
+                .filter((item) => ["meetings", "project-chat", "assistant", "matrix", "search"].includes(item.id))
                 .filter((item) => ALWAYS_VISIBLE_VIEWS.has(item.id) || (isProposalMode ? PROPOSAL_MODE_VIEWS.has(item.id) : !EXECUTION_MODE_HIDDEN.has(item.id))),
             },
             {
@@ -637,6 +781,12 @@ export default function App() {
               label: "Library",
               collapsible: false,
               items: sharedNavItems,
+            },
+            {
+              key: "platform",
+              label: "Platform",
+              collapsible: false,
+              items: platformNavItems,
             },
           ]
         : [];
@@ -650,25 +800,33 @@ export default function App() {
     }))
   );
 
-  function switchPlatformSection(nextSection: "research" | "teaching") {
-    if ((nextSection === "research" && !canAccessResearch) || (nextSection === "teaching" && !canAccessTeaching)) {
+  function switchWorkspaceFamily(nextFamily: WorkspaceFamily) {
+    if ((nextFamily === "projects" || nextFamily === "research") && !canAccessResearch) {
       return;
     }
-    setPlatformSection(nextSection);
-    if (nextSection === "teaching") {
-      setView("courses");
+    if (nextFamily === "teaching" && !canAccessTeaching) {
       return;
     }
-    const researchProject = projects.find((project) => project.project_kind !== "teaching");
-    if (activeProject?.project_kind === "teaching" && researchProject) {
-      setSelectedProjectId(researchProject.id);
+    setWorkspaceFamily(nextFamily);
+    if (nextFamily === "teaching") {
+      setView("teaching-home");
+      return;
+    }
+    if (nextFamily === "research") {
+      setView("research-home");
+      return;
+    }
+    const projectContext = projects.find((project) => project.project_kind !== "teaching");
+    if (activeProject?.project_kind === "teaching" && projectContext) {
+      setSelectedProjectId(projectContext.id);
       if (typeof window !== "undefined") {
-        window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, researchProject.id);
+        window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, projectContext.id);
       }
     }
-    setView("research");
+    setView("projects-home");
   }
   function isNavItemDisabled(itemId: View): boolean {
+    if (workspaceFamily !== "projects") return false;
     if (!isProposalMode) return false;
     if (!proposalCallReady) return itemId !== "call";
     return false;
@@ -676,8 +834,9 @@ export default function App() {
 
   const canCreateProjects = currentUser
     ? (currentUser.platform_role === "super_admin" || currentUser.platform_role === "project_creator") &&
-      (platformSection === "teaching" ? canAccessTeaching : canAccessResearch)
+      (workspaceFamily === "teaching" ? canAccessTeaching : workspaceFamily === "projects")
     : false;
+  const canCreateResearchSpaces = canAccessResearch;
   const userInitials =
     currentUser?.display_name
       .split(" ")
@@ -685,22 +844,232 @@ export default function App() {
       .slice(0, 2)
       .join("") || "U";
   const activeProjectMonth = currentProjectMonth(activeProject?.start_date);
+  const workspaceBrowserQuery = workspaceBrowserSearch.trim().toLowerCase();
+  const showContextLink = !["courses", "resources", "projects-home", "research-home", "teaching-home"].includes(view);
+  const contextLabel =
+    workspaceFamily === "research"
+      ? activeResearchSpace?.title || null
+      : activeProject?.title || null;
+  const contextMeta =
+    workspaceFamily === "research"
+      ? researchLinkedProject?.code || null
+      : activeProject?.code || null;
+
+  const browserResearchSpaces = researchSpaces.filter((space) => {
+    if (!workspaceBrowserQuery) return true;
+    const linkedProject = projects.find((project) => project.id === space.linked_project_id) ?? null;
+    return [space.title, space.focus || "", linkedProject?.title || "", linkedProject?.code || ""]
+      .some((value) => value.toLowerCase().includes(workspaceBrowserQuery));
+  });
+
+  const browserResearchProjects = projects
+    .filter((project) => project.project_kind !== "teaching")
+    .filter((project) =>
+      !workspaceBrowserQuery ||
+      [project.code, project.title, project.status, project.project_kind].some((value) => value.toLowerCase().includes(workspaceBrowserQuery))
+    );
+
+  const browserTeachingProjects = projects
+    .filter((project) => project.project_kind === "teaching")
+    .filter((project) =>
+      !workspaceBrowserQuery ||
+      [project.code, project.title, project.status].some((value) => value.toLowerCase().includes(workspaceBrowserQuery))
+    );
 
   useEffect(() => {
     if (!currentUser) return;
-    if (platformSection === "research" && !canAccessResearch && canAccessTeaching) {
-      setPlatformSection("teaching");
+    if ((workspaceFamily === "projects" || workspaceFamily === "research") && !canAccessResearch && canAccessTeaching) {
+      setWorkspaceFamily("teaching");
       setView("courses");
       return;
     }
-    if (platformSection === "teaching" && !canAccessTeaching && canAccessResearch) {
-      setPlatformSection("research");
-      setView("research");
+    if (workspaceFamily === "teaching" && !canAccessTeaching && canAccessResearch) {
+      setWorkspaceFamily("projects");
+      setView("dashboard");
     }
-  }, [currentUser?.id, platformSection, canAccessResearch, canAccessTeaching]);
+  }, [currentUser?.id, workspaceFamily, canAccessResearch, canAccessTeaching]);
 
   if (!currentUser || !authTokens) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  }
+
+  function openNewResearchSpaceModal() {
+    setEditingResearchSpaceId(null);
+    setNewResearchSpaceTitle("");
+    setNewResearchSpaceFocus("");
+    setNewResearchSpaceProjectId(selectedProjectId && visibleResearchProjects.some((project) => project.id === selectedProjectId) ? selectedProjectId : "");
+    setNewResearchSpaceError("");
+    setNewResearchSpaceOpen(true);
+  }
+
+  function openEditResearchSpaceModal(space: ResearchSpace) {
+    setEditingResearchSpaceId(space.id);
+    setNewResearchSpaceTitle(space.title);
+    setNewResearchSpaceFocus(space.focus || "");
+    setNewResearchSpaceProjectId(space.linked_project_id || "");
+    setNewResearchSpaceError("");
+    setNewResearchSpaceOpen(true);
+  }
+
+  async function handleSaveResearchSpace() {
+    if (!newResearchSpaceTitle.trim()) {
+      setNewResearchSpaceError("Title is required.");
+      return;
+    }
+    try {
+      setSavingResearchSpace(true);
+      setNewResearchSpaceError("");
+      const payload = {
+        title: newResearchSpaceTitle.trim(),
+        focus: newResearchSpaceFocus.trim() || null,
+        linked_project_id: newResearchSpaceProjectId || null,
+      };
+      const saved = editingResearchSpaceId
+        ? await api.updateResearchSpace(editingResearchSpaceId, payload)
+        : await api.createResearchSpace(payload);
+      setResearchSpaces((prev) =>
+        editingResearchSpaceId ? prev.map((space) => (space.id === saved.id ? saved : space)) : [saved, ...prev]
+      );
+      handleSelectResearchSpace(saved.id);
+      setWorkspaceFamily("research");
+      setView("research");
+      setEditingResearchSpaceId(null);
+      setNewResearchSpaceTitle("");
+      setNewResearchSpaceFocus("");
+      setNewResearchSpaceProjectId("");
+      setNewResearchSpaceOpen(false);
+    } catch (err) {
+      setNewResearchSpaceError(err instanceof Error ? err.message : `Failed to ${editingResearchSpaceId ? "update" : "create"} research space.`);
+    } finally {
+      setSavingResearchSpace(false);
+    }
+  }
+
+  function renderWorkspaceBrowser() {
+    const isResearchBrowser = view === "research-home";
+    const isTeachingBrowser = view === "teaching-home";
+    const itemCount = isResearchBrowser ? browserResearchSpaces.length : isTeachingBrowser ? browserTeachingProjects.length : browserResearchProjects.length;
+
+    return (
+      <div className="workspace-browser-page">
+        <div className="setup-summary-bar">
+          <div className="setup-summary-stats">
+            <span>{itemCount} items</span>
+          </div>
+          {isResearchBrowser && canCreateResearchSpaces ? (
+            <button
+              type="button"
+              className="meetings-new-btn"
+              onClick={openNewResearchSpaceModal}
+            >
+              + New Space
+            </button>
+          ) : null}
+          {!isResearchBrowser && canCreateProjects ? (
+            <button type="button" className="meetings-new-btn" onClick={() => setNewProjectOpen(true)}>
+              + New Project
+            </button>
+          ) : null}
+        </div>
+        <div className="meetings-toolbar workspace-browser-toolbar">
+          <div className="meetings-filter-group workspace-browser-filter-group">
+            <div className="topbar-project-search workspace-browser-search">
+              <FontAwesomeIcon icon={faSearch} />
+              <input
+                type="text"
+                value={workspaceBrowserSearch}
+                onChange={(event) => setWorkspaceBrowserSearch(event.target.value)}
+                placeholder={isResearchBrowser ? "Search spaces" : isTeachingBrowser ? "Search teaching projects" : "Search projects"}
+              />
+            </div>
+          </div>
+        </div>
+        {itemCount === 0 ? (
+          <div className="empty-state-card">
+            <strong>{isResearchBrowser ? "No spaces." : "No projects."}</strong>
+          </div>
+        ) : (
+          <div className="workspace-browser-grid">
+            {isResearchBrowser
+              ? browserResearchSpaces.map((space) => {
+                  const linkedProject = projects.find((project) => project.id === space.linked_project_id) ?? null;
+                  return (
+                    <div
+                      key={space.id}
+                      className="workspace-browser-card research-space"
+                    >
+                      <div className="workspace-browser-card-accent" />
+                      <div className="workspace-browser-card-top">
+                        <span className="workspace-browser-icon">
+                          <FontAwesomeIcon icon={faFlask} />
+                        </span>
+                        <span className="chip small">Space</span>
+                        {linkedProject ? <span className="chip small">{linkedProject.code}</span> : <span className="chip small">Unlinked</span>}
+                      </div>
+                      <div className="workspace-browser-card-body">
+                        <strong>{space.title}</strong>
+                        {space.focus ? <p>{space.focus}</p> : <p>{linkedProject?.title || "No linked project"}</p>}
+                      </div>
+                      <div className="workspace-browser-card-foot">
+                        <span className="workspace-browser-meta">{linkedProject?.title || "No linked project"}</span>
+                        <div className="workspace-browser-card-actions">
+                          <button type="button" className="ghost" onClick={() => openEditResearchSpaceModal(space)}>
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleSelectResearchSpace(space.id);
+                              setView("research");
+                            }}
+                          >
+                            Open
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              : (isTeachingBrowser ? browserTeachingProjects : browserResearchProjects).map((project) => (
+                  <div
+                    key={project.id}
+                    className={`workspace-browser-card ${isTeachingBrowser ? "teaching-project" : "funded-project"}`}
+                  >
+                    <div className="workspace-browser-card-accent" />
+                    <div className="workspace-browser-card-top">
+                      <span className="workspace-browser-icon">
+                        <FontAwesomeIcon icon={isTeachingBrowser ? faGraduationCap : faSitemap} />
+                      </span>
+                      <span className="chip small">{isTeachingBrowser ? "Teaching" : project.project_kind}</span>
+                      <span className="chip small">{project.code}</span>
+                    </div>
+                    <div className="workspace-browser-card-body">
+                      <strong>{project.title}</strong>
+                      <p>{project.description || project.status}</p>
+                    </div>
+                    <div className="workspace-browser-card-foot">
+                      <span className="workspace-browser-meta">{project.status}</span>
+                      <div className="workspace-browser-card-actions">
+                        <button type="button" className="ghost" onClick={() => openProjectSettings(project.id)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectProject(project.id);
+                            setView(isTeachingBrowser ? "teaching" : "dashboard");
+                          }}
+                        >
+                          Open
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -719,6 +1088,42 @@ export default function App() {
               <img src={prainaLogoWhite} alt="Praina" className="brand-logo" />
               <span className="brand-wordmark">Praina</span>
             </div>
+          ) : null}
+        </div>
+
+        <div className="sidebar-workspace-switch">
+          {canAccessResearch ? (
+            <button
+              type="button"
+              className={`sidebar-workspace-btn ${workspaceFamily === "projects" ? "active" : ""}`}
+              onClick={() => switchWorkspaceFamily("projects")}
+              title={sidebarCollapsed ? "Projects" : undefined}
+            >
+              <FontAwesomeIcon icon={faSitemap} />
+              {!sidebarCollapsed ? <span>Projects</span> : null}
+            </button>
+          ) : null}
+          {canAccessResearch ? (
+            <button
+              type="button"
+              className={`sidebar-workspace-btn ${workspaceFamily === "research" ? "active" : ""}`}
+              onClick={() => switchWorkspaceFamily("research")}
+              title={sidebarCollapsed ? "Research" : undefined}
+            >
+              <FontAwesomeIcon icon={faFlask} />
+              {!sidebarCollapsed ? <span>Research</span> : null}
+            </button>
+          ) : null}
+          {canAccessTeaching ? (
+            <button
+              type="button"
+              className={`sidebar-workspace-btn ${workspaceFamily === "teaching" ? "active" : ""}`}
+              onClick={() => switchWorkspaceFamily("teaching")}
+              title={sidebarCollapsed ? "Teaching" : undefined}
+            >
+              <FontAwesomeIcon icon={faGraduationCap} />
+              {!sidebarCollapsed ? <span>Teaching</span> : null}
+            </button>
           ) : null}
         </div>
 
@@ -769,86 +1174,14 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-left">
             <h2>{viewTitle[view]}</h2>
-            {availableSections.length > 1 ? (
-              <div className="topbar-section-toggle" role="tablist" aria-label="Platform section">
-                {canAccessResearch ? (
-                  <button
-                    type="button"
-                    className={`topbar-section-btn ${platformSection === "research" ? "active" : ""}`}
-                    onClick={() => switchPlatformSection("research")}
-                    aria-pressed={platformSection === "research"}
-                  >
-                    <FontAwesomeIcon icon={faFlask} />
-                    <span>Research</span>
-                  </button>
-                ) : null}
-                {canAccessTeaching ? (
-                  <button
-                    type="button"
-                    className={`topbar-section-btn ${platformSection === "teaching" ? "active" : ""}`}
-                    onClick={() => switchPlatformSection("teaching")}
-                    aria-pressed={platformSection === "teaching"}
-                  >
-                    <FontAwesomeIcon icon={faGraduationCap} />
-                    <span>Teaching</span>
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {view !== "courses" && view !== "resources" ? (
-            <div className="topbar-project-dropdown" ref={projectDropdownRef}>
+            {showContextLink && contextLabel ? (
               <button
                 type="button"
-                className="topbar-project-trigger"
-                onClick={() => setProjectDropdownOpen((prev) => !prev)}
+                className={`topbar-context-link ${workspaceFamily}`}
+                onClick={() => setView(workspaceFamily === "research" ? "research-home" : workspaceFamily === "teaching" ? "teaching-home" : "projects-home")}
               >
-                {activeProject ? (
-                  <>
-                    <strong>{activeProject.code}</strong>
-                    <span>{activeProject.title}</span>
-                    <span className="topbar-project-status">{isProposalMode ? "Proposal" : isTeachingProject ? "Teaching" : activeProjectMonth ? `M${activeProjectMonth}` : "-"}</span>
-                  </>
-                ) : (
-                  <span className="topbar-project-placeholder">Select project</span>
-                )}
-                <FontAwesomeIcon icon={faChevronDown} className={`topbar-chevron ${projectDropdownOpen ? "open" : ""}`} />
-              </button>
-              {projectDropdownOpen ? (
-                <div className="topbar-project-menu">
-                  {visibleProjects.map((project) => (
-                    <button
-                      key={project.id}
-                      type="button"
-                      className={`topbar-project-option ${project.id === selectedProjectId ? "active" : ""}`}
-                      onClick={() => {
-                        handleSelectProject(project.id);
-                        setProjectDropdownOpen(false);
-                      }}
-                    >
-                      <strong>{project.code}</strong>
-                      <span>{project.title}</span>
-                      <span className="topbar-option-status">{project.status}</span>
-                    </button>
-                  ))}
-                  {visibleProjects.length === 0 ? (
-                    <div className="topbar-project-empty">No projects</div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-            ) : null}
-            <button
-              type="button"
-              className="ghost icon-only"
-              title="Project settings"
-              onClick={() => setProjectSettingsOpen(true)}
-              disabled={!activeProject || view === "courses" || view === "resources"}
-            >
-              <FontAwesomeIcon icon={faGear} />
-            </button>
-            {canCreateProjects ? (
-              <button type="button" className="ghost icon-text-button" onClick={() => setNewProjectOpen(true)}>
-                + New Project
+                <strong>{contextLabel}</strong>
+                {contextMeta ? <span>{contextMeta}</span> : null}
               </button>
             ) : null}
           </div>
@@ -950,6 +1283,9 @@ export default function App() {
         <main className="page-content">
           <div className="view-transition" key={view}>
           {view === "my-work" ? <MyWork /> : null}
+          {view === "projects-home" ? renderWorkspaceBrowser() : null}
+          {view === "research-home" ? renderWorkspaceBrowser() : null}
+          {view === "teaching-home" ? renderWorkspaceBrowser() : null}
           {view === "dashboard" ? (
             <ProjectDashboard
               selectedProjectId={selectedProjectId}
@@ -1024,11 +1360,34 @@ export default function App() {
           {view === "planning" ? <PlanningTimeline selectedProjectId={selectedProjectId} project={activeProject} onNavigate={() => setView("wizard")} /> : null}
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
-          {view === "research" ? <ResearchWorkspace selectedProjectId={selectedProjectId} currentProject={activeProject} isAdmin={isSuperAdmin} /> : null}
+          {view === "research" ? (
+            activeResearchSpace ? (
+              <ResearchWorkspace
+                selectedProjectId={activeResearchSpace.linked_project_id || RESEARCH_ROUTE_FALLBACK_PROJECT_ID}
+                currentProject={researchLinkedProject}
+                researchSpaceId={activeResearchSpace.id}
+                isAdmin={isSuperAdmin}
+              />
+            ) : (
+              <div className="empty-state-card research-space-empty-state">
+                <strong>No research spaces.</strong>
+                {canCreateResearchSpaces ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={openNewResearchSpaceModal}
+                  >
+                    + New Space
+                  </button>
+                ) : null}
+              </div>
+            )
+          ) : null}
           {view === "bibliography" ? (
             <ResearchWorkspace
-              selectedProjectId={selectedProjectId}
-              currentProject={activeProject}
+              selectedProjectId={activeResearchSpace?.linked_project_id || selectedProjectId || RESEARCH_ROUTE_FALLBACK_PROJECT_ID}
+              currentProject={researchLinkedProject ?? activeProject}
+              researchSpaceId={activeResearchSpace?.id || ""}
               bibliographyOnly
               isAdmin={isSuperAdmin}
               openBibliographyReferenceId={pendingBibliographyReferenceId}
@@ -1073,10 +1432,57 @@ export default function App() {
       />
       <NewProjectModal
         open={newProjectOpen}
-        platformSection={platformSection}
+        platformSection={workspaceFamily === "teaching" ? "teaching" : "research"}
         onClose={() => setNewProjectOpen(false)}
         onProjectCreated={handleProjectCreated}
       />
+      {newResearchSpaceOpen ? (
+        <div className="modal-overlay" onClick={() => !savingResearchSpace && setNewResearchSpaceOpen(false)}>
+          <div className="modal-card research-space-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>{editingResearchSpaceId ? "Edit Space" : "New Space"}</h3>
+            </div>
+            <div className="research-space-form">
+              <label>
+                <span>Title</span>
+                <input value={newResearchSpaceTitle} onChange={(event) => setNewResearchSpaceTitle(event.target.value)} placeholder="Adaptive streaming" />
+              </label>
+              <label>
+                <span>Focus</span>
+                <textarea value={newResearchSpaceFocus} onChange={(event) => setNewResearchSpaceFocus(event.target.value)} rows={4} />
+              </label>
+              <label>
+                <span>Project</span>
+                <select value={newResearchSpaceProjectId} onChange={(event) => setNewResearchSpaceProjectId(event.target.value)}>
+                  <option value="">None</option>
+                  {visibleResearchProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.code} · {project.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {newResearchSpaceError ? <p className="error">{newResearchSpaceError}</p> : null}
+              <div className="research-space-form-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setNewResearchSpaceOpen(false);
+                    setEditingResearchSpaceId(null);
+                  }}
+                  disabled={savingResearchSpace}
+                >
+                  Cancel
+                </button>
+                <button type="button" onClick={() => void handleSaveResearchSpace()} disabled={savingResearchSpace}>
+                  {savingResearchSpace ? "Saving..." : editingResearchSpaceId ? "Save" : "Create"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {profileOpen && currentUser ? (
         <UserProfileModal
           currentUser={currentUser}

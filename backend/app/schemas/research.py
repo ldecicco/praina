@@ -7,6 +7,32 @@ from pydantic import BaseModel, Field
 from app.schemas.common import PaginatedResponse
 
 
+class ResearchSpaceCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    focus: str | None = None
+    linked_project_id: str | None = None
+
+
+class ResearchSpaceUpdate(BaseModel):
+    title: str | None = None
+    focus: str | None = None
+    linked_project_id: str | None = None
+
+
+class ResearchSpaceRead(BaseModel):
+    id: str
+    title: str
+    focus: str | None = None
+    linked_project_id: str | None = None
+    owner_user_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResearchSpaceListRead(PaginatedResponse):
+    items: list["ResearchSpaceRead"] = Field(default_factory=list)
+
+
 # ── Collection ─────────────────────────────────────────────────────────
 
 class CollectionCreate(BaseModel):
@@ -142,7 +168,8 @@ class PaperSectionRead(BaseModel):
 
 class CollectionRead(BaseModel):
     id: str
-    project_id: str
+    research_space_id: str | None = None
+    project_id: str | None = None
     title: str
     description: str | None = None
     hypothesis: str | None = None
@@ -266,7 +293,8 @@ class ReferenceUpdate(BaseModel):
 
 class ReferenceRead(BaseModel):
     id: str
-    project_id: str
+    research_space_id: str | None = None
+    project_id: str | None = None
     bibliography_reference_id: str | None = None
     collection_id: str | None = None
     title: str
@@ -535,7 +563,8 @@ class NoteUpdate(BaseModel):
 
 class NoteRead(BaseModel):
     id: str
-    project_id: str
+    research_space_id: str | None = None
+    project_id: str | None = None
     collection_id: str | None = None
     author_member_id: str | None = None
     author_name: str | None = None

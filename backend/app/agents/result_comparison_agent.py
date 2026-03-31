@@ -40,12 +40,14 @@ class ResultComparisonAgent:
         collection_id: uuid.UUID,
         db: Session,
         limit: int = 3,
+        *,
+        space_id: uuid.UUID | None = None,
     ) -> ResultComparisonReport:
         service = ResearchService(db)
         project = db.get(Project, project_id)
         if not project:
             raise NotFoundError("Project not found.")
-        collection = service.get_collection(project_id, collection_id)
+        collection = service.get_collection_for_space(space_id, collection_id) if space_id else service.get_collection(project_id, collection_id)
         raw_results = [item for item in (collection.study_results or []) if isinstance(item, dict)]
         if len(raw_results) < 2:
             raise ValueError("At least two results are required.")

@@ -474,6 +474,18 @@ class ResearchAIService:
         self.db.refresh(ref)
         return ref
 
+    def summarize_reference_for_space(self, space_id: uuid.UUID, reference_id: uuid.UUID) -> ResearchReference:
+        from app.services.research_service import ResearchService
+
+        service = ResearchService(self.db)
+        ref = service.get_reference_for_space(space_id, reference_id)
+        summary_payload = self._summarize_reference_payload(ref.project_id, ref)
+        ref.ai_summary = json.dumps(summary_payload, ensure_ascii=False, indent=2)
+        ref.ai_summary_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(ref)
+        return ref
+
     def summarize_bibliography_reference(self, bibliography_reference_id: uuid.UUID) -> BibliographyReference:
         ref = self.db.scalar(
             select(BibliographyReference).where(BibliographyReference.id == bibliography_reference_id)
@@ -599,6 +611,83 @@ class ResearchAIService:
 
         synthesis = self.generate_collection_synthesis(payload)
 
+        collection.ai_synthesis = json.dumps(synthesis, ensure_ascii=False, indent=2)
+        collection.ai_synthesis_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(collection)
+        return collection
+
+    def synthesize_collection_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID) -> ResearchCollection:
+        from app.services.research_service import ResearchService
+
+        service = ResearchService(self.db)
+        collection = service.get_collection_for_space(space_id, collection_id)
+        project_id = collection.project_id
+
+        notes = self.db.scalars(
+            select(ResearchNote).where(ResearchNote.collection_id == collection_id)
+            .order_by(ResearchNote.created_at)
+        ).all()
+        refs = self.db.scalars(
+            select(ResearchReference).where(ResearchReference.collection_id == collection_id)
+            .order_by(ResearchReference.created_at)
+        ).all()
+        linked_wps = []
+        linked_tasks = []
+        linked_deliverables = []
+        linked_meetings = []
+        if project_id:
+            linked_wps = self.db.execute(
+                select(WorkPackage.code, WorkPackage.title)
+                .join(research_collection_wps, research_collection_wps.c.wp_id == WorkPackage.id)
+                .where(research_collection_wps.c.collection_id == collection_id)
+                .order_by(WorkPackage.code)
+            ).all()
+            linked_tasks = self.db.execute(
+                select(Task.code, Task.title, Task.execution_status)
+                .join(research_collection_tasks, research_collection_tasks.c.task_id == Task.id)
+                .where(research_collection_tasks.c.collection_id == collection_id)
+                .order_by(Task.code)
+            ).all()
+            linked_deliverables = self.db.execute(
+                select(Deliverable.code, Deliverable.title, Deliverable.workflow_status)
+                .join(research_collection_deliverables, research_collection_deliverables.c.deliverable_id == Deliverable.id)
+                .where(research_collection_deliverables.c.collection_id == collection_id)
+                .order_by(Deliverable.code)
+            ).all()
+            linked_meetings = self.db.scalars(
+                select(MeetingRecord)
+                .join(research_collection_meetings, research_collection_meetings.c.meeting_id == MeetingRecord.id)
+                .where(research_collection_meetings.c.collection_id == collection_id)
+                .order_by(MeetingRecord.starts_at.desc())
+                .limit(8)
+            ).all()
+
+        payload = self._collection_synthesis_payload(
+            collection=collection,
+            notes=notes,
+            refs=refs,
+            linked_wps=linked_wps,
+            linked_tasks=linked_tasks,
+            linked_deliverables=linked_deliverables,
+            linked_meetings=linked_meetings,
+        )
+        has_material = any(
+            payload[key]
+            for key in (
+                "hypothesis",
+                "open_questions",
+                "notes",
+                "references",
+                "meetings",
+                "linked_tasks",
+                "linked_deliverables",
+                "linked_work_packages",
+            )
+        )
+        if not has_material:
+            raise NotFoundError("No content available to synthesize.")
+        synthesis = self.generate_collection_synthesis(payload)
         collection.ai_synthesis = json.dumps(synthesis, ensure_ascii=False, indent=2)
         collection.ai_synthesis_at = datetime.now(timezone.utc)
         self.db.commit()

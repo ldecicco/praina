@@ -74,6 +74,10 @@ from app.schemas.research import (
     ReferenceRead,
     ReferenceStatusPayload,
     ReferenceUpdate,
+    ResearchSpaceCreate,
+    ResearchSpaceListRead,
+    ResearchSpaceRead,
+    ResearchSpaceUpdate,
     ResultComparisonRead,
     WbsLinksPayload,
     WbsLinksRead,
@@ -106,6 +110,72 @@ def _resolve_member_id(db: Session, user: UserAccount, project_id: uuid.UUID) ->
     )
 
 
+@router.get("/research/spaces", response_model=ResearchSpaceListRead)
+def list_research_spaces(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> ResearchSpaceListRead:
+    svc = ResearchService(db)
+    items, total = svc.list_research_spaces(current_user.id, page=page, page_size=page_size)
+    return ResearchSpaceListRead(
+        items=[_research_space_read(item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.post("/research/spaces", response_model=ResearchSpaceRead, status_code=status.HTTP_201_CREATED)
+def create_research_space(
+    payload: ResearchSpaceCreate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> ResearchSpaceRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.create_research_space(
+            actor_user_id=current_user.id,
+            title=payload.title,
+            focus=payload.focus,
+            linked_project_id=uuid.UUID(payload.linked_project_id) if payload.linked_project_id else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid linked_project_id UUID.") from exc
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _research_space_read(item)
+
+
+@router.put("/research/spaces/{space_id}", response_model=ResearchSpaceRead)
+def update_research_space(
+    space_id: uuid.UUID,
+    payload: ResearchSpaceUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> ResearchSpaceRead:
+    svc = ResearchService(db)
+    linked_project_id = ... if payload.linked_project_id is None and "linked_project_id" not in payload.model_fields_set else (
+        uuid.UUID(payload.linked_project_id) if payload.linked_project_id else None
+    )
+    try:
+        item = svc.update_research_space(
+            space_id,
+            current_user.id,
+            title=payload.title,
+            focus=payload.focus,
+            linked_project_id=linked_project_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid linked_project_id UUID.") from exc
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _research_space_read(item)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Collections
 # ══════════════════════════════════════════════════════════════════════
@@ -114,6 +184,7 @@ def _resolve_member_id(db: Session, user: UserAccount, project_id: uuid.UUID) ->
 @router.get("/{project_id}/research/collections", response_model=CollectionListRead)
 def list_collections(
     project_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     member_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -122,13 +193,22 @@ def list_collections(
 ) -> CollectionListRead:
     svc = ResearchService(db)
     try:
-        items, total = svc.list_collections(
-            project_id,
-            status_filter=status_filter,
-            member_id=uuid.UUID(member_id) if member_id else None,
-            page=page,
-            page_size=page_size,
-        )
+        if space_id:
+            items, total = svc.list_collections_for_space(
+                uuid.UUID(space_id),
+                status_filter=status_filter,
+                member_id=uuid.UUID(member_id) if member_id else None,
+                page=page,
+                page_size=page_size,
+            )
+        else:
+            items, total = svc.list_collections(
+                project_id,
+                status_filter=status_filter,
+                member_id=uuid.UUID(member_id) if member_id else None,
+                page=page,
+                page_size=page_size,
+            )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return CollectionListRead(
@@ -143,14 +223,14 @@ def list_collections(
 def create_collection(
     project_id: uuid.UUID,
     payload: CollectionCreate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionRead:
     svc = ResearchService(db)
     member_id = _resolve_member_id(db, current_user, project_id)
     try:
-        item = svc.create_collection(
-            project_id,
+        params = dict(
             title=payload.title,
             description=payload.description,
             hypothesis=payload.hypothesis,
@@ -173,6 +253,7 @@ def create_collection(
             output_status=payload.output_status,
             created_by_member_id=member_id,
         )
+        item = svc.create_collection_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_collection(project_id, **params)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -183,14 +264,22 @@ def create_collection(
 def get_collection(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionDetailRead:
     svc = ResearchService(db)
     try:
-        item = svc.get_collection(project_id, collection_id)
-        members_data = svc.list_collection_members(project_id, collection_id)
-        wbs = svc.get_wbs_links(project_id, collection_id)
-        meetings = svc.list_collection_meetings(project_id, collection_id)
+        if space_id:
+            sid = uuid.UUID(space_id)
+            item = svc.get_collection_for_space(sid, collection_id)
+            members_data = svc.list_collection_members_for_space(sid, collection_id)
+            wbs = svc.get_wbs_links_for_space(sid, collection_id)
+            meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        else:
+            item = svc.get_collection(project_id, collection_id)
+            members_data = svc.list_collection_members(project_id, collection_id)
+            wbs = svc.get_wbs_links(project_id, collection_id)
+            meetings = svc.list_collection_meetings(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     read = _collection_read(svc, item)
@@ -209,13 +298,12 @@ def update_collection(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
     payload: CollectionUpdate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionRead:
     svc = ResearchService(db)
     try:
-        item = svc.update_collection(
-            project_id,
-            collection_id,
+        params = dict(
             title=payload.title,
             description=payload.description,
             hypothesis=payload.hypothesis,
@@ -237,6 +325,7 @@ def update_collection(
             paper_sections=[item.model_dump(mode="json") for item in payload.paper_sections] if payload.paper_sections is not None else None,
             output_status=payload.output_status,
         )
+        item = svc.update_collection_for_space(uuid.UUID(space_id), collection_id, **params) if space_id else svc.update_collection(project_id, collection_id, **params)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -247,33 +336,41 @@ def update_collection(
 def audit_collection_paper_claims(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionDetailRead:
     from app.agents.paper_claim_audit_agent import PaperClaimAuditAgent
 
     svc = ResearchService(db)
     try:
-        audits = PaperClaimAuditAgent().audit_collection_claims(project_id, collection_id, db)
-        item = svc.apply_paper_claim_audits(
-            project_id,
-            collection_id,
-            audits=[
-                {
-                    "claim_id": audit.claim_id,
-                    "audit_status": audit.audit_status,
-                    "audit_summary": audit.audit_summary,
-                    "supporting_reference_ids": audit.supporting_reference_ids,
-                    "supporting_note_ids": audit.supporting_note_ids,
-                    "missing_evidence": audit.missing_evidence,
-                    "audit_confidence": audit.audit_confidence,
-                    "audited_at": audit.audited_at,
-                }
-                for audit in audits
-            ],
+        audits = PaperClaimAuditAgent().audit_collection_claims(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
+        audit_payload = [
+            {
+                "claim_id": audit.claim_id,
+                "audit_status": audit.audit_status,
+                "audit_summary": audit.audit_summary,
+                "supporting_reference_ids": audit.supporting_reference_ids,
+                "supporting_note_ids": audit.supporting_note_ids,
+                "missing_evidence": audit.missing_evidence,
+                "audit_confidence": audit.audit_confidence,
+                "audited_at": audit.audited_at,
+            }
+            for audit in audits
+        ]
+        item = (
+            svc.apply_paper_claim_audits_for_space(uuid.UUID(space_id), collection_id, audits=audit_payload)
+            if space_id else
+            svc.apply_paper_claim_audits(project_id, collection_id, audits=audit_payload)
         )
-        members_data = svc.list_collection_members(project_id, collection_id)
-        wbs = svc.get_wbs_links(project_id, collection_id)
-        meetings = svc.list_collection_meetings(project_id, collection_id)
+        if space_id:
+            sid = uuid.UUID(space_id)
+            members_data = svc.list_collection_members_for_space(sid, collection_id)
+            wbs = svc.get_wbs_links_for_space(sid, collection_id)
+            meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        else:
+            members_data = svc.list_collection_members(project_id, collection_id)
+            wbs = svc.get_wbs_links(project_id, collection_id)
+            meetings = svc.list_collection_meetings(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -295,32 +392,40 @@ def audit_collection_paper_claims(
 def build_collection_paper_outline(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionDetailRead:
     from app.agents.paper_outline_agent import PaperOutlineAgent
 
     svc = ResearchService(db)
     try:
-        sections = PaperOutlineAgent().build_collection_outline(project_id, collection_id, db)
-        item = svc.update_collection(
-            project_id,
-            collection_id,
-            paper_sections=[
-                {
-                    "id": str(uuid.uuid4()),
-                    "title": section.title,
-                    "question_ids": section.question_ids,
-                    "claim_ids": section.claim_ids,
-                    "reference_ids": section.reference_ids,
-                    "note_ids": section.note_ids,
-                    "status": section.status,
-                }
-                for section in sections
-            ],
+        sections = PaperOutlineAgent().build_collection_outline(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
+        paper_sections = [
+            {
+                "id": str(uuid.uuid4()),
+                "title": section.title,
+                "question_ids": section.question_ids,
+                "claim_ids": section.claim_ids,
+                "reference_ids": section.reference_ids,
+                "note_ids": section.note_ids,
+                "status": section.status,
+            }
+            for section in sections
+        ]
+        item = (
+            svc.update_collection_for_space(uuid.UUID(space_id), collection_id, paper_sections=paper_sections)
+            if space_id else
+            svc.update_collection(project_id, collection_id, paper_sections=paper_sections)
         )
-        members_data = svc.list_collection_members(project_id, collection_id)
-        wbs = svc.get_wbs_links(project_id, collection_id)
-        meetings = svc.list_collection_meetings(project_id, collection_id)
+        if space_id:
+            sid = uuid.UUID(space_id)
+            members_data = svc.list_collection_members_for_space(sid, collection_id)
+            wbs = svc.get_wbs_links_for_space(sid, collection_id)
+            meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        else:
+            members_data = svc.list_collection_members(project_id, collection_id)
+            wbs = svc.get_wbs_links(project_id, collection_id)
+            meetings = svc.list_collection_meetings(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -342,14 +447,15 @@ def build_collection_paper_outline(
 def draft_collection_paper_from_gap(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionDetailRead:
     from app.agents.paper_gap_agent import PaperGapAgent
 
     svc = ResearchService(db)
     try:
-        current = svc.get_collection(project_id, collection_id)
-        draft = PaperGapAgent().build_gap_draft(project_id, collection_id, db)
+        current = svc.get_collection_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.get_collection(project_id, collection_id)
+        draft = PaperGapAgent().build_gap_draft(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
         existing_questions = [item for item in (current.paper_questions or []) if isinstance(item, dict)]
         existing_texts = {
             " ".join(str(item.get("text") or "").strip().lower().split())
@@ -363,15 +469,20 @@ def draft_collection_paper_from_gap(
                 continue
             existing_texts.add(normalized)
             next_questions.append({"id": str(uuid.uuid4()), "text": text, "note_ids": []})
-        item = svc.update_collection(
-            project_id,
-            collection_id,
-            paper_motivation=draft.motivation or current.paper_motivation,
-            paper_questions=next_questions,
+        item = (
+            svc.update_collection_for_space(uuid.UUID(space_id), collection_id, paper_motivation=draft.motivation or current.paper_motivation, paper_questions=next_questions)
+            if space_id else
+            svc.update_collection(project_id, collection_id, paper_motivation=draft.motivation or current.paper_motivation, paper_questions=next_questions)
         )
-        members_data = svc.list_collection_members(project_id, collection_id)
-        wbs = svc.get_wbs_links(project_id, collection_id)
-        meetings = svc.list_collection_meetings(project_id, collection_id)
+        if space_id:
+            sid = uuid.UUID(space_id)
+            members_data = svc.list_collection_members_for_space(sid, collection_id)
+            wbs = svc.get_wbs_links_for_space(sid, collection_id)
+            meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        else:
+            members_data = svc.list_collection_members(project_id, collection_id)
+            wbs = svc.get_wbs_links(project_id, collection_id)
+            meetings = svc.list_collection_meetings(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -394,18 +505,19 @@ def review_collection_iteration(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
     iteration_id: str,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionDetailRead:
     from app.agents.iteration_review_agent import IterationReviewAgent
 
     svc = ResearchService(db)
     try:
-        current = svc.get_collection(project_id, collection_id)
+        current = svc.get_collection_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.get_collection(project_id, collection_id)
         iterations = [item for item in (current.study_iterations or []) if isinstance(item, dict)]
         target = next((item for item in iterations if str(item.get("id") or "") == iteration_id), None)
         if not target:
             raise NotFoundError("Iteration not found.")
-        review = IterationReviewAgent().review_iteration(project_id, collection_id, target, db)
+        review = IterationReviewAgent().review_iteration(project_id, collection_id, target, db, space_id=uuid.UUID(space_id) if space_id else None)
         next_iterations = []
         for item in iterations:
             if str(item.get("id") or "") != iteration_id:
@@ -420,10 +532,16 @@ def review_collection_iteration(
             merged["next_actions"] = review.next_actions
             merged["reviewed_at"] = review.reviewed_at
             next_iterations.append(merged)
-        item = svc.update_collection(project_id, collection_id, study_iterations=next_iterations)
-        members_data = svc.list_collection_members(project_id, collection_id)
-        wbs = svc.get_wbs_links(project_id, collection_id)
-        meetings = svc.list_collection_meetings(project_id, collection_id)
+        item = svc.update_collection_for_space(uuid.UUID(space_id), collection_id, study_iterations=next_iterations) if space_id else svc.update_collection(project_id, collection_id, study_iterations=next_iterations)
+        if space_id:
+            sid = uuid.UUID(space_id)
+            members_data = svc.list_collection_members_for_space(sid, collection_id)
+            wbs = svc.get_wbs_links_for_space(sid, collection_id)
+            meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        else:
+            members_data = svc.list_collection_members(project_id, collection_id)
+            wbs = svc.get_wbs_links(project_id, collection_id)
+            meetings = svc.list_collection_meetings(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -445,12 +563,13 @@ def review_collection_iteration(
 def compare_collection_results(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ResultComparisonRead:
     from app.agents.result_comparison_agent import ResultComparisonAgent
 
     try:
-        report = ResultComparisonAgent().compare_recent_results(project_id, collection_id, db)
+        report = ResultComparisonAgent().compare_recent_results(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -466,11 +585,15 @@ def compare_collection_results(
 def delete_collection(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> None:
     svc = ResearchService(db)
     try:
-        svc.delete_collection(project_id, collection_id)
+        if space_id:
+            svc.delete_collection_for_space(uuid.UUID(space_id), collection_id)
+        else:
+            svc.delete_collection(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -482,11 +605,12 @@ def delete_collection(
 def list_collection_members(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[CollectionMemberRead]:
     svc = ResearchService(db)
     try:
-        members_data = svc.list_collection_members(project_id, collection_id)
+        members_data = svc.list_collection_members_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.list_collection_members(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [_member_read(d) for d in members_data]
@@ -497,15 +621,15 @@ def add_collection_member(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
     payload: CollectionMemberCreate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionMemberRead:
     svc = ResearchService(db)
     try:
-        data = svc.add_collection_member(
-            project_id,
-            collection_id,
-            member_id=uuid.UUID(payload.member_id),
-            role=payload.role,
+        data = (
+            svc.add_collection_member_for_space(uuid.UUID(space_id), collection_id, member_id=uuid.UUID(payload.member_id), role=payload.role)
+            if space_id else
+            svc.add_collection_member(project_id, collection_id, member_id=uuid.UUID(payload.member_id), role=payload.role)
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -519,15 +643,15 @@ def update_collection_member(
     collection_id: uuid.UUID,
     member_record_id: uuid.UUID,
     payload: CollectionMemberUpdate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CollectionMemberRead:
     svc = ResearchService(db)
     try:
-        data = svc.update_collection_member_role(
-            project_id,
-            collection_id,
-            member_record_id,
-            role=payload.role,
+        data = (
+            svc.update_collection_member_role_for_space(uuid.UUID(space_id), collection_id, member_record_id, role=payload.role)
+            if space_id else
+            svc.update_collection_member_role(project_id, collection_id, member_record_id, role=payload.role)
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -540,11 +664,15 @@ def remove_collection_member(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
     member_record_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> None:
     svc = ResearchService(db)
     try:
-        svc.remove_collection_member(project_id, collection_id, member_record_id)
+        if space_id:
+            svc.remove_collection_member_for_space(uuid.UUID(space_id), collection_id, member_record_id)
+        else:
+            svc.remove_collection_member(project_id, collection_id, member_record_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -557,16 +685,15 @@ def set_wbs_links(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
     payload: WbsLinksPayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> WbsLinksRead:
     svc = ResearchService(db)
     try:
-        result = svc.set_wbs_links(
-            project_id,
-            collection_id,
-            wp_ids=payload.wp_ids,
-            task_ids=payload.task_ids,
-            deliverable_ids=payload.deliverable_ids,
+        result = (
+            svc.set_wbs_links_for_space(uuid.UUID(space_id), collection_id, wp_ids=payload.wp_ids, task_ids=payload.task_ids, deliverable_ids=payload.deliverable_ids)
+            if space_id else
+            svc.set_wbs_links(project_id, collection_id, wp_ids=payload.wp_ids, task_ids=payload.task_ids, deliverable_ids=payload.deliverable_ids)
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -578,14 +705,15 @@ def set_collection_meetings(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
     payload: CollectionMeetingPayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[CollectionMeetingRead]:
     svc = ResearchService(db)
     try:
-        items = svc.set_collection_meetings(
-            project_id,
-            collection_id,
-            meeting_ids=payload.meeting_ids,
+        items = (
+            svc.set_collection_meetings_for_space(uuid.UUID(space_id), collection_id, meeting_ids=payload.meeting_ids)
+            if space_id else
+            svc.set_collection_meetings(project_id, collection_id, meeting_ids=payload.meeting_ids)
         )
     except (NotFoundError, ValidationError, ValueError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -601,6 +729,7 @@ def set_collection_meetings(
 @router.get("/{project_id}/research/references", response_model=ReferenceListRead)
 def list_references(
     project_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     collection_id: str | None = Query(default=None),
     reading_status: str | None = Query(default=None),
     tag: str | None = Query(default=None),
@@ -611,15 +740,26 @@ def list_references(
 ) -> ReferenceListRead:
     svc = ResearchService(db)
     try:
-        items, total = svc.list_references(
-            project_id,
-            collection_id=uuid.UUID(collection_id) if collection_id else None,
-            reading_status=reading_status,
-            tag=tag,
-            search=search,
-            page=page,
-            page_size=page_size,
-        )
+        if space_id:
+            items, total = svc.list_references_for_space(
+                uuid.UUID(space_id),
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+                reading_status=reading_status,
+                tag=tag,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
+        else:
+            items, total = svc.list_references(
+                project_id,
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+                reading_status=reading_status,
+                tag=tag,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ReferenceListRead(
@@ -634,14 +774,14 @@ def list_references(
 def create_reference(
     project_id: uuid.UUID,
     payload: ReferenceCreate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> ReferenceRead:
     svc = ResearchService(db)
     member_id = _resolve_member_id(db, current_user, project_id)
     try:
-        item = svc.create_reference(
-            project_id,
+        params = dict(
             title=payload.title,
             collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
             authors=payload.authors,
@@ -657,6 +797,7 @@ def create_reference(
             added_by_member_id=member_id,
             created_by_user_id=current_user.id,
         )
+        item = svc.create_reference_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_reference(project_id, **params)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -667,6 +808,7 @@ def create_reference(
 def import_bibtex(
     project_id: uuid.UUID,
     payload: BibtexImportPayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibtexImportRead:
@@ -683,8 +825,7 @@ def import_bibtex(
     collection_id = uuid.UUID(payload.collection_id) if payload.collection_id else None
     for entry in entries:
         try:
-            item = svc.create_reference(
-                project_id,
+            params = dict(
                 title=entry["title"],
                 collection_id=collection_id,
                 authors=entry["authors"],
@@ -697,6 +838,7 @@ def import_bibtex(
                 added_by_member_id=member_id,
                 created_by_user_id=current_user.id,
             )
+            item = svc.create_reference_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_reference(project_id, **params)
             created.append(_reference_read(svc, item))
         except Exception as exc:
             errors.append(f"{entry.get('cite_key', '?')}: {exc}")
@@ -707,11 +849,12 @@ def import_bibtex(
 def get_reference(
     project_id: uuid.UUID,
     reference_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ReferenceRead:
     svc = ResearchService(db)
     try:
-        item = svc.get_reference(project_id, reference_id)
+        item = svc.get_reference_for_space(uuid.UUID(space_id), reference_id) if space_id else svc.get_reference(project_id, reference_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _reference_read(svc, item)
@@ -722,13 +865,12 @@ def update_reference(
     project_id: uuid.UUID,
     reference_id: uuid.UUID,
     payload: ReferenceUpdate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ReferenceRead:
     svc = ResearchService(db)
     try:
-        item = svc.update_reference(
-            project_id,
-            reference_id,
+        params = dict(
             title=payload.title,
             collection_id=payload.collection_id,
             authors=payload.authors,
@@ -742,6 +884,7 @@ def update_reference(
             reading_status=payload.reading_status,
             bibliography_visibility=payload.bibliography_visibility,
         )
+        item = svc.update_reference_for_space(uuid.UUID(space_id), reference_id, **params) if space_id else svc.update_reference(project_id, reference_id, **params)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -921,18 +1064,29 @@ def import_bibliography_bibtex(
 def link_bibliography_reference(
     project_id: uuid.UUID,
     payload: BibliographyLinkPayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> ReferenceRead:
     svc = ResearchService(db)
-    member_id = _resolve_member_id(db, current_user, project_id)
+    member_id = svc._space_member_id(uuid.UUID(space_id), current_user.id) if space_id else _resolve_member_id(db, current_user, project_id)
     try:
-        item = svc.link_bibliography_reference(
-            project_id,
-            bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),
-            collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
-            reading_status=payload.reading_status,
-            added_by_member_id=member_id,
+        item = (
+            svc.link_bibliography_reference_for_space(
+                uuid.UUID(space_id),
+                bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),
+                collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
+                reading_status=payload.reading_status,
+                added_by_member_id=member_id,
+            )
+            if space_id else
+            svc.link_bibliography_reference(
+                project_id,
+                bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),
+                collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
+                reading_status=payload.reading_status,
+                added_by_member_id=member_id,
+            )
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -1730,11 +1884,15 @@ def set_bibliography_reading_status(
 def delete_reference(
     project_id: uuid.UUID,
     reference_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> None:
     svc = ResearchService(db)
     try:
-        svc.delete_reference(project_id, reference_id)
+        if space_id:
+            svc.delete_reference_for_space(uuid.UUID(space_id), reference_id)
+        else:
+            svc.delete_reference(project_id, reference_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1744,14 +1902,15 @@ def move_reference(
     project_id: uuid.UUID,
     reference_id: uuid.UUID,
     payload: ReferenceMovePayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ReferenceRead:
     svc = ResearchService(db)
     try:
-        item = svc.move_reference(
-            project_id,
-            reference_id,
-            collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
+        item = (
+            svc.move_reference_for_space(uuid.UUID(space_id), reference_id, collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None)
+            if space_id else
+            svc.move_reference(project_id, reference_id, collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None)
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1763,14 +1922,15 @@ def update_reference_status(
     project_id: uuid.UUID,
     reference_id: uuid.UUID,
     payload: ReferenceStatusPayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ReferenceRead:
     svc = ResearchService(db)
     try:
-        item = svc.update_reference_status(
-            project_id,
-            reference_id,
-            reading_status=payload.reading_status,
+        item = (
+            svc.update_reference_status_for_space(uuid.UUID(space_id), reference_id, reading_status=payload.reading_status)
+            if space_id else
+            svc.update_reference_status(project_id, reference_id, reading_status=payload.reading_status)
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -1786,6 +1946,7 @@ def update_reference_status(
 @router.get("/{project_id}/research/notes", response_model=NoteListRead)
 def list_notes(
     project_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     collection_id: str | None = Query(default=None),
     lane: str | None = Query(default=None),
     note_type: str | None = Query(default=None),
@@ -1796,14 +1957,26 @@ def list_notes(
 ) -> NoteListRead:
     svc = ResearchService(db)
     try:
-        items, total = svc.list_notes(
-            project_id,
-            collection_id=uuid.UUID(collection_id) if collection_id else None,
-            lane=lane,
-            note_type=note_type,
-            author_member_id=uuid.UUID(author_member_id) if author_member_id else None,
-            page=page,
-            page_size=page_size,
+        items, total = (
+            svc.list_notes_for_space(
+                uuid.UUID(space_id),
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+                lane=lane,
+                note_type=note_type,
+                author_member_id=uuid.UUID(author_member_id) if author_member_id else None,
+                page=page,
+                page_size=page_size,
+            )
+            if space_id else
+            svc.list_notes(
+                project_id,
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+                lane=lane,
+                note_type=note_type,
+                author_member_id=uuid.UUID(author_member_id) if author_member_id else None,
+                page=page,
+                page_size=page_size,
+            )
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1819,14 +1992,14 @@ def list_notes(
 def create_note(
     project_id: uuid.UUID,
     payload: NoteCreate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> NoteRead:
     svc = ResearchService(db)
     member_id = _resolve_member_id(db, current_user, project_id)
     try:
-        item = svc.create_note(
-            project_id,
+        params = dict(
             title=payload.title,
             content=payload.content,
             collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
@@ -1836,6 +2009,7 @@ def create_note(
             author_member_id=member_id,
             linked_reference_ids=payload.linked_reference_ids,
         )
+        item = svc.create_note_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_note(project_id, **params)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -1846,11 +2020,12 @@ def create_note(
 def get_note(
     project_id: uuid.UUID,
     note_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> NoteRead:
     svc = ResearchService(db)
     try:
-        item = svc.get_note(project_id, note_id)
+        item = svc.get_note_for_space(uuid.UUID(space_id), note_id) if space_id else svc.get_note(project_id, note_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _note_read(svc, item)
@@ -1861,13 +2036,12 @@ def update_note(
     project_id: uuid.UUID,
     note_id: uuid.UUID,
     payload: NoteUpdate,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> NoteRead:
     svc = ResearchService(db)
     try:
-        item = svc.update_note(
-            project_id,
-            note_id,
+        params = dict(
             title=payload.title,
             content=payload.content,
             collection_id=payload.collection_id,
@@ -1875,6 +2049,7 @@ def update_note(
             note_type=payload.note_type,
             tags=payload.tags,
         )
+        item = svc.update_note_for_space(uuid.UUID(space_id), note_id, **params) if space_id else svc.update_note(project_id, note_id, **params)
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -1885,11 +2060,15 @@ def update_note(
 def delete_note(
     project_id: uuid.UUID,
     note_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> None:
     svc = ResearchService(db)
     try:
-        svc.delete_note(project_id, note_id)
+        if space_id:
+            svc.delete_note_for_space(uuid.UUID(space_id), note_id)
+        else:
+            svc.delete_note(project_id, note_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1899,14 +2078,15 @@ def set_note_references(
     project_id: uuid.UUID,
     note_id: uuid.UUID,
     payload: NoteReferencesPayload,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> NoteRead:
     svc = ResearchService(db)
     try:
-        item = svc.set_note_references(
-            project_id,
-            note_id,
-            reference_ids=payload.reference_ids,
+        item = (
+            svc.set_note_references_for_space(uuid.UUID(space_id), note_id, reference_ids=payload.reference_ids)
+            if space_id else
+            svc.set_note_references(project_id, note_id, reference_ids=payload.reference_ids)
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1922,12 +2102,13 @@ def set_note_references(
 def summarize_reference(
     project_id: uuid.UUID,
     reference_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> AISummaryRead:
     from app.services.research_ai_service import ResearchAIService
     svc = ResearchAIService(db)
     try:
-        ref = svc.summarize_reference(project_id, reference_id)
+        ref = svc.summarize_reference_for_space(uuid.UUID(space_id), reference_id) if space_id else svc.summarize_reference(project_id, reference_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -1956,12 +2137,13 @@ def extract_metadata_from_pdf(
 def synthesize_collection(
     project_id: uuid.UUID,
     collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> AISynthesisRead:
     from app.services.research_ai_service import ResearchAIService
     svc = ResearchAIService(db)
     try:
-        col = svc.synthesize_collection(project_id, collection_id)
+        col = svc.synthesize_collection_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.synthesize_collection(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -1974,10 +2156,23 @@ def synthesize_collection(
 # ══════════════════════════════════════════════════════════════════════
 
 
+def _research_space_read(item) -> ResearchSpaceRead:
+    return ResearchSpaceRead(
+        id=str(item.id),
+        title=item.title,
+        focus=item.focus,
+        linked_project_id=str(item.linked_project_id) if item.linked_project_id else None,
+        owner_user_id=str(item.owner_user_id),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
 def _collection_read(svc: ResearchService, item) -> CollectionRead:
     return CollectionRead(
         id=str(item.id),
-        project_id=str(item.project_id),
+        research_space_id=str(item.research_space_id) if item.research_space_id else None,
+        project_id=str(item.project_id) if item.project_id else None,
         title=item.title,
         description=item.description,
         hypothesis=item.hypothesis,
@@ -2036,7 +2231,8 @@ def _reference_read(svc: ResearchService, item) -> ReferenceRead:
     bibliography = svc.get_bibliography_reference(item.bibliography_reference_id) if item.bibliography_reference_id else None
     return ReferenceRead(
         id=str(item.id),
-        project_id=str(item.project_id),
+        research_space_id=str(item.research_space_id) if item.research_space_id else None,
+        project_id=str(item.project_id) if item.project_id else None,
         bibliography_reference_id=str(item.bibliography_reference_id) if item.bibliography_reference_id else None,
         collection_id=str(item.collection_id) if item.collection_id else None,
         title=item.title,
@@ -2056,7 +2252,7 @@ def _reference_read(svc: ResearchService, item) -> ReferenceRead:
         bibliography_attachment_filename=bibliography.attachment_filename if bibliography else None,
         bibliography_attachment_url=(
             f"/projects/{item.project_id}/research/bibliography/{item.bibliography_reference_id}/file"
-            if bibliography and bibliography.attachment_path
+            if bibliography and bibliography.attachment_path and item.project_id
             else None
         ),
         reading_status=item.reading_status.value if hasattr(item.reading_status, "value") else str(item.reading_status),
@@ -2165,7 +2361,8 @@ def _bibliography_collection_read(svc: ResearchService, item) -> BibliographyCol
 def _note_read(svc: ResearchService, item) -> NoteRead:
     return NoteRead(
         id=str(item.id),
-        project_id=str(item.project_id),
+        research_space_id=str(item.research_space_id) if item.research_space_id else None,
+        project_id=str(item.project_id) if item.project_id else None,
         collection_id=str(item.collection_id) if item.collection_id else None,
         author_member_id=str(item.author_member_id) if item.author_member_id else None,
         author_name=svc.get_author_name(item.author_member_id),

@@ -43,14 +43,16 @@ class IterationReviewAgent:
         collection_id: uuid.UUID,
         iteration: dict[str, Any],
         db: Session,
+        *,
+        space_id: uuid.UUID | None = None,
     ) -> IterationReview:
         service = ResearchService(db)
         project = db.get(Project, project_id)
         if not project:
             raise NotFoundError("Project not found.")
-        collection = service.get_collection(project_id, collection_id)
-        references, _ = service.list_references(project_id, collection_id=collection_id, page=1, page_size=100)
-        notes, _ = service.list_notes(project_id, collection_id=collection_id, page=1, page_size=100)
+        collection = service.get_collection_for_space(space_id, collection_id) if space_id else service.get_collection(project_id, collection_id)
+        references, _ = service.list_references_for_space(space_id, collection_id=collection_id, page=1, page_size=100) if space_id else service.list_references(project_id, collection_id=collection_id, page=1, page_size=100)
+        notes, _ = service.list_notes_for_space(space_id, collection_id=collection_id, page=1, page_size=100) if space_id else service.list_notes(project_id, collection_id=collection_id, page=1, page_size=100)
 
         start_date = str(iteration.get("start_date") or "").strip()
         end_date = str(iteration.get("end_date") or "").strip()

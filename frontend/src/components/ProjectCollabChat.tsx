@@ -100,7 +100,7 @@ function excerpt(text: string, max = 96): string {
 function renderMentionText(text: string, options: MentionRenderOptions = {}): ReactNode[] {
   const nodes: ReactNode[] = [];
   const currentUserTokens = options.currentUserTokens ?? new Set<string>();
-  const pattern = /(^|[^A-Za-z0-9._:-])@([A-Za-z0-9._:-]+)/g;
+  const pattern = /(^|[^A-Za-z0-9._:-])(@[A-Za-z0-9._:-]+|https?:\/\/[^\s<]+)/g;
   let cursor = 0;
   let key = 0;
 
@@ -108,19 +108,28 @@ function renderMentionText(text: string, options: MentionRenderOptions = {}): Re
     const start = match.index ?? 0;
     const prefix = match[1] || "";
     const token = match[2] || "";
-    const mentionStart = start + prefix.length;
-    if (mentionStart > cursor) {
-      nodes.push(text.slice(cursor, mentionStart));
+    const tokenStart = start + prefix.length;
+    if (tokenStart > cursor) {
+      nodes.push(text.slice(cursor, tokenStart));
     }
-    nodes.push(
-      <span
-        key={`mention-${key++}`}
-        className={`pm-mention ${currentUserTokens.has(token.toLowerCase()) ? "self" : ""}`}
-      >
-        @{token}
-      </span>
-    );
-    cursor = mentionStart + token.length + 1;
+    if (token.startsWith("@")) {
+      const mentionToken = token.slice(1);
+      nodes.push(
+        <span
+          key={`mention-${key++}`}
+          className={`pm-mention ${currentUserTokens.has(mentionToken.toLowerCase()) ? "self" : ""}`}
+        >
+          {token}
+        </span>
+      );
+    } else {
+      nodes.push(
+        <a key={`link-${key++}`} href={token} target="_blank" rel="noreferrer">
+          {token}
+        </a>
+      );
+    }
+    cursor = tokenStart + token.length;
   }
 
   if (cursor < text.length) {

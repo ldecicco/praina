@@ -18,6 +18,7 @@ import {
   faMagicWandSparkles,
   faPen,
   faPlus,
+  faSearch,
   faShareNodes,
   faTrash,
   faUsers,
@@ -29,7 +30,10 @@ import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { useStatusToast } from "../lib/useStatusToast";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import { renderMarkdown } from "../lib/renderMarkdown";
+import { formatRelativeTime } from "../lib/formatRelativeTime";
 import { SkeletonTable, SkeletonCards } from "./Skeleton";
+import { useConfirmDelete } from "../lib/useConfirmDelete";
+import { useQuickSearch } from "../lib/useQuickSearch";
 import type {
   BibliographyCollection,
   BibliographyDuplicateMatch,
@@ -373,6 +377,7 @@ export function ResearchWorkspace({
   const [paperClaims, setPaperClaims] = useState<ResearchPaperClaim[]>([]);
   const [paperSections, setPaperSections] = useState<ResearchPaperSection[]>([]);
   const [paperExpanded, setPaperExpanded] = useState(false);
+  const [paperDirty, setPaperDirty] = useState(false);
 
   const [referenceTitle, setReferenceTitle] = useState("");
   const [referenceAuthors, setReferenceAuthors] = useState("");
@@ -429,6 +434,18 @@ export function ResearchWorkspace({
   const [bibliographyTagFilter, setBibliographyTagFilter] = useState("");
   const [bibliographyStatusFilter, setBibliographyStatusFilter] = useState("");
   const [bibliographyFiltersOpen, setBibliographyFiltersOpen] = useState(false);
+  const [bibSortKey, setBibSortKey] = useState<"title" | "year" | "status" | "created_at">("created_at");
+  const [bibSortDir, setBibSortDir] = useState<"asc" | "desc">("desc");
+  const { confirmingId: confirmingDeleteId, requestConfirm: requestConfirmDelete } = useConfirmDelete();
+
+  function toggleBibSort(key: typeof bibSortKey) {
+    if (bibSortKey === key) {
+      setBibSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setBibSortKey(key);
+      setBibSortDir("asc");
+    }
+  }
   const [selectedBibIds, setSelectedBibIds] = useState<Set<string>>(new Set());
   const [semanticSearch, setSemanticSearch] = useState(false);
   const [searchingBibliography, setSearchingBibliography] = useState(false);
@@ -507,8 +524,16 @@ export function ResearchWorkspace({
     if (bibliographyStatusFilter) {
       items = items.filter((item) => item.reading_status === bibliographyStatusFilter);
     }
-    return items;
-  }, [bibliography, selectedBibliographyCollectionId, selectedBibliographyCollectionPaperIds, bibliographyTagFilter, bibliographyStatusFilter]);
+    const sorted = [...items].sort((a, b) => {
+      let cmp = 0;
+      if (bibSortKey === "title") cmp = (a.title || "").localeCompare(b.title || "");
+      else if (bibSortKey === "year") cmp = (a.year ?? 0) - (b.year ?? 0);
+      else if (bibSortKey === "status") cmp = (a.reading_status || "").localeCompare(b.reading_status || "");
+      else cmp = (a.created_at || "").localeCompare(b.created_at || "");
+      return bibSortDir === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [bibliography, selectedBibliographyCollectionId, selectedBibliographyCollectionPaperIds, bibliographyTagFilter, bibliographyStatusFilter, bibSortKey, bibSortDir]);
 
   const bibliographyTagsInUse = useMemo(() => {
     const tags = new Set<string>();
@@ -542,7 +567,52 @@ export function ResearchWorkspace({
     setPaperQuestions(collectionDetail?.paper_questions || []);
     setPaperClaims(collectionDetail?.paper_claims || []);
     setPaperSections(collectionDetail?.paper_sections || []);
+    setPaperDirty(false);
+    paperSyncedRef.current = false;
   }, [collectionDetail]);
+
+  // Warn before leaving with unsaved paper changes
+  useEffect(() => {
+    if (!paperDirty) return;
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [paperDirty]);
+
+  // Ctrl+F / Cmd+F → quick search piped into active list filter
+  const quickSearch = useQuickSearch(useCallback((q: string) => {
+    if (bibliographyOnly || (tab === "references" && !selectedCollectionId)) {
+      setBibliographySearch(q);
+    } else if (tab === "references") {
+      setRefSearch(q);
+    } else if (tab === "notes") {
+      setNoteSearchQuery(q);
+    } else {
+      setBibliographySearch(q);
+    }
+  }, [tab, bibliographyOnly, selectedCollectionId]));
+
+  // Auto-save paper after 3s of inactivity when dirty
+  useEffect(() => {
+    if (!paperDirty || !selectedProjectId || !selectedCollectionId || saving) return;
+    const timer = setTimeout(() => {
+      void persistPaperWorkspace(undefined, { successMessage: "Auto-saved." });
+    }, 3000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paperDirty, paperTitle, paperMotivation, paperVenue, paperOverleafUrl, paperStatus, paperRegistrationDeadline, paperSubmissionDeadline, paperDecisionDate, paperAuthors, paperQuestions, paperClaims, paperSections]);
+
+  // Mark paper dirty when any paper field changes (skip the initial sync)
+  const paperSyncedRef = useRef(false);
+  useEffect(() => {
+    if (!paperSyncedRef.current) {
+      paperSyncedRef.current = true;
+      return;
+    }
+    setPaperDirty(true);
+  }, [paperTitle, paperMotivation, paperVenue, paperOverleafUrl, paperStatus, paperRegistrationDeadline, paperSubmissionDeadline, paperDecisionDate, paperAuthors, paperQuestions, paperClaims, paperSections]);
 
   async function loadCollections(projectId = selectedProjectId) {
     if (!projectId) return;
@@ -1495,7 +1565,7 @@ export function ResearchWorkspace({
   }
 
   async function handleDeleteCollection(collectionId: string) {
-    if (!selectedProjectId || !confirm("Delete this study?")) return;
+    if (!selectedProjectId) return;
     try {
       await api.deleteResearchCollection(selectedProjectId, collectionId);
       await loadCollections();
@@ -1970,7 +2040,7 @@ export function ResearchWorkspace({
   }
 
   async function handleDeleteReference(referenceId: string) {
-    if (!selectedProjectId || !confirm("Delete this reference?")) return;
+    if (!selectedProjectId) return;
     try {
       await api.deleteResearchReference(selectedProjectId, referenceId);
       await refreshResearchDataAfterReferenceChange(selectedCollectionId || undefined);
@@ -2418,7 +2488,7 @@ export function ResearchWorkspace({
   }
 
   async function handleDeleteBibliography(id: string) {
-    if (!selectedProjectId || !confirm("Delete this paper?")) return;
+    if (!selectedProjectId) return;
     try {
       await api.deleteGlobalBibliography(id);
       await loadBibliography();
@@ -2723,7 +2793,7 @@ export function ResearchWorkspace({
   }
 
   async function handleDeleteNote(noteId: string) {
-    if (!selectedProjectId || !confirm("Delete this log?")) return;
+    if (!selectedProjectId) return;
     try {
       await api.deleteResearchNote(selectedProjectId, noteId);
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId)]);
@@ -2824,6 +2894,22 @@ export function ResearchWorkspace({
 
   return (
     <>
+      {quickSearch.open ? (
+        <div className="quick-search-bar">
+          <FontAwesomeIcon icon={faSearch} className="quick-search-icon" />
+          <input
+            ref={quickSearch.inputRef}
+            type="text"
+            className="quick-search-input"
+            placeholder="Filter current list..."
+            value={quickSearch.query}
+            onChange={(e) => quickSearch.setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") quickSearch.close(); }}
+          />
+          <kbd className="cmd-palette-kbd">esc</kbd>
+        </div>
+      ) : null}
+
       {!bibliographyOnly ? (
         <div className="setup-summary-bar">
           <div className="setup-summary-stats">
@@ -2845,6 +2931,30 @@ export function ResearchWorkspace({
 
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="muted-small">{status}</p> : null}
+
+      {!bibliographyOnly && (selectedCollectionId || tab !== "overview") ? (
+        <nav className="breadcrumb-bar">
+          <button type="button" className="breadcrumb-link" onClick={() => { setSelectedCollectionId(null); setTab("overview"); }}>
+            {currentProject?.title || "Research"}
+          </button>
+          {selectedCollection ? (
+            <>
+              <FontAwesomeIcon icon={faChevronRight} className="breadcrumb-sep" />
+              <button type="button" className="breadcrumb-link" onClick={() => setTab("overview")}>
+                {selectedCollection.title}
+              </button>
+            </>
+          ) : null}
+          {tab !== "overview" ? (
+            <>
+              <FontAwesomeIcon icon={faChevronRight} className="breadcrumb-sep" />
+              <span className="breadcrumb-current">
+                {{ references: "References", notes: "Inbox", paper: "Paper", iterations: "Iterations", overview: "Overview" }[tab]}
+              </span>
+            </>
+          ) : null}
+        </nav>
+      ) : null}
 
       {!bibliographyOnly ? <div className="meetings-toolbar">
         <div className="meetings-filter-group research-collection-strip">
@@ -2918,8 +3028,13 @@ export function ResearchWorkspace({
             <button type="button" className="ghost docs-action-btn" title="Archive" onClick={() => handleArchiveCollection(selectedCollection.id)}>
               <FontAwesomeIcon icon={faArchive} />
             </button>
-            <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => handleDeleteCollection(selectedCollection.id)}>
-              <FontAwesomeIcon icon={faTrash} />
+            <button
+              type="button"
+              className={`ghost docs-action-btn danger${confirmingDeleteId === selectedCollection.id ? " confirm-pulse" : ""}`}
+              title={confirmingDeleteId === selectedCollection.id ? "Click again to confirm" : "Delete"}
+              onClick={() => requestConfirmDelete(selectedCollection.id, () => handleDeleteCollection(selectedCollection.id))}
+            >
+              {confirmingDeleteId === selectedCollection.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
             </button>
           </div>
         </div>
@@ -2998,8 +3113,8 @@ export function ResearchWorkspace({
         ) : null}
         {tab === "paper" ? (
           <div className="bibliography-tab-tools">
-            <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void handleSavePaperWorkspace()}>
-              {saving ? "Saving..." : "Save"}
+            <button type="button" className={`meetings-new-btn${paperDirty ? " unsaved" : ""}`} disabled={saving} onClick={() => void handleSavePaperWorkspace()}>
+              {saving ? "Saving..." : paperDirty ? "Save *" : "Save"}
             </button>
           </div>
         ) : null}
@@ -3162,8 +3277,13 @@ export function ResearchWorkspace({
                       </div>
                     </td>
                     <td className="col-icon">
-                      <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => handleDeleteReference(reference.id)}>
-                        <FontAwesomeIcon icon={faTrash} />
+                      <button
+                        type="button"
+                        className={`ghost docs-action-btn${confirmingDeleteId === reference.id ? " danger confirm-pulse" : ""}`}
+                        title={confirmingDeleteId === reference.id ? "Click again to confirm" : "Delete"}
+                        onClick={() => requestConfirmDelete(reference.id, () => handleDeleteReference(reference.id))}
+                      >
+                        {confirmingDeleteId === reference.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                       </button>
                     </td>
                   </tr>
@@ -3322,9 +3442,18 @@ export function ResearchWorkspace({
                       onChange={toggleAllBibSelection}
                     />
                   </th>
-                  <th>Title</th>
-                  <th>Year</th>
-                  <th>Status</th>
+                  <th className="sortable-th" onClick={() => toggleBibSort("title")}>
+                    Title
+                    {bibSortKey === "title" && <FontAwesomeIcon icon={bibSortDir === "asc" ? faChevronUp : faChevronDown} className="sort-indicator" />}
+                  </th>
+                  <th className="sortable-th" onClick={() => toggleBibSort("year")}>
+                    Year
+                    {bibSortKey === "year" && <FontAwesomeIcon icon={bibSortDir === "asc" ? faChevronUp : faChevronDown} className="sort-indicator" />}
+                  </th>
+                  <th className="sortable-th" onClick={() => toggleBibSort("status")}>
+                    Status
+                    {bibSortKey === "status" && <FontAwesomeIcon icon={bibSortDir === "asc" ? faChevronUp : faChevronDown} className="sort-indicator" />}
+                  </th>
                   <th className="col-icon" />
                   {!bibliographyOnly ? <th className="col-icon" /> : null}
                   <th className="col-icon" />
@@ -3507,11 +3636,11 @@ export function ResearchWorkspace({
                                 </button>
                                 <button
                                   type="button"
-                                  className="ghost docs-action-btn"
-                                  title="Delete paper"
-                                  onClick={() => void handleDeleteBibliography(item.id)}
+                                  className={`ghost docs-action-btn${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`}
+                                  title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete paper"}
+                                  onClick={() => requestConfirmDelete(item.id, () => void handleDeleteBibliography(item.id))}
                                 >
-                                  <FontAwesomeIcon icon={faTrash} />
+                                  {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                                 </button>
                               </div>
                               {expandedBibNotesLoading ? (
@@ -3524,14 +3653,14 @@ export function ResearchWorkspace({
                                         <strong>{note.user_display_name}</strong>
                                         <span className="chip small">{note.note_type}</span>
                                         {note.visibility === "private" ? <span className="chip small">private</span> : null}
-                                        <span className="muted-small">{new Date(note.created_at).toLocaleDateString()}</span>
+                                        <span className="muted-small">{formatRelativeTime(note.created_at)}</span>
                                         <button
                                           type="button"
                                           className="ghost docs-action-btn danger"
                                           title="Delete"
-                                          onClick={() => void handleDeleteBibNote(note.id)}
+                                          onClick={() => requestConfirmDelete(note.id, () => void handleDeleteBibNote(note.id))}
                                         >
-                                          <FontAwesomeIcon icon={faTrash} />
+                                          {confirmingDeleteId === note.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                                         </button>
                                       </div>
                                       <p className="bib-note-content">{note.content}</p>
@@ -3707,8 +3836,13 @@ export function ResearchWorkspace({
                       </button>
                     </td>
                     <td className="col-icon">
-                      <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => void handleDeleteBibliographyCollection(item.id)}>
-                        <FontAwesomeIcon icon={faTrash} />
+                      <button
+                        type="button"
+                        className={`ghost docs-action-btn${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`}
+                        title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"}
+                        onClick={() => requestConfirmDelete(item.id, () => void handleDeleteBibliographyCollection(item.id))}
+                      >
+                        {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                       </button>
                     </td>
                   </tr>
@@ -4058,7 +4192,7 @@ export function ResearchWorkspace({
                           {iterationState.assigned ? <span className="chip small">Iteration</span> : null}
                         </div>
                       )}
-                      <span className="research-log-timestamp">{formatLogTimestamp(note.created_at)} · {formatLogDate(note.created_at)}</span>
+                      <span className="research-log-timestamp">{formatLogTimestamp(note.created_at)} · {formatRelativeTime(note.created_at)}</span>
                       <div className="research-log-controls">
                         {isEditing ? (
                           <>
@@ -4079,8 +4213,13 @@ export function ResearchWorkspace({
                             <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
                               <FontAwesomeIcon icon={faPen} />
                             </button>
-                            <button type="button" className="ghost docs-action-btn" title="Delete" onClick={() => handleDeleteNote(note.id)}>
-                              <FontAwesomeIcon icon={faTrash} />
+                            <button
+                              type="button"
+                              className={`ghost docs-action-btn${confirmingDeleteId === note.id ? " danger confirm-pulse" : ""}`}
+                              title={confirmingDeleteId === note.id ? "Click again to confirm" : "Delete"}
+                              onClick={() => requestConfirmDelete(note.id, () => handleDeleteNote(note.id))}
+                            >
+                              {confirmingDeleteId === note.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                             </button>
                           </>
                         )}
@@ -4530,7 +4669,7 @@ export function ResearchWorkspace({
                         {item.supporting_reference_ids.length ? <span className="muted-small">{item.supporting_reference_ids.length} supporting references</span> : null}
                         {item.supporting_note_ids.length ? <span className="muted-small">{item.supporting_note_ids.length} supporting notes</span> : null}
                         {item.audit_confidence !== null ? <span className="muted-small">{Math.round(item.audit_confidence * 100)}% confidence</span> : null}
-                        {item.audited_at ? <span className="muted-small">{new Date(item.audited_at).toLocaleString()}</span> : null}
+                        {item.audited_at ? <span className="muted-small">{formatRelativeTime(item.audited_at)}</span> : null}
                       </div>
                       {item.missing_evidence.length > 0 ? (
                         <div className="research-chip-group">
@@ -4918,7 +5057,7 @@ export function ResearchWorkspace({
                   <div key={result.id} className="paper-item-card">
                     <div className="paper-item-head">
                       <strong>{result.title}</strong>
-                      <span className="chip small">{result.updated_at ? formatLogDate(result.updated_at) : "Result"}</span>
+                      <span className="chip small">{result.updated_at ? formatRelativeTime(result.updated_at) : "Result"}</span>
                     </div>
                     <div className="paper-evidence-strip">
                       <span className="chip small">{result.note_ids.length} logs</span>
@@ -5114,7 +5253,7 @@ export function ResearchWorkspace({
                         <div key={result.id} className="paper-item-card">
                           <div className="paper-item-head">
                             <strong>{result.title}</strong>
-                            <span className="chip small">{result.updated_at ? formatLogDate(result.updated_at) : "Result"}</span>
+                            <span className="chip small">{result.updated_at ? formatRelativeTime(result.updated_at) : "Result"}</span>
                           </div>
                           <div className="paper-evidence-strip">
                             <span className="chip small">{result.note_ids.length} logs</span>
@@ -5268,7 +5407,7 @@ export function ResearchWorkspace({
               {recentNotes.map((note) => (
                 <div key={note.id} className="paper-item-card">
                   <strong>{note.title}</strong>
-                  <span className="muted-small">{formatLogDate(note.created_at)}</span>
+                  <span className="muted-small">{formatRelativeTime(note.created_at)}</span>
                 </div>
               ))}
             </div>
@@ -5480,7 +5619,7 @@ export function ResearchWorkspace({
                   </div>
                 ) : null}
                 {collectionDetail.ai_synthesis_at ? (
-                  <span className="muted-small">Generated: {new Date(collectionDetail.ai_synthesis_at).toLocaleString()}</span>
+                  <span className="muted-small">Generated {formatRelativeTime(collectionDetail.ai_synthesis_at)}</span>
                 ) : null}
               </>
             ) : (

@@ -11,6 +11,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { formatRelativeTime } from "../lib/formatRelativeTime";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { useStatusToast } from "../lib/useStatusToast";
 import type { DocumentListItem, DocumentVersion, Member, ProjectProposalSection, WorkEntity } from "../types";
@@ -562,7 +563,7 @@ export function DocumentLibrary({ selectedProjectId, highlightDocumentKey, onHig
                 <td><span className="chip small">{scopeLabel[item.scope]}</span></td>
                 <td><span className={statusClassName(item.status)}>{item.status}</span></td>
                 <td>v{item.latest_version} ({item.versions_count})</td>
-                <td>{new Date(item.updated_at).toLocaleDateString()}</td>
+                <td>{formatRelativeTime(item.updated_at)}</td>
                 <td>
                   <div className="docs-actions">
                     <button type="button" className="ghost docs-action-btn" title="Versions" onClick={() => void loadVersions(item.document_key)}>
@@ -628,7 +629,7 @@ export function DocumentLibrary({ selectedProjectId, highlightDocumentKey, onHig
                 <span className="docs-version-filename">{version.original_filename}</span>
                 <span className={statusClassName(version.status)}>{version.status}</span>
                 <span className="docs-version-size">{(version.file_size_bytes / 1024).toFixed(0)} KB</span>
-                <span className="docs-version-date">{new Date(version.created_at).toLocaleDateString()}</span>
+                <span className="docs-version-date">{formatRelativeTime(version.created_at)}</span>
                 {version.ingestion_error ? <span className="error docs-version-error">{version.ingestion_error}</span> : null}
               </div>
             ))}

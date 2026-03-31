@@ -17,6 +17,7 @@ import { renderMarkdown } from "../lib/renderMarkdown";
 import { ProposalRichEditor } from "./ProposalRichEditor";
 import { renderHealthIndicator } from "./TeachingHealthIndicator";
 import type { AuthUser, Course, CourseMaterial, Project, TeachingWorkspace } from "../types";
+import { useConfirmDelete } from "../lib/useConfirmDelete";
 import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
@@ -58,6 +59,7 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const { error, setError, status, setStatus } = useStatusToast();
+  const { confirmingId: confirmingDeleteId, requestConfirm: requestConfirmDelete } = useConfirmDelete();
   const [projectSearch, setProjectSearch] = useState("");
   const [expandedMaterials, setExpandedMaterials] = useState<Set<string>>(new Set());
   const [materialTypeFilter, setMaterialTypeFilter] = useState("");
@@ -190,7 +192,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
 
   async function handleRemoveTeachingAssistant(userId: string) {
     if (!selectedCourseId) return;
-    if (!window.confirm("Remove this teaching assistant?")) return;
     try {
       setBusy(true);
       const updated = await api.removeCourseTeachingAssistant(selectedCourseId, userId);
@@ -248,7 +249,6 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
 
   async function handleDeleteMaterial(materialId: string) {
     if (!selectedCourseId) return;
-    if (!window.confirm("Delete this material? This cannot be undone.")) return;
     try {
       setBusy(true);
       await api.deleteCourseMaterial(selectedCourseId, materialId);
@@ -429,12 +429,12 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
                   <span>{assistant.display_name}</span>
                   <button
                     type="button"
-                    className="ghost docs-action-btn danger-text"
-                    title="Remove"
+                    className={`ghost docs-action-btn danger-text${confirmingDeleteId === assistant.user_id ? " danger confirm-pulse" : ""}`}
+                    title={confirmingDeleteId === assistant.user_id ? "Click again to confirm" : "Remove"}
                     disabled={busy}
-                    onClick={() => void handleRemoveTeachingAssistant(assistant.user_id)}
+                    onClick={() => requestConfirmDelete(assistant.user_id, () => void handleRemoveTeachingAssistant(assistant.user_id))}
                   >
-                    <FontAwesomeIcon icon={faXmark} />
+                    {confirmingDeleteId === assistant.user_id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faXmark} />}
                   </button>
                 </div>
               ))}
@@ -511,8 +511,8 @@ export function TeachingCoursesWorkspace({ currentUser, onOpenProject }: Props) 
                               <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openMaterialModal("edit", material)}>
                                 <FontAwesomeIcon icon={faPenToSquare} />
                               </button>
-                              <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void handleDeleteMaterial(material.id)}>
-                                <FontAwesomeIcon icon={faTrash} />
+                              <button type="button" className={`ghost docs-action-btn danger-text${confirmingDeleteId === material.id ? " danger confirm-pulse" : ""}`} title={confirmingDeleteId === material.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(material.id, () => void handleDeleteMaterial(material.id))}>
+                                {confirmingDeleteId === material.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                               </button>
                             </>
                           ) : null}

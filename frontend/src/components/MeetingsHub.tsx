@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import FocusLock from "react-focus-lock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -8,12 +8,16 @@ import {
   faMicrophone,
   faPlus,
   faRobot,
+  faSearch,
   faChevronDown,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { useConfirmDelete } from "../lib/useConfirmDelete";
+import { formatRelativeTime } from "../lib/formatRelativeTime";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
+import { useQuickSearch } from "../lib/useQuickSearch";
 import { useStatusToast } from "../lib/useStatusToast";
 import type { CalendarImportBatch, CalendarIntegration, DocumentListItem, MeetingActionItem, MeetingRecord, Member, WorkEntity } from "../types";
 
@@ -34,6 +38,9 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
   const [calendarImports, setCalendarImports] = useState<CalendarImportBatch[]>([]);
   const [sourceFilter, setSourceFilter] = useState("");
   const [search, setSearch] = useState("");
+  const quickSearch = useQuickSearch(useCallback((q: string) => {
+    setSearch(q);
+  }, []));
   const [modalOpen, setModalOpen] = useState(false);
   const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -48,6 +55,7 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
   const [busy, setBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const { error, setError, status, setStatus } = useStatusToast();
+  const { confirmingId: confirmingDeleteId, requestConfirm: requestConfirmDelete } = useConfirmDelete();
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [showActionForm, setShowActionForm] = useState(false);
@@ -350,7 +358,6 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
 
   async function handleDeleteMeeting() {
     if (!selectedProjectId || !activeMeeting) return;
-    if (!window.confirm(`Delete meeting "${activeMeeting.title}"?`)) return;
     try {
       setBusy(true);
       setError("");
@@ -371,7 +378,6 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
 
   async function handleDeleteCalendarImport(batch: CalendarImportBatch) {
     if (!selectedProjectId) return;
-    if (!window.confirm(`Remove imported calendar "${batch.filename}" and its meetings?`)) return;
     try {
       setBusy(true);
       setError("");
@@ -395,6 +401,21 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
 
   return (
     <section className="panel meetings-page">
+      {quickSearch.open ? (
+        <div className="quick-search-bar">
+          <FontAwesomeIcon icon={faSearch} className="quick-search-icon" />
+          <input
+            ref={quickSearch.inputRef}
+            type="text"
+            className="quick-search-input"
+            placeholder="Filter current list..."
+            value={quickSearch.query}
+            onChange={(e) => quickSearch.setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") quickSearch.close(); }}
+          />
+          <kbd className="cmd-palette-kbd">esc</kbd>
+        </div>
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="success">{status}</p> : null}
 
@@ -461,8 +482,8 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
               <span className="chip small">{item.filename}</span>
               <span className="muted-small">{item.imported_count} created</span>
               <span className="muted-small">{item.updated_count} updated</span>
-              <button type="button" className="ghost" disabled={busy} onClick={() => void handleDeleteCalendarImport(item)}>
-                Remove
+              <button type="button" className={`ghost${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`} disabled={busy} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Remove"} onClick={() => requestConfirmDelete(item.id, () => void handleDeleteCalendarImport(item))}>
+                {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : "Remove"}
               </button>
             </div>
           ))}
@@ -497,7 +518,7 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
                   </td>
                   <td><strong>{item.title}</strong></td>
                   <td><span className="chip small">{item.source_type}</span></td>
-                  <td>{new Date(item.starts_at).toLocaleDateString()}</td>
+                  <td>{new Date(item.starts_at) <= new Date() ? formatRelativeTime(item.starts_at) : new Date(item.starts_at).toLocaleDateString()}</td>
                   <td>{item.participants.length}</td>
                 </tr>
               ))}
@@ -523,7 +544,7 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
               <div>
                 <strong>{activeMeeting.title}</strong>
                 <span className="meetings-detail-meta">
-                  {new Date(activeMeeting.starts_at).toLocaleString()} · {activeMeeting.participants.length} participants · {activeMeeting.source_type}
+                  {new Date(activeMeeting.starts_at) <= new Date() ? formatRelativeTime(activeMeeting.starts_at) : new Date(activeMeeting.starts_at).toLocaleString()} · {activeMeeting.participants.length} participants · {activeMeeting.source_type}
                   {activeMeeting.original_filename ? ` · ${activeMeeting.original_filename}` : ""}
                 </span>
                 {activeMeeting.summary ? <p className="meetings-summary">{activeMeeting.summary}</p> : null}
@@ -559,8 +580,8 @@ export function MeetingsHub({ selectedProjectId, onOpenAssistant, highlightMeeti
             >
               <FontAwesomeIcon icon={faDownload} /> Export
             </button>
-            <button type="button" className="ghost" disabled={busy} onClick={() => void handleDeleteMeeting()}>
-              Delete
+            <button type="button" className={`ghost${activeMeeting && confirmingDeleteId === activeMeeting.id ? " danger confirm-pulse" : ""}`} disabled={busy} title={activeMeeting && confirmingDeleteId === activeMeeting.id ? "Click again to confirm" : "Delete"} onClick={() => activeMeeting && requestConfirmDelete(activeMeeting.id, () => void handleDeleteMeeting())}>
+              {activeMeeting && confirmingDeleteId === activeMeeting.id ? <span className="confirm-label">Sure?</span> : "Delete"}
             </button>
           </div>
 

@@ -9,6 +9,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { useConfirmDelete } from "../lib/useConfirmDelete";
 import type { Equipment, ProjectResourcesWorkspace } from "../types";
 
 type Props = {
@@ -37,6 +38,7 @@ export function ProjectResourcesPanel({ projectId, title = "Equipment" }: Props)
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const { confirmingId: confirmingDeleteId, requestConfirm: requestConfirmDelete } = useConfirmDelete();
 
   const [requirementEquipmentId, setRequirementEquipmentId] = useState("");
   const [requirementPriority, setRequirementPriority] = useState("important");
@@ -179,7 +181,6 @@ export function ProjectResourcesPanel({ projectId, title = "Equipment" }: Props)
   }
 
   async function deleteRequirement(requirementId: string) {
-    if (!window.confirm("Delete this requirement?")) return;
     try {
       setBusy(true);
       await api.deleteProjectEquipmentRequirement(projectId, requirementId);
@@ -244,8 +245,8 @@ export function ProjectResourcesPanel({ projectId, title = "Equipment" }: Props)
                       <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openRequirementModal(item.id)}>
                         <FontAwesomeIcon icon={faPenToSquare} />
                       </button>
-                      <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteRequirement(item.id)}>
-                        <FontAwesomeIcon icon={faTrash} />
+                      <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteRequirement(item.id))}>
+                        {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                       </button>
                     </td>
                   </tr>

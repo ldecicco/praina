@@ -19,6 +19,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { useConfirmDelete } from "../lib/useConfirmDelete";
 import { SkeletonCards } from "./Skeleton";
 import { renderMarkdown } from "../lib/renderMarkdown";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
@@ -100,6 +101,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
   const [savingProfile, setSavingProfile] = useState(false);
   const [busy, setBusy] = useState(false);
   const { error, setError, status, setStatus } = useStatusToast();
+  const { confirmingId: confirmingDeleteId, requestConfirm: requestConfirmDelete } = useConfirmDelete();
   const [modal, setModal] = useState<EntityModal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedReports, setExpandedReports] = useState<Set<string>>(new Set());
@@ -656,7 +658,6 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
       blocker: "blocker",
       report: "progress report",
     };
-    if (!window.confirm(`Delete this ${labels[kind] || "item"}?`)) return;
     try {
       if (kind === "student") await api.deleteTeachingStudent(selectedProjectId, id);
       if (kind === "background") await api.deleteTeachingBackgroundMaterial(selectedProjectId, id);
@@ -944,7 +945,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                 <div key={item.id} className="teaching-staff-chip">
                   <span>{item.full_name}{item.email ? ` · ${item.email}` : ""}</span>
                   <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("student", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                  <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("student", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                  <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEntity("student", item.id))}>{confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}</button>
                 </div>
               ))}
               {workspace.students.length === 0 ? <span className="teaching-empty">No students</span> : null}
@@ -984,7 +985,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                         <td><span className="chip small">{item.status}</span></td>
                         <td className="teaching-row-actions">
                           <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("milestone", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                          <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("milestone", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                          <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEntity("milestone", item.id))}>{confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}</button>
                         </td>
                       </tr>
                     );
@@ -1014,7 +1015,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                           <button type="button" className="ghost icon-text-button small" onClick={() => void quickResolveBlocker(item.id)}>Resolve</button>
                         ) : null}
                         <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("blocker", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                        <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("blocker", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                        <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEntity("blocker", item.id))}>{confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}</button>
                       </td>
                     </tr>
                   ))}
@@ -1077,7 +1078,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                     </td>
                     <td className="teaching-row-actions">
                       <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("artifact", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                      <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("artifact", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                      <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEntity("artifact", item.id))}>{confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}</button>
                     </td>
                   </tr>
                 ))}
@@ -1137,7 +1138,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                     <td>{item.notes || "-"}</td>
                     <td className="teaching-row-actions">
                       <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("background", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                      <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("background", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                      <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEntity("background", item.id))}>{confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}</button>
                     </td>
                   </tr>
                 ))}
@@ -1247,7 +1248,7 @@ export function TeachingWorkspace({ selectedProjectId, project, currentUser, onO
                         ) : null}
                         <div className="teaching-report-actions">
                           <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openModal("report", item.id)}><FontAwesomeIcon icon={faPenToSquare} /></button>
-                          <button type="button" className="ghost docs-action-btn danger" title="Delete" onClick={() => void deleteEntity("report", item.id)}><FontAwesomeIcon icon={faTrash} /></button>
+                          <button type="button" className={`ghost docs-action-btn danger${confirmingDeleteId === item.id ? " confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEntity("report", item.id))}>{confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}</button>
                         </div>
                       </div>
                     ) : null}

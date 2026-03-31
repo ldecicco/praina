@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Toaster } from "sonner";
+import { CommandPalette } from "./components/CommandPalette";
+import type { CommandItem } from "./components/CommandPalette";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBars,
@@ -122,6 +124,33 @@ export default function App() {
   const [pendingBibliographyReferenceId, setPendingBibliographyReferenceId] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [proposalCallBrief, setProposalCallBrief] = useState<ProposalCallBrief | null>(null);
+  const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    function handleGlobalKeyDown(e: KeyboardEvent) {
+      // Cmd+K / Ctrl+K → open command palette
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setCmdPaletteOpen((prev) => !prev);
+        return;
+      }
+      // Esc → close topmost modal overlay (if not inside an input/textarea)
+      if (e.key === "Escape") {
+        if (cmdPaletteOpen) {
+          setCmdPaletteOpen(false);
+          return;
+        }
+        const overlays = document.querySelectorAll<HTMLElement>(".modal-overlay");
+        if (overlays.length > 0) {
+          const topmost = overlays[overlays.length - 1];
+          topmost.click();
+        }
+      }
+    }
+    document.addEventListener("keydown", handleGlobalKeyDown);
+    return () => document.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [cmdPaletteOpen]);
 
   // Dynamic page title per view
   useEffect(() => {
@@ -612,6 +641,15 @@ export default function App() {
           ]
         : [];
 
+  const cmdPaletteItems: CommandItem[] = navSections.flatMap((section) =>
+    section.items.map((item) => ({
+      id: item.id,
+      label: item.label,
+      icon: item.icon,
+      section: section.label,
+    }))
+  );
+
   function switchPlatformSection(nextSection: "research" | "teaching") {
     if ((nextSection === "research" && !canAccessResearch) || (nextSection === "teaching" && !canAccessTeaching)) {
       return;
@@ -910,6 +948,7 @@ export default function App() {
         {error ? <p className="error top-error">{error}</p> : null}
 
         <main className="page-content">
+          <div className="view-transition" key={view}>
           {view === "my-work" ? <MyWork /> : null}
           {view === "dashboard" ? (
             <ProjectDashboard
@@ -1021,6 +1060,7 @@ export default function App() {
           ) : null}
           {view === "search" ? <ProjectSearch selectedProjectId={selectedProjectId} onNavigate={(v, id) => handleNavigate(v as View, id)} /> : null}
           {view === "admin" ? <AdminPanel selectedProjectId={selectedProjectId} currentUser={currentUser} /> : null}
+          </div>
         </main>
       </div>
       <ProjectSettingsModal
@@ -1044,6 +1084,16 @@ export default function App() {
           onUpdated={(updatedUser) => {
             setMe((prev) => prev ? { ...prev, user: updatedUser } : prev);
           }}
+        />
+      ) : null}
+      {cmdPaletteOpen ? (
+        <CommandPalette
+          items={cmdPaletteItems}
+          onSelect={(id) => {
+            setCmdPaletteOpen(false);
+            handleNavigate(id as View);
+          }}
+          onClose={() => setCmdPaletteOpen(false)}
         />
       ) : null}
       <Toaster

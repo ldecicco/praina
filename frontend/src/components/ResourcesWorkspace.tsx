@@ -13,6 +13,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
+import { useConfirmDelete } from "../lib/useConfirmDelete";
 import { SkeletonTable } from "./Skeleton";
 import type { AuthUser, Equipment, EquipmentBooking, EquipmentConflict, EquipmentDowntime, EquipmentMaterial, Lab, LabClosure, Project, ProjectBroadcast } from "../types";
 import { useStatusToast } from "../lib/useStatusToast";
@@ -91,6 +92,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const { error, setError, status, setStatus } = useStatusToast();
+  const { confirmingId: confirmingDeleteId, requestConfirm: requestConfirmDelete } = useConfirmDelete();
   const [modal, setModal] = useState<ModalKind>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -593,7 +595,7 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   }
 
   async function removeLabStaffMember(userId: string) {
-    if (!selectedLab || !window.confirm("Remove this user from the lab?")) return;
+    if (!selectedLab) return;
     try {
       setBusy(true);
       await api.removeLabStaff(selectedLab.id, userId);
@@ -682,7 +684,6 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   }
 
   async function deleteEquipmentRow(equipmentId: string) {
-    if (!window.confirm("Delete this equipment?")) return;
     try {
       setBusy(true);
       await api.deleteEquipment(equipmentId);
@@ -696,7 +697,6 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   }
 
   async function deleteEquipmentMaterialRow(materialId: string) {
-    if (!window.confirm("Delete this material?")) return;
     try {
       setBusy(true);
       await api.deleteEquipmentMaterial(materialId);
@@ -710,7 +710,6 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   }
 
   async function deleteLabRow(labId: string) {
-    if (!window.confirm("Delete this lab?")) return;
     try {
       setBusy(true);
       await api.deleteLab(labId);
@@ -724,7 +723,6 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
   }
 
   async function deleteLabClosureRow(closureId: string) {
-    if (!window.confirm("Delete this lab closure?")) return;
     try {
       setBusy(true);
       await api.deleteLabClosure(closureId);
@@ -1052,8 +1050,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                       <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentModal(selectedEquipment)}>
                         <FontAwesomeIcon icon={faPenToSquare} />
                       </button>
-                      <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentRow(selectedEquipment.id)}>
-                        <FontAwesomeIcon icon={faTrash} />
+                      <button type="button" className={`ghost docs-action-btn danger-text${confirmingDeleteId === selectedEquipment.id ? " danger confirm-pulse" : ""}`} title={confirmingDeleteId === selectedEquipment.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(selectedEquipment.id, () => void deleteEquipmentRow(selectedEquipment.id))}>
+                        {confirmingDeleteId === selectedEquipment.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                       </button>
                     </>
                   ) : null}
@@ -1220,8 +1218,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                                 <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openEquipmentMaterialModal(item)}>
                                   <FontAwesomeIcon icon={faPenToSquare} />
                                 </button>
-                                <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteEquipmentMaterialRow(item.id)}>
-                                  <FontAwesomeIcon icon={faTrash} />
+                                <button type="button" className={`ghost docs-action-btn danger-text${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteEquipmentMaterialRow(item.id))}>
+                                  {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                                 </button>
                               </>
                             ) : null}
@@ -1390,8 +1388,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                               Close
                             </button>
                             {isSuperAdmin ? (
-                              <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteLabRow(item.id)}>
-                                <FontAwesomeIcon icon={faTrash} />
+                              <button type="button" className={`ghost docs-action-btn danger-text${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteLabRow(item.id))}>
+                                {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                               </button>
                             ) : null}
                           </>
@@ -1476,8 +1474,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                           <td><span className="chip small">{item.role}</span></td>
                           <td className="teaching-row-actions">
                             {(isSuperAdmin || canManageSelectedLab) && (!(!isSuperAdmin && item.role === "manager")) ? (
-                              <button type="button" className="ghost docs-action-btn danger-text" title="Remove" onClick={() => void removeLabStaffMember(item.user_id)}>
-                                <FontAwesomeIcon icon={faTrash} />
+                              <button type="button" className={`ghost docs-action-btn danger-text${confirmingDeleteId === item.user_id ? " danger confirm-pulse" : ""}`} title={confirmingDeleteId === item.user_id ? "Click again to confirm" : "Remove"} onClick={() => requestConfirmDelete(item.user_id, () => void removeLabStaffMember(item.user_id))}>
+                                {confirmingDeleteId === item.user_id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                               </button>
                             ) : null}
                           </td>
@@ -1521,8 +1519,8 @@ export function ResourcesWorkspace({ currentUser, onOpenProject }: Props) {
                                 <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => openLabClosureModal(item)}>
                                   <FontAwesomeIcon icon={faPenToSquare} />
                                 </button>
-                                <button type="button" className="ghost docs-action-btn danger-text" title="Delete" onClick={() => void deleteLabClosureRow(item.id)}>
-                                  <FontAwesomeIcon icon={faTrash} />
+                                <button type="button" className={`ghost docs-action-btn danger-text${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`} title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete"} onClick={() => requestConfirmDelete(item.id, () => void deleteLabClosureRow(item.id))}>
+                                  {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                                 </button>
                               </>
                             ) : null}

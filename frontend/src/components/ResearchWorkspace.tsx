@@ -3450,10 +3450,16 @@ export function ResearchWorkspace({
                       <tr className="bib-expanded-row">
                         <td colSpan={totalColSpan}>
                           <div className="bib-expanded-content">
+                            {item.abstract ? (
+                              <div className="bib-abstract-section">
+                                <span className="bib-section-label">Abstract</span>
+                                <p className="bib-abstract-text">{item.abstract}</p>
+                              </div>
+                            ) : null}
                             {item.ai_summary ? (() => {
                               const summary = parseSummaryPayload(item.ai_summary);
                               return (
-                                <details className="research-inline-summary" open>
+                                <details className="research-inline-summary">
                                   <summary>AI Summary</summary>
                                   {renderPaperSummary(summary, item.ai_summary)}
                                 </details>
@@ -3468,12 +3474,6 @@ export function ResearchWorkspace({
                                   ))}
                                 </div>
                               </details>
-                            ) : null}
-                            {item.abstract ? (
-                              <div className="bib-abstract-section">
-                                <span className="bib-section-label">Abstract</span>
-                                <p className="bib-abstract-text">{item.abstract}</p>
-                              </div>
                             ) : null}
                             {item.doi ? (
                               <span className="muted-small">DOI: {item.doi}</span>

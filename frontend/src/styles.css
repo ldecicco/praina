@@ -8631,6 +8631,12 @@ tr.row-selected {
   flex: 1 1 auto;
 }
 
+.research-icon-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Mention dropdown */
 .mention-dropdown {
   z-index: 1000;

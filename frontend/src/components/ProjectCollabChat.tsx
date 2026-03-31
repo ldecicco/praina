@@ -17,6 +17,8 @@ type Props = {
   selectedProjectId: string;
   currentUser: AuthUser;
   accessToken: string;
+  openRoomId?: string | null;
+  onOpenRoomConsumed?: () => void;
 };
 
 type ComposerSuggestion = {
@@ -29,6 +31,9 @@ type ComposerSuggestion = {
 };
 
 type AssistTrigger = "@" | "#" | null;
+type MentionRenderOptions = {
+  currentUserTokens?: Set<string>;
+};
 
 const EMOJIS = [
   "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎", "🤔", "🙌",
@@ -39,7 +44,13 @@ const EMOJIS = [
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function wsBaseUrl(): string {
@@ -86,7 +97,39 @@ function excerpt(text: string, max = 96): string {
   return `${normalized.slice(0, max - 1).trimEnd()}…`;
 }
 
-function renderInlineMarkdown(text: string): ReactNode[] {
+function renderMentionText(text: string, options: MentionRenderOptions = {}): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const currentUserTokens = options.currentUserTokens ?? new Set<string>();
+  const pattern = /(^|[^A-Za-z0-9._:-])@([A-Za-z0-9._:-]+)/g;
+  let cursor = 0;
+  let key = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    const prefix = match[1] || "";
+    const token = match[2] || "";
+    const mentionStart = start + prefix.length;
+    if (mentionStart > cursor) {
+      nodes.push(text.slice(cursor, mentionStart));
+    }
+    nodes.push(
+      <span
+        key={`mention-${key++}`}
+        className={`pm-mention ${currentUserTokens.has(token.toLowerCase()) ? "self" : ""}`}
+      >
+        @{token}
+      </span>
+    );
+    cursor = mentionStart + token.length + 1;
+  }
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+  return nodes;
+}
+
+function renderInlineMarkdown(text: string, options: MentionRenderOptions = {}): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g;
   let cursor = 0;
@@ -95,7 +138,7 @@ function renderInlineMarkdown(text: string): ReactNode[] {
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
     if (start > cursor) {
-      nodes.push(text.slice(cursor, start));
+      nodes.push(...renderMentionText(text.slice(cursor, start), options));
     }
     if (match[2] && match[3]) {
       nodes.push(
@@ -113,12 +156,12 @@ function renderInlineMarkdown(text: string): ReactNode[] {
     cursor = start + match[0].length;
   }
   if (cursor < text.length) {
-    nodes.push(text.slice(cursor));
+    nodes.push(...renderMentionText(text.slice(cursor), options));
   }
   return nodes;
 }
 
-function renderMarkdown(content: string): ReactNode[] {
+function renderMarkdown(content: string, options: MentionRenderOptions = {}): ReactNode[] {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const output: ReactNode[] = [];
   let i = 0;
@@ -151,9 +194,9 @@ function renderMarkdown(content: string): ReactNode[] {
     if (heading) {
       const level = heading[1].length;
       const text = heading[2];
-      if (level === 1) output.push(<h1 key={`md-block-${key++}`}>{renderInlineMarkdown(text)}</h1>);
-      else if (level === 2) output.push(<h2 key={`md-block-${key++}`}>{renderInlineMarkdown(text)}</h2>);
-      else output.push(<h3 key={`md-block-${key++}`}>{renderInlineMarkdown(text)}</h3>);
+      if (level === 1) output.push(<h1 key={`md-block-${key++}`}>{renderInlineMarkdown(text, options)}</h1>);
+      else if (level === 2) output.push(<h2 key={`md-block-${key++}`}>{renderInlineMarkdown(text, options)}</h2>);
+      else output.push(<h3 key={`md-block-${key++}`}>{renderInlineMarkdown(text, options)}</h3>);
       i += 1;
       continue;
     }
@@ -161,7 +204,7 @@ function renderMarkdown(content: string): ReactNode[] {
     if (/^[-*]\s+/.test(line)) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
-        items.push(<li key={`md-li-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^[-*]\s+/, ""))}</li>);
+        items.push(<li key={`md-li-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^[-*]\s+/, ""), options)}</li>);
         i += 1;
       }
       output.push(<ul key={`md-block-${key++}`}>{items}</ul>);
@@ -171,7 +214,7 @@ function renderMarkdown(content: string): ReactNode[] {
     if (/^\d+\.\s+/.test(line)) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
-        items.push(<li key={`md-oli-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^\d+\.\s+/, ""))}</li>);
+        items.push(<li key={`md-oli-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^\d+\.\s+/, ""), options)}</li>);
         i += 1;
       }
       output.push(<ol key={`md-block-${key++}`}>{items}</ol>);
@@ -191,13 +234,23 @@ function renderMarkdown(content: string): ReactNode[] {
       paragraphLines.push(lines[i]);
       i += 1;
     }
-    output.push(<p key={`md-block-${key++}`}>{renderInlineMarkdown(paragraphLines.join(" "))}</p>);
+    output.push(<p key={`md-block-${key++}`}>{renderInlineMarkdown(paragraphLines.join(" "), options)}</p>);
   }
 
   return output;
 }
 
-export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken }: Props) {
+function extractMentionTokens(content: string): Set<string> {
+  const tokens = new Set<string>();
+  const pattern = /(^|[^A-Za-z0-9._:-])@([A-Za-z0-9._:-]+)/g;
+  for (const match of content.matchAll(pattern)) {
+    const token = match[2]?.trim().toLowerCase();
+    if (token) tokens.add(token);
+  }
+  return tokens;
+}
+
+export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken, openRoomId, onOpenRoomConsumed }: Props) {
   const [rooms, setRooms] = useState<ProjectChatRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
@@ -295,6 +348,16 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
     return suggestions;
   }, [uniqueUsers]);
 
+  const currentUserMentionTokens = useMemo(() => {
+    const tokens = new Set<string>();
+    userSuggestions.forEach((item) => {
+      if (item.id === currentUser.id) {
+        tokens.add(item.token.toLowerCase());
+      }
+    });
+    return tokens;
+  }, [currentUser.id, userSuggestions]);
+
   const documentSuggestions = useMemo(() => {
     const seenTokens = new Set<string>();
     return documents.map((doc, index) => {
@@ -386,6 +449,14 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
     void loadContext(selectedProjectId);
     return () => closeSocket();
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!openRoomId || rooms.length === 0) return;
+    if (rooms.some((room) => room.id === openRoomId)) {
+      setSelectedRoomId(openRoomId);
+    }
+    onOpenRoomConsumed?.();
+  }, [openRoomId, onOpenRoomConsumed, rooms]);
 
   useEffect(() => {
     if (!selectedProjectId) return;
@@ -881,11 +952,17 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
           <div className="pm-messages">
             {messages.map((message) => {
               const own = message.sender_user_id === currentUser.id;
+              const mentionTokens = extractMentionTokens(message.content);
+              const mentionsCurrentUser = Array.from(currentUserMentionTokens).some((token) => mentionTokens.has(token));
               const senderName = own ? "You" : message.sender_display_name;
               const senderAvatarUrl = findAvatarUrl(message.sender_user_id, memberships, currentUser);
               const replyPreview = message.reply_to_message;
               return (
-                <article id={`pm-msg-${message.id}`} key={message.id} className={`pm-message-row ${own ? "own" : "other"}`}>
+                <article
+                  id={`pm-msg-${message.id}`}
+                  key={message.id}
+                  className={`pm-message-row ${own ? "own" : "other"} ${mentionsCurrentUser ? "mentioned" : ""}`}
+                >
                   <span className="pm-avatar-badge small">
                     {senderAvatarUrl ? (
                       <img src={senderAvatarUrl} alt={senderName} />
@@ -893,7 +970,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
                       initials(senderName)
                     )}
                   </span>
-                  <div className={`pm-message-bubble ${own ? "own" : "other"}`}>
+                  <div className={`pm-message-bubble ${own ? "own" : "other"} ${mentionsCurrentUser ? "mentioned" : ""}`}>
                     <div className="pm-message-head">
                       <strong>{senderName}</strong>
                       <span>{formatTimestamp(message.created_at)}</span>
@@ -914,7 +991,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken 
                         <span>{excerpt(replyPreview.content)}</span>
                       </button>
                     ) : null}
-                    <div className="chat-markdown">{renderMarkdown(message.content)}</div>
+                    <div className="chat-markdown">{renderMarkdown(message.content, { currentUserTokens: currentUserMentionTokens })}</div>
                     {message.reactions.length > 0 ? (
                       <div className="pm-reactions">
                         {message.reactions.map((reaction) => {

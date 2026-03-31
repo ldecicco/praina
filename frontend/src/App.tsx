@@ -83,6 +83,7 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   resource_booking: "resources",
   bibliography_reference: "bibliography",
   project_broadcast: "project-chat",
+  project_chat_mention: "project-chat",
   lab_broadcast: "resources",
 };
 
@@ -117,6 +118,7 @@ export default function App() {
   const notifDropdownRef = useRef<HTMLDivElement>(null);
   const [pendingDocumentKey, setPendingDocumentKey] = useState<string | null>(null);
   const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
+  const [pendingProjectChatRoomId, setPendingProjectChatRoomId] = useState<string | null>(null);
   const [pendingBibliographyReferenceId, setPendingBibliographyReferenceId] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [proposalCallBrief, setProposalCallBrief] = useState<ProposalCallBrief | null>(null);
@@ -358,6 +360,8 @@ export default function App() {
       setPendingDocumentKey(entityId);
     } else if (targetView === "meetings" && entityId) {
       setPendingMeetingId(entityId);
+    } else if (targetView === "project-chat" && entityId) {
+      setPendingProjectChatRoomId(entityId);
     }
     if (targetView !== "courses" && targetView !== "resources" && targetView !== "bibliography") {
       const sectionProjects = projects.filter((project) =>
@@ -843,6 +847,9 @@ export default function App() {
                           type="button"
                           className={`notif-item ${n.status === "unread" ? "unread" : ""}`}
                           onClick={() => {
+                            if (n.project_id) {
+                              handleSelectProject(n.project_id);
+                            }
                             const targetView = n.link_type ? LINK_TYPE_VIEW_MAP[n.link_type] : undefined;
                             if (targetView) {
                               handleNavigate(targetView, n.link_id ?? undefined);
@@ -953,6 +960,8 @@ export default function App() {
               selectedProjectId={selectedProjectId}
               currentUser={currentUser}
               accessToken={authTokens.access_token}
+              openRoomId={pendingProjectChatRoomId}
+              onOpenRoomConsumed={() => setPendingProjectChatRoomId(null)}
             />
           ) : null}
           {view === "assistant" ? (

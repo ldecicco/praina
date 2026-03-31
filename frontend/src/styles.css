@@ -316,16 +316,16 @@ body::after {
   width: 100%;
   position: relative;
   border: none;
-  border-radius: var(--radius);
+  border-radius: 0;
   background: transparent;
   color: var(--muted);
   display: flex;
   align-items: center;
   gap: 8px;
   height: 32px;
-  padding: 0 8px;
+  padding: 0 10px;
   text-align: left;
-  transition: all var(--t);
+  transition: color var(--t), background var(--t);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -333,7 +333,7 @@ body::after {
 
 .app-nav-item:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .app-nav-item.disabled,
@@ -352,19 +352,16 @@ body::after {
 
 .app-nav-item.active {
   color: var(--text-bright);
-  background: var(--surface);
-  box-shadow: inset 3px 0 0 var(--brand), 0 0 12px var(--brand-subtle);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .app-nav-item.active::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 0;
+  bottom: 0;
   width: 2px;
-  height: 16px;
-  border-radius: 0 2px 2px 0;
   background: var(--brand);
 }
 
@@ -456,17 +453,18 @@ body::after {
 
 .topbar-section-toggle {
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
 }
 
 .topbar-section-btn {
   border: none;
-  border-radius: calc(var(--radius) - 1px);
+  border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
   display: inline-flex;
@@ -476,18 +474,20 @@ body::after {
   padding: 0 10px;
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   cursor: pointer;
-  transition: all var(--t);
+  transition: color var(--t), border-color var(--t);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
 }
 
 .topbar-section-btn:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
 }
 
 .topbar-section-btn.active {
-  color: var(--text-bright);
-  background: var(--bg-elevated);
+  color: var(--brand);
+  border-bottom-color: var(--brand);
 }
 
 /* ─── Project Dropdown ─── */
@@ -2064,13 +2064,15 @@ button.resources-schedule-block {
   gap: 5px;
   padding: 8px 14px;
   border: none;
+  border-radius: 0;
   background: none;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s;
   margin-bottom: -1px;
 }
 .delivery-tab:hover {
@@ -2079,7 +2081,6 @@ button.resources-schedule-block {
 .delivery-tab.active {
   color: var(--brand);
   border-bottom-color: var(--brand);
-  text-shadow: 0 0 20px var(--brand-glow);
 }
 
 .delivery-tab-count {
@@ -4516,6 +4517,11 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   border-bottom-right-radius: 4px;
 }
 
+.pm-message-bubble.mentioned {
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--line-strong));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 20%, transparent);
+}
+
 .pm-message-head {
   display: flex;
   align-items: center;
@@ -4545,6 +4551,23 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 
 .pm-reply-preview strong { font-size: 10px; color: var(--brand); }
 .pm-reply-preview span { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.pm-mention {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  margin: 0 1px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-bright);
+  border: 1px solid var(--line);
+}
+
+.pm-mention.self {
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 44%, var(--line));
+  color: var(--text-bright);
+}
 
 /* ─── Reactions ─── */
 .pm-reactions {

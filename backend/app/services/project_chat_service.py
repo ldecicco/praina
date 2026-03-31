@@ -44,6 +44,7 @@ LEGACY_BOT_USER_EMAILS = {"project-bot@local"}
 BOT_DISPLAY_NAME = "Project Bot"
 BOT_PLATFORM_ROLE = PlatformRole.user.value
 BOT_MENTION_RE = re.compile(r"(^|\s)@bot\b", flags=re.IGNORECASE)
+USER_MENTION_RE = re.compile(r"(?<![A-Za-z0-9._:-])@([A-Za-z0-9._:-]+)")
 MAX_CITATIONS = 3
 MAX_CHUNK_SCAN = 400
 DOCUMENT_REF_RE = re.compile(r"(?<!\w)#([A-Za-z0-9._-]+)")
@@ -170,6 +171,7 @@ class ProjectChatService:
         self.db.add(message)
         self.db.commit()
         self.db.refresh(message)
+        self._notify_user_mentions(project_id, room, message, sender_user_id=user_id)
         return message
 
     def toggle_message_reaction(
@@ -639,6 +641,18 @@ class ProjectChatService:
         cleaned = BOT_MENTION_RE.sub(" ", content or "")
         return " ".join(cleaned.split()).strip()
 
+    @staticmethod
+    def extract_user_mention_tokens(content: str) -> list[str]:
+        seen: set[str] = set()
+        tokens: list[str] = []
+        for token in USER_MENTION_RE.findall(content or ""):
+            normalized = token.strip().lower()
+            if not normalized or normalized == "bot" or normalized in seen:
+                continue
+            seen.add(normalized)
+            tokens.append(normalized)
+        return tokens
+
     def extract_document_references(self, project_id: uuid.UUID, prompt: str) -> dict[str, object]:
         raw_tokens = [item.lower() for item in DOCUMENT_REF_RE.findall(prompt or "")]
         if not raw_tokens:
@@ -775,6 +789,80 @@ class ProjectChatService:
             self.db.commit()
         except IntegrityError:
             self.db.rollback()
+
+    def _notify_user_mentions(
+        self,
+        project_id: uuid.UUID,
+        room: ProjectChatRoom,
+        message: ProjectChatMessage,
+        *,
+        sender_user_id: uuid.UUID,
+    ) -> None:
+        tokens = self.extract_user_mention_tokens(message.content)
+        if not tokens:
+            return
+
+        from app.services.notification_service import NotificationService
+
+        token_map = self._project_user_token_map(project_id)
+        sender_name = self.get_user_display_name(sender_user_id)
+        content_preview = self._notification_excerpt(message.content, max_chars=220)
+        notification_service = NotificationService(self.db)
+        notified_user_ids: set[uuid.UUID] = set()
+
+        for token in tokens:
+            target = token_map.get(token)
+            if not target or target.id == sender_user_id or target.id in notified_user_ids:
+                continue
+            try:
+                role = self._get_user_project_role(project_id, target.id)
+            except NotFoundError:
+                continue
+            if not self._can_access_room(project_id, room.id, target.id, role):
+                continue
+            notification_service.notify(
+                target.id,
+                project_id=project_id,
+                title=f"Mentioned in {room.name}",
+                body=f"{sender_name}: {content_preview}",
+                link_type="project_chat_mention",
+                link_id=room.id,
+            )
+            notified_user_ids.add(target.id)
+
+    @staticmethod
+    def _notification_excerpt(content: str, *, max_chars: int = 220) -> str:
+        normalized = " ".join((content or "").split()).strip()
+        if len(normalized) <= max_chars:
+            return normalized
+        return f"{normalized[: max_chars - 1].rstrip()}…"
+
+    @classmethod
+    def _to_user_token(cls, raw: str) -> str:
+        token = re.sub(r"[^a-z0-9._-]+", "_", (raw or "").strip().lower()).strip("_")
+        return token or "user"
+
+    def _project_user_token_map(self, project_id: uuid.UUID) -> dict[str, UserAccount]:
+        users = list(
+            self.db.scalars(
+                select(UserAccount)
+                .join(ProjectMembership, ProjectMembership.user_id == UserAccount.id)
+                .where(ProjectMembership.project_id == project_id)
+                .order_by(UserAccount.display_name.asc(), UserAccount.email.asc())
+            ).all()
+        )
+        token_map: dict[str, UserAccount] = {}
+        seen: set[str] = {"bot"}
+        for user in users:
+            base = self._to_user_token(user.display_name or user.email.split("@")[0] or "user")
+            token = base
+            suffix = 2
+            while token in seen:
+                token = f"{base}{suffix}"
+                suffix += 1
+            seen.add(token)
+            token_map[token] = user
+        return token_map
 
     def _get_user_project_role(self, project_id: uuid.UUID, user_id: uuid.UUID) -> str:
         user = self.db.get(UserAccount, user_id)

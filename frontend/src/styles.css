@@ -410,48 +410,45 @@ body::after {
 
 .sidebar-workspace-switch {
   display: flex;
-  gap: 0;
-  padding: 2px 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  overflow: hidden;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  padding: 0;
 }
 
 .sidebar-workspace-btn {
   flex: 1 1 0;
   min-width: 0;
-  border: none;
-  border-right: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  color: var(--muted);
-  height: 30px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 0 4px;
-  text-align: center;
-  font-size: 11px;
+  gap: 5px;
+  padding: 7px 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
   white-space: nowrap;
   overflow: hidden;
-  transition: all var(--t);
-}
-
-.sidebar-workspace-btn:last-child {
-  border-right: none;
+  text-overflow: ellipsis;
 }
 
 .sidebar-workspace-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
+  color: var(--text-bright);
+  background: none;
 }
 
 .sidebar-workspace-btn.active {
-  background: var(--brand-subtle);
-  color: var(--text-bright);
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  background: none;
 }
 
 .sidebar-workspace-btn svg {
@@ -461,12 +458,7 @@ body::after {
 .sidebar-collapsed .sidebar-workspace-btn svg {
   display: block;
   width: 14px;
-  color: var(--muted);
   flex-shrink: 0;
-}
-
-.sidebar-collapsed .sidebar-workspace-btn.active svg {
-  color: var(--brand);
 }
 
 /* ─── Nav ─── */
@@ -586,23 +578,30 @@ body::after {
   font-weight: 500;
 }
 
+.sidebar-collapsed .sidebar-header {
+  justify-content: center;
+}
+
 .sidebar-collapsed .sidebar-workspace-switch {
   flex-direction: column;
-  border: none;
-  background: transparent;
   gap: 2px;
+  border-bottom: none;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
 }
 
 .sidebar-collapsed .sidebar-workspace-btn {
-  border-right: none;
-  border: 1px solid var(--line);
+  flex: none;
+  padding: 6px 0;
+  border-bottom: none;
+  margin-bottom: 0;
   border-radius: var(--radius);
-  height: 28px;
-  padding: 0;
 }
 
 .sidebar-collapsed .sidebar-workspace-btn.active {
-  border-color: color-mix(in srgb, var(--brand) 38%, var(--line-strong));
+  background: var(--brand-subtle);
+  color: var(--brand);
 }
 
 .sidebar-collapsed .app-nav-item {

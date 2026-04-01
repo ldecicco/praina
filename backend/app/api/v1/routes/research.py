@@ -95,7 +95,7 @@ from app.schemas.research import (
     WbsLinksRead,
 )
 from app.services.onboarding_service import NotFoundError, ValidationError
-from app.services.research_service import DuplicateBibliographyError, ResearchService
+from app.services.research_service import DuplicateBibliographyError, GLOBAL_RESEARCH_PROJECT_ID, ResearchService
 
 
 def require_research_access(current_user: UserAccount = Depends(get_current_user)) -> None:
@@ -273,7 +273,7 @@ def list_collections(
             )
         else:
             items, total = svc.list_collections(
-                project_id,
+                None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id,
                 status_filter=status_filter,
                 member_id=uuid.UUID(member_id) if member_id else None,
                 page=page,
@@ -298,10 +298,11 @@ def create_collection(
     current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionRead:
     svc = ResearchService(db)
-    member_id = _resolve_member_id(db, current_user, project_id)
+    member_id = None if project_id == GLOBAL_RESEARCH_PROJECT_ID else _resolve_member_id(db, current_user, project_id)
     try:
         params = dict(
             title=payload.title,
+            space_ids=[uuid.UUID(item) for item in payload.space_ids],
             description=payload.description,
             hypothesis=payload.hypothesis,
             open_questions=payload.open_questions,
@@ -322,8 +323,13 @@ def create_collection(
             paper_sections=[item.model_dump(mode="json") for item in payload.paper_sections],
             output_status=payload.output_status,
             created_by_member_id=member_id,
+            creator_user_id=current_user.id,
         )
-        item = svc.create_collection_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_collection(project_id, **params)
+        item = (
+            svc.create_collection_for_space(uuid.UUID(space_id), **params)
+            if space_id else
+            svc.create_collection(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, **params)
+        )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -345,6 +351,11 @@ def get_collection(
             members_data = svc.list_collection_members_for_space(sid, collection_id)
             wbs = svc.get_wbs_links_for_space(sid, collection_id)
             meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            item = svc.get_collection_any(collection_id)
+            members_data = svc._list_collection_members_common(collection_id)
+            wbs = {"wp_ids": [], "task_ids": [], "deliverable_ids": []}
+            meetings = []
         else:
             item = svc.get_collection(project_id, collection_id)
             members_data = svc.list_collection_members(project_id, collection_id)
@@ -376,7 +387,7 @@ def ensure_collection_chat_room(
         room = (
             svc.ensure_collection_chat_room_for_space(uuid.UUID(space_id), collection_id, actor_user_id=current_user.id)
             if space_id
-            else svc.ensure_collection_chat_room(project_id, collection_id, actor_user_id=current_user.id)
+            else svc.ensure_collection_chat_room(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, collection_id, actor_user_id=current_user.id)
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -398,6 +409,8 @@ def list_study_chat_messages(
     try:
         if space_id:
             svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.get_collection_any(collection_id)
         else:
             svc.get_collection(project_id, collection_id)
         items, total = svc.list_study_chat_messages(
@@ -433,6 +446,8 @@ async def create_study_chat_message(
     try:
         if space_id:
             svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.get_collection_any(collection_id)
         else:
             svc.get_collection(project_id, collection_id)
         reply_to_message_id = uuid.UUID(payload.reply_to_message_id) if payload.reply_to_message_id else None
@@ -470,6 +485,8 @@ async def toggle_study_chat_reaction(
     try:
         if space_id:
             svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.get_collection_any(collection_id)
         else:
             svc.get_collection(project_id, collection_id)
         message = svc.toggle_study_chat_reaction(
@@ -513,6 +530,8 @@ async def websocket_study_chat(
         try:
             if raw_space_id:
                 svc.get_collection_for_space(uuid.UUID(raw_space_id), collection_id)
+            elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+                svc.get_collection_any(collection_id)
             else:
                 svc.get_collection(project_id, collection_id)
             if not svc.can_access_collection_chat(collection_id, user_id):
@@ -560,6 +579,7 @@ def update_collection(
     try:
         params = dict(
             title=payload.title,
+            space_ids=[uuid.UUID(item) for item in payload.space_ids] if payload.space_ids is not None else None,
             description=payload.description,
             hypothesis=payload.hypothesis,
             open_questions=payload.open_questions,
@@ -580,7 +600,11 @@ def update_collection(
             paper_sections=[item.model_dump(mode="json") for item in payload.paper_sections] if payload.paper_sections is not None else None,
             output_status=payload.output_status,
         )
-        item = svc.update_collection_for_space(uuid.UUID(space_id), collection_id, **params) if space_id else svc.update_collection(project_id, collection_id, **params)
+        item = (
+            svc.update_collection_for_space(uuid.UUID(space_id), collection_id, **params)
+            if space_id else
+            svc.update_collection(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, collection_id, **params)
+        )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -598,7 +622,10 @@ def audit_collection_paper_claims(
 
     svc = ResearchService(db)
     try:
-        audits = PaperClaimAuditAgent().audit_collection_claims(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
+        effective_project_id = project_id
+        if effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            effective_project_id = svc.get_collection_any(collection_id).project_id or GLOBAL_RESEARCH_PROJECT_ID
+        audits = PaperClaimAuditAgent().audit_collection_claims(effective_project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
         audit_payload = [
             {
                 "claim_id": audit.claim_id,
@@ -615,17 +642,21 @@ def audit_collection_paper_claims(
         item = (
             svc.apply_paper_claim_audits_for_space(uuid.UUID(space_id), collection_id, audits=audit_payload)
             if space_id else
-            svc.apply_paper_claim_audits(project_id, collection_id, audits=audit_payload)
+            svc.apply_paper_claim_audits(effective_project_id, collection_id, audits=audit_payload)
         )
         if space_id:
             sid = uuid.UUID(space_id)
             members_data = svc.list_collection_members_for_space(sid, collection_id)
             wbs = svc.get_wbs_links_for_space(sid, collection_id)
             meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        elif effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            members_data = svc._list_collection_members_common(collection_id)
+            wbs = {"wp_ids": [], "task_ids": [], "deliverable_ids": []}
+            meetings = []
         else:
-            members_data = svc.list_collection_members(project_id, collection_id)
-            wbs = svc.get_wbs_links(project_id, collection_id)
-            meetings = svc.list_collection_meetings(project_id, collection_id)
+            members_data = svc.list_collection_members(effective_project_id, collection_id)
+            wbs = svc.get_wbs_links(effective_project_id, collection_id)
+            meetings = svc.list_collection_meetings(effective_project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -654,7 +685,10 @@ def build_collection_paper_outline(
 
     svc = ResearchService(db)
     try:
-        sections = PaperOutlineAgent().build_collection_outline(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
+        effective_project_id = project_id
+        if effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            effective_project_id = svc.get_collection_any(collection_id).project_id or GLOBAL_RESEARCH_PROJECT_ID
+        sections = PaperOutlineAgent().build_collection_outline(effective_project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
         paper_sections = [
             {
                 "id": str(uuid.uuid4()),
@@ -670,17 +704,21 @@ def build_collection_paper_outline(
         item = (
             svc.update_collection_for_space(uuid.UUID(space_id), collection_id, paper_sections=paper_sections)
             if space_id else
-            svc.update_collection(project_id, collection_id, paper_sections=paper_sections)
+            svc.update_collection(effective_project_id, collection_id, paper_sections=paper_sections)
         )
         if space_id:
             sid = uuid.UUID(space_id)
             members_data = svc.list_collection_members_for_space(sid, collection_id)
             wbs = svc.get_wbs_links_for_space(sid, collection_id)
             meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        elif effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            members_data = svc._list_collection_members_common(collection_id)
+            wbs = {"wp_ids": [], "task_ids": [], "deliverable_ids": []}
+            meetings = []
         else:
-            members_data = svc.list_collection_members(project_id, collection_id)
-            wbs = svc.get_wbs_links(project_id, collection_id)
-            meetings = svc.list_collection_meetings(project_id, collection_id)
+            members_data = svc.list_collection_members(effective_project_id, collection_id)
+            wbs = svc.get_wbs_links(effective_project_id, collection_id)
+            meetings = svc.list_collection_meetings(effective_project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -709,8 +747,15 @@ def draft_collection_paper_from_gap(
 
     svc = ResearchService(db)
     try:
-        current = svc.get_collection_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.get_collection(project_id, collection_id)
-        draft = PaperGapAgent().build_gap_draft(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
+        current = (
+            svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+            if space_id else
+            svc.get_collection_any(collection_id)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.get_collection(project_id, collection_id)
+        )
+        effective_project_id = current.project_id or GLOBAL_RESEARCH_PROJECT_ID
+        draft = PaperGapAgent().build_gap_draft(effective_project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
         existing_questions = [item for item in (current.paper_questions or []) if isinstance(item, dict)]
         existing_texts = {
             " ".join(str(item.get("text") or "").strip().lower().split())
@@ -727,17 +772,21 @@ def draft_collection_paper_from_gap(
         item = (
             svc.update_collection_for_space(uuid.UUID(space_id), collection_id, paper_motivation=draft.motivation or current.paper_motivation, paper_questions=next_questions)
             if space_id else
-            svc.update_collection(project_id, collection_id, paper_motivation=draft.motivation or current.paper_motivation, paper_questions=next_questions)
+            svc.update_collection(effective_project_id, collection_id, paper_motivation=draft.motivation or current.paper_motivation, paper_questions=next_questions)
         )
         if space_id:
             sid = uuid.UUID(space_id)
             members_data = svc.list_collection_members_for_space(sid, collection_id)
             wbs = svc.get_wbs_links_for_space(sid, collection_id)
             meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        elif effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            members_data = svc._list_collection_members_common(collection_id)
+            wbs = {"wp_ids": [], "task_ids": [], "deliverable_ids": []}
+            meetings = []
         else:
-            members_data = svc.list_collection_members(project_id, collection_id)
-            wbs = svc.get_wbs_links(project_id, collection_id)
-            meetings = svc.list_collection_meetings(project_id, collection_id)
+            members_data = svc.list_collection_members(effective_project_id, collection_id)
+            wbs = svc.get_wbs_links(effective_project_id, collection_id)
+            meetings = svc.list_collection_meetings(effective_project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -767,12 +816,19 @@ def review_collection_iteration(
 
     svc = ResearchService(db)
     try:
-        current = svc.get_collection_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.get_collection(project_id, collection_id)
+        current = (
+            svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+            if space_id else
+            svc.get_collection_any(collection_id)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.get_collection(project_id, collection_id)
+        )
         iterations = [item for item in (current.study_iterations or []) if isinstance(item, dict)]
         target = next((item for item in iterations if str(item.get("id") or "") == iteration_id), None)
         if not target:
             raise NotFoundError("Iteration not found.")
-        review = IterationReviewAgent().review_iteration(project_id, collection_id, target, db, space_id=uuid.UUID(space_id) if space_id else None)
+        effective_project_id = current.project_id or GLOBAL_RESEARCH_PROJECT_ID
+        review = IterationReviewAgent().review_iteration(effective_project_id, collection_id, target, db, space_id=uuid.UUID(space_id) if space_id else None)
         next_iterations = []
         for item in iterations:
             if str(item.get("id") or "") != iteration_id:
@@ -787,16 +843,20 @@ def review_collection_iteration(
             merged["next_actions"] = review.next_actions
             merged["reviewed_at"] = review.reviewed_at
             next_iterations.append(merged)
-        item = svc.update_collection_for_space(uuid.UUID(space_id), collection_id, study_iterations=next_iterations) if space_id else svc.update_collection(project_id, collection_id, study_iterations=next_iterations)
+        item = svc.update_collection_for_space(uuid.UUID(space_id), collection_id, study_iterations=next_iterations) if space_id else svc.update_collection(effective_project_id, collection_id, study_iterations=next_iterations)
         if space_id:
             sid = uuid.UUID(space_id)
             members_data = svc.list_collection_members_for_space(sid, collection_id)
             wbs = svc.get_wbs_links_for_space(sid, collection_id)
             meetings = svc.list_collection_meetings_for_space(sid, collection_id)
+        elif effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            members_data = svc._list_collection_members_common(collection_id)
+            wbs = {"wp_ids": [], "task_ids": [], "deliverable_ids": []}
+            meetings = []
         else:
-            members_data = svc.list_collection_members(project_id, collection_id)
-            wbs = svc.get_wbs_links(project_id, collection_id)
-            meetings = svc.list_collection_meetings(project_id, collection_id)
+            members_data = svc.list_collection_members(effective_project_id, collection_id)
+            wbs = svc.get_wbs_links(effective_project_id, collection_id)
+            meetings = svc.list_collection_meetings(effective_project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -823,8 +883,12 @@ def compare_collection_results(
 ) -> ResultComparisonRead:
     from app.agents.result_comparison_agent import ResultComparisonAgent
 
+    svc = ResearchService(db)
     try:
-        report = ResultComparisonAgent().compare_recent_results(project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
+        effective_project_id = project_id
+        if effective_project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            effective_project_id = svc.get_collection_any(collection_id).project_id or GLOBAL_RESEARCH_PROJECT_ID
+        report = ResultComparisonAgent().compare_recent_results(effective_project_id, collection_id, db, space_id=uuid.UUID(space_id) if space_id else None)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
@@ -865,7 +929,11 @@ def list_collection_members(
 ) -> list[CollectionMemberRead]:
     svc = ResearchService(db)
     try:
-        members_data = svc.list_collection_members_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.list_collection_members(project_id, collection_id)
+        members_data = (
+            svc.list_collection_members_for_space(uuid.UUID(space_id), collection_id)
+            if space_id else
+            svc.list_collection_members(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, collection_id)
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [_member_read(d) for d in members_data]
@@ -886,7 +954,7 @@ def add_collection_member(
         data = (
             svc.add_collection_member_for_space(uuid.UUID(space_id), collection_id, member_id=member_uuid, user_id=user_uuid, role=payload.role)
             if space_id else
-            svc.add_collection_member(project_id, collection_id, member_id=member_uuid, user_id=user_uuid, role=payload.role)
+            svc.add_collection_member(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, collection_id, member_id=member_uuid, user_id=user_uuid, role=payload.role)
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid member/user UUID.") from exc
@@ -910,7 +978,7 @@ def update_collection_member(
         data = (
             svc.update_collection_member_role_for_space(uuid.UUID(space_id), collection_id, member_record_id, role=payload.role)
             if space_id else
-            svc.update_collection_member_role(project_id, collection_id, member_record_id, role=payload.role)
+            svc.update_collection_member_role(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, collection_id, member_record_id, role=payload.role)
         )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
@@ -931,7 +999,7 @@ def remove_collection_member(
         if space_id:
             svc.remove_collection_member_for_space(uuid.UUID(space_id), collection_id, member_record_id)
         else:
-            svc.remove_collection_member(project_id, collection_id, member_record_id)
+            svc.remove_collection_member(None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id, collection_id, member_record_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1009,6 +1077,15 @@ def list_references(
                 page=page,
                 page_size=page_size,
             )
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            items, total = svc.list_references_any(
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+                reading_status=reading_status,
+                tag=tag,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
         else:
             items, total = svc.list_references(
                 project_id,
@@ -1038,7 +1115,7 @@ def create_reference(
     current_user: UserAccount = Depends(get_current_user),
 ) -> ReferenceRead:
     svc = ResearchService(db)
-    member_id = _resolve_member_id(db, current_user, project_id)
+    member_id = None if project_id == GLOBAL_RESEARCH_PROJECT_ID else _resolve_member_id(db, current_user, project_id)
     try:
         params = dict(
             title=payload.title,
@@ -1056,7 +1133,13 @@ def create_reference(
             added_by_member_id=member_id,
             created_by_user_id=current_user.id,
         )
-        item = svc.create_reference_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_reference(project_id, **params)
+        item = (
+            svc.create_reference_for_space(uuid.UUID(space_id), **params)
+            if space_id else
+            svc.create_reference_for_collection(uuid.UUID(payload.collection_id), **params)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID and payload.collection_id else
+            svc.create_reference(project_id, **params)
+        )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -1073,7 +1156,7 @@ def import_bibtex(
 ) -> BibtexImportRead:
     from app.services.bibtex_parser import parse_bibtex
 
-    member_id = _resolve_member_id(db, current_user, project_id)
+    member_id = None if project_id == GLOBAL_RESEARCH_PROJECT_ID else _resolve_member_id(db, current_user, project_id)
     entries = parse_bibtex(payload.bibtex)
     if not entries:
         raise HTTPException(status_code=400, detail="No valid BibTeX entries found")
@@ -1097,7 +1180,13 @@ def import_bibtex(
                 added_by_member_id=member_id,
                 created_by_user_id=current_user.id,
             )
-            item = svc.create_reference_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_reference(project_id, **params)
+            item = (
+                svc.create_reference_for_space(uuid.UUID(space_id), **params)
+                if space_id else
+                svc.create_reference_for_collection(collection_id, **params)
+                if project_id == GLOBAL_RESEARCH_PROJECT_ID and collection_id else
+                svc.create_reference(project_id, **params)
+            )
             created.append(_reference_read(svc, item))
         except Exception as exc:
             errors.append(f"{entry.get('cite_key', '?')}: {exc}")
@@ -1113,7 +1202,13 @@ def get_reference(
 ) -> ReferenceRead:
     svc = ResearchService(db)
     try:
-        item = svc.get_reference_for_space(uuid.UUID(space_id), reference_id) if space_id else svc.get_reference(project_id, reference_id)
+        item = (
+            svc.get_reference_for_space(uuid.UUID(space_id), reference_id)
+            if space_id else
+            svc.get_reference_any(reference_id)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.get_reference(project_id, reference_id)
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _reference_read(svc, item)
@@ -1143,7 +1238,13 @@ def update_reference(
             reading_status=payload.reading_status,
             bibliography_visibility=payload.bibliography_visibility,
         )
-        item = svc.update_reference_for_space(uuid.UUID(space_id), reference_id, **params) if space_id else svc.update_reference(project_id, reference_id, **params)
+        item = (
+            svc.update_reference_for_space(uuid.UUID(space_id), reference_id, **params)
+            if space_id else
+            svc.update_reference_any(reference_id, **params)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.update_reference(project_id, reference_id, **params)
+        )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -2150,6 +2251,8 @@ def delete_reference(
     try:
         if space_id:
             svc.delete_reference_for_space(uuid.UUID(space_id), reference_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.delete_reference_any(reference_id)
         else:
             svc.delete_reference(project_id, reference_id)
     except NotFoundError as exc:
@@ -2169,6 +2272,8 @@ def move_reference(
         item = (
             svc.move_reference_for_space(uuid.UUID(space_id), reference_id, collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None)
             if space_id else
+            svc.move_reference_any(reference_id, collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.move_reference(project_id, reference_id, collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None)
         )
     except NotFoundError as exc:
@@ -2189,6 +2294,8 @@ def update_reference_status(
         item = (
             svc.update_reference_status_for_space(uuid.UUID(space_id), reference_id, reading_status=payload.reading_status)
             if space_id else
+            svc.update_reference_status_any(reference_id, reading_status=payload.reading_status)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.update_reference_status(project_id, reference_id, reading_status=payload.reading_status)
         )
     except (NotFoundError, ValidationError) as exc:
@@ -2227,6 +2334,15 @@ def list_notes(
                 page_size=page_size,
             )
             if space_id else
+            svc.list_notes_any(
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+                lane=lane,
+                note_type=note_type,
+                author_member_id=uuid.UUID(author_member_id) if author_member_id else None,
+                page=page,
+                page_size=page_size,
+            )
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.list_notes(
                 project_id,
                 collection_id=uuid.UUID(collection_id) if collection_id else None,
@@ -2256,12 +2372,11 @@ def create_note(
     current_user: UserAccount = Depends(get_current_user),
 ) -> NoteRead:
     svc = ResearchService(db)
-    member_id = _resolve_member_id(db, current_user, project_id)
+    member_id = None if project_id == GLOBAL_RESEARCH_PROJECT_ID else _resolve_member_id(db, current_user, project_id)
     try:
         params = dict(
             title=payload.title,
             content=payload.content,
-            collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
             lane=payload.lane,
             note_type=payload.note_type,
             tags=payload.tags,
@@ -2269,7 +2384,13 @@ def create_note(
             linked_reference_ids=payload.linked_reference_ids,
             linked_file_ids=payload.linked_file_ids,
         )
-        item = svc.create_note_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_note(project_id, **params)
+        item = (
+            svc.create_note_for_space(uuid.UUID(space_id), **params)
+            if space_id else
+            svc.create_note_for_collection(uuid.UUID(payload.collection_id), **params)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID and payload.collection_id else
+            svc.create_note(project_id, **params)
+        )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -2285,7 +2406,13 @@ def get_note(
 ) -> NoteRead:
     svc = ResearchService(db)
     try:
-        item = svc.get_note_for_space(uuid.UUID(space_id), note_id) if space_id else svc.get_note(project_id, note_id)
+        item = (
+            svc.get_note_for_space(uuid.UUID(space_id), note_id)
+            if space_id else
+            svc.get_note_any(note_id)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.get_note(project_id, note_id)
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _note_read(svc, item)
@@ -2310,7 +2437,13 @@ def update_note(
             tags=payload.tags,
             linked_file_ids=payload.linked_file_ids,
         )
-        item = svc.update_note_for_space(uuid.UUID(space_id), note_id, **params) if space_id else svc.update_note(project_id, note_id, **params)
+        item = (
+            svc.update_note_for_space(uuid.UUID(space_id), note_id, **params)
+            if space_id else
+            svc.update_note_any(note_id, **params)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.update_note(project_id, note_id, **params)
+        )
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -2328,6 +2461,8 @@ def delete_note(
     try:
         if space_id:
             svc.delete_note_for_space(uuid.UUID(space_id), note_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.delete_note_any(note_id)
         else:
             svc.delete_note(project_id, note_id)
     except NotFoundError as exc:
@@ -2347,6 +2482,8 @@ def set_note_references(
         item = (
             svc.set_note_references_for_space(uuid.UUID(space_id), note_id, reference_ids=payload.reference_ids)
             if space_id else
+            svc.set_note_references_any(note_id, reference_ids=payload.reference_ids)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.set_note_references(project_id, note_id, reference_ids=payload.reference_ids)
         )
     except NotFoundError as exc:
@@ -2368,12 +2505,14 @@ def list_study_files(
         items, total = (
             svc.list_study_files_for_space_scope(uuid.UUID(space_id), collection_id, page=page, page_size=page_size)
             if space_id else
+            svc.list_study_files_for_collection_scope(collection_id, page=page, page_size=page_size)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.list_study_files(project_id, collection_id, page=page, page_size=page_size)
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return StudyFileListRead(
-        items=[_study_file_read(project_id, svc, item) for item in items],
+        items=[_study_file_read(project_id if project_id != GLOBAL_RESEARCH_PROJECT_ID else (item.project_id or GLOBAL_RESEARCH_PROJECT_ID), svc, item) for item in items],
         page=page,
         page_size=page_size,
         total=total,
@@ -2401,6 +2540,14 @@ def upload_study_file(
                 file_stream=file.file,
             )
             if space_id else
+            svc.upload_study_file_for_collection(
+                collection_id,
+                actor_user_id=current_user.id,
+                file_name=file.filename or "file.bin",
+                content_type=file.content_type,
+                file_stream=file.file,
+            )
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.upload_study_file(
                 project_id,
                 collection_id,
@@ -2413,7 +2560,8 @@ def upload_study_file(
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
-    return _study_file_read(project_id, svc, item)
+    resolved_project_id = project_id if project_id != GLOBAL_RESEARCH_PROJECT_ID else (item.project_id or GLOBAL_RESEARCH_PROJECT_ID)
+    return _study_file_read(resolved_project_id, svc, item)
 
 
 @router.get("/{project_id}/research/collections/{collection_id}/files/{file_id}/download")
@@ -2429,6 +2577,8 @@ def download_study_file(
         item = (
             svc.get_study_file_for_space(uuid.UUID(space_id), collection_id, file_id)
             if space_id else
+            svc.get_study_file_any(collection_id, file_id)
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
             svc.get_study_file(project_id, collection_id, file_id)
         )
     except NotFoundError as exc:
@@ -2451,6 +2601,8 @@ def delete_study_file(
     try:
         if space_id:
             svc.delete_study_file_for_space(uuid.UUID(space_id), collection_id, file_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.delete_study_file_any(collection_id, file_id)
         else:
             svc.delete_study_file(project_id, collection_id, file_id)
     except NotFoundError as exc:
@@ -2470,11 +2622,25 @@ def summarize_reference(
     db: Session = Depends(get_db),
 ) -> AISummaryRead:
     from app.services.research_ai_service import ResearchAIService
-    svc = ResearchAIService(db)
+    ai_svc = ResearchAIService(db)
+    research_svc = ResearchService(db)
     try:
-        ref = svc.summarize_reference_for_space(uuid.UUID(space_id), reference_id) if space_id else svc.summarize_reference(project_id, reference_id)
+        if space_id:
+            ref = ai_svc.summarize_reference_for_space(uuid.UUID(space_id), reference_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            current = research_svc.get_reference_any(reference_id)
+            if current.research_space_id:
+                ref = ai_svc.summarize_reference_for_space(current.research_space_id, reference_id)
+            elif current.project_id:
+                ref = ai_svc.summarize_reference(current.project_id, reference_id)
+            else:
+                raise ValidationError("AI summary requires the study to be linked to a space or project.")
+        else:
+            ref = ai_svc.summarize_reference(project_id, reference_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"AI summarization failed: {exc}") from exc
     return AISummaryRead(ai_summary=ref.ai_summary, ai_summary_at=ref.ai_summary_at)
@@ -2505,11 +2671,25 @@ def synthesize_collection(
     db: Session = Depends(get_db),
 ) -> AISynthesisRead:
     from app.services.research_ai_service import ResearchAIService
-    svc = ResearchAIService(db)
+    ai_svc = ResearchAIService(db)
+    research_svc = ResearchService(db)
     try:
-        col = svc.synthesize_collection_for_space(uuid.UUID(space_id), collection_id) if space_id else svc.synthesize_collection(project_id, collection_id)
+        if space_id:
+            col = ai_svc.synthesize_collection_for_space(uuid.UUID(space_id), collection_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            current = research_svc.get_collection_any(collection_id)
+            if current.research_space_id:
+                col = ai_svc.synthesize_collection_for_space(current.research_space_id, collection_id)
+            elif current.project_id:
+                col = ai_svc.synthesize_collection(current.project_id, collection_id)
+            else:
+                raise ValidationError("AI synthesis requires the study to be linked to a space or project.")
+        else:
+            col = ai_svc.synthesize_collection(project_id, collection_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"AI synthesis failed: {exc}") from exc
     return AISynthesisRead(ai_synthesis=col.ai_synthesis, ai_synthesis_at=col.ai_synthesis_at)
@@ -2533,9 +2713,11 @@ def _research_space_read(item) -> ResearchSpaceRead:
 
 
 def _collection_read(svc: ResearchService, item) -> CollectionRead:
+    space_ids = [str(space_id) for space_id in svc.collection_space_ids(item.id)]
     return CollectionRead(
         id=str(item.id),
         research_space_id=str(item.research_space_id) if item.research_space_id else None,
+        space_ids=space_ids,
         project_id=str(item.project_id) if item.project_id else None,
         title=item.title,
         description=item.description,

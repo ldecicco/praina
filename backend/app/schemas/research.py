@@ -42,6 +42,7 @@ class ResearchSpaceListRead(PaginatedResponse):
 
 class CollectionCreate(BaseModel):
     title: str
+    space_ids: list[str] = Field(default_factory=list)
     description: str | None = None
     hypothesis: str | None = None
     open_questions: list[str] = Field(default_factory=list)
@@ -65,6 +66,7 @@ class CollectionCreate(BaseModel):
 
 class CollectionUpdate(BaseModel):
     title: str | None = None
+    space_ids: list[str] | None = None
     description: str | None = None
     hypothesis: str | None = None
     open_questions: list[str] | None = None
@@ -219,6 +221,7 @@ class PaperSectionRead(BaseModel):
 class CollectionRead(BaseModel):
     id: str
     research_space_id: str | None = None
+    space_ids: list[str] = Field(default_factory=list)
     project_id: str | None = None
     title: str
     description: str | None = None

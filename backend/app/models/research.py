@@ -89,6 +89,13 @@ research_collection_meetings = Table(
     Column("meeting_id", UUID(as_uuid=True), ForeignKey("meeting_records.id", ondelete="CASCADE"), primary_key=True),
 )
 
+research_collection_spaces = Table(
+    "research_collection_spaces",
+    Base.metadata,
+    Column("collection_id", UUID(as_uuid=True), ForeignKey("research_collections.id", ondelete="CASCADE"), primary_key=True),
+    Column("space_id", UUID(as_uuid=True), ForeignKey("research_spaces.id", ondelete="CASCADE"), primary_key=True),
+)
+
 research_note_references = Table(
     "research_note_references",
     Base.metadata,

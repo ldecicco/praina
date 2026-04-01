@@ -2276,6 +2276,7 @@ export const api = {
   },
   createResearchCollection(projectId: string, data: {
     title: string;
+    space_ids?: string[];
     description?: string;
     hypothesis?: string;
     open_questions?: string[];

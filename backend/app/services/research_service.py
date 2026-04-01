@@ -55,6 +55,7 @@ from app.models.research import (
     bibliography_reference_tags,
     research_collection_deliverables,
     research_collection_meetings,
+    research_collection_spaces,
     research_collection_tasks,
     research_collection_wps,
     research_note_references,
@@ -71,6 +72,8 @@ from app.schemas.document import DocumentUploadPayload
 
 logger = logging.getLogger(__name__)
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+GLOBAL_RESEARCH_PROJECT_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+UNSET = object()
 
 
 class DuplicateBibliographyError(ValidationError):
@@ -404,6 +407,42 @@ class ResearchService:
             )
         )
 
+    def collection_space_ids(self, collection_id: uuid.UUID) -> list[uuid.UUID]:
+        return list(
+            self.db.scalars(
+                select(research_collection_spaces.c.space_id)
+                .where(research_collection_spaces.c.collection_id == collection_id)
+                .order_by(cast(research_collection_spaces.c.space_id, Text))
+            ).all()
+        )
+
+    def _set_collection_spaces(self, collection_id: uuid.UUID, space_ids: list[uuid.UUID] | None) -> list[uuid.UUID]:
+        normalized: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = set()
+        for space_id in space_ids or []:
+            if space_id in seen:
+                continue
+            self._get_space_record(space_id)
+            normalized.append(space_id)
+            seen.add(space_id)
+        self.db.execute(
+            delete(research_collection_spaces).where(research_collection_spaces.c.collection_id == collection_id)
+        )
+        for space_id in normalized:
+            self.db.execute(
+                insert(research_collection_spaces).values(collection_id=collection_id, space_id=space_id)
+            )
+        item = self.db.get(ResearchCollection, collection_id)
+        if item:
+            item.research_space_id = normalized[0] if normalized else None
+        return normalized
+
+    def get_collection_any(self, collection_id: uuid.UUID) -> ResearchCollection:
+        item = self.db.get(ResearchCollection, collection_id)
+        if not item:
+            raise NotFoundError("Collection not found.")
+        return item
+
     def _study_files_root(self) -> Path:
         return Path(settings.documents_storage_path) / "research-study-files"
 
@@ -503,7 +542,14 @@ class ResearchService:
         page_size: int = 50,
     ) -> tuple[list[ResearchCollection], int]:
         self._get_space_record(space_id)
-        stmt = select(ResearchCollection).where(ResearchCollection.research_space_id == space_id)
+        stmt = (
+            select(ResearchCollection)
+            .join(
+                research_collection_spaces,
+                research_collection_spaces.c.collection_id == ResearchCollection.id,
+            )
+            .where(research_collection_spaces.c.space_id == space_id)
+        )
         if status_filter:
             stmt = stmt.where(ResearchCollection.status == status_filter)
         if member_id:
@@ -523,8 +569,13 @@ class ResearchService:
 
     def get_collection_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID) -> ResearchCollection:
         item = self.db.scalar(
-            select(ResearchCollection).where(
-                ResearchCollection.research_space_id == space_id,
+            select(ResearchCollection)
+            .join(
+                research_collection_spaces,
+                research_collection_spaces.c.collection_id == ResearchCollection.id,
+            )
+            .where(
+                research_collection_spaces.c.space_id == space_id,
                 ResearchCollection.id == collection_id,
             )
         )
@@ -537,16 +588,24 @@ class ResearchService:
         space_id: uuid.UUID,
         **kwargs,
     ) -> ResearchCollection:
-        self._get_space_record(space_id)
+        requested_space_ids = [space_id]
+        for extra_space_id in kwargs.pop("space_ids", []) or []:
+            extra_uuid = uuid.UUID(str(extra_space_id))
+            if extra_uuid != space_id:
+                requested_space_ids.append(extra_uuid)
         project_id = self._get_space_project_id(space_id)
-        item = self.create_collection(project_id, **kwargs) if project_id else self._create_collection_without_project(**kwargs)
-        item.research_space_id = space_id
-        item.project_id = project_id
-        self.db.commit()
-        self.db.refresh(item)
-        return item
+        return self.create_collection(
+            project_id,
+            space_ids=requested_space_ids,
+            **kwargs,
+        ) if project_id else self._create_collection_without_project(
+            space_ids=requested_space_ids,
+            **kwargs,
+        )
 
     def _create_collection_without_project(self, **kwargs) -> ResearchCollection:
+        raw_space_ids = kwargs.get("space_ids") or []
+        space_ids = [item if isinstance(item, uuid.UUID) else uuid.UUID(str(item)) for item in raw_space_ids]
         authors, questions, claims, sections, results = self._normalize_paper_workspace(
             study_results=kwargs.get("study_results"),
             paper_authors=kwargs.get("paper_authors"),
@@ -561,6 +620,7 @@ class ResearchService:
         iterations = self._study_iteration_items(kwargs.get("study_iterations"), set(), set(), set(), {str(item["id"]) for item in results})
         item = ResearchCollection(
             project_id=None,
+            research_space_id=space_ids[0] if space_ids else None,
             title=kwargs["title"][:255].strip(),
             description=(kwargs.get("description") or "").strip() or None,
             hypothesis=(kwargs.get("hypothesis") or "").strip() or None,
@@ -584,22 +644,35 @@ class ResearchService:
             created_by_member_id=kwargs.get("created_by_member_id"),
         )
         self.db.add(item)
+        self.db.flush()
+        self._set_collection_spaces(item.id, space_ids)
+        creator_user_id = kwargs.get("creator_user_id")
+        if creator_user_id:
+            self.db.add(
+                ResearchCollectionMember(
+                    collection_id=item.id,
+                    user_account_id=creator_user_id,
+                    role=CollectionMemberRole.lead,
+                )
+            )
         self.db.commit()
         self.db.refresh(item)
         return item
 
     def update_collection_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID, **kwargs) -> ResearchCollection:
         self.get_collection_for_space(space_id, collection_id)
+        requested_space_ids = [space_id]
+        if kwargs.get("space_ids") is not None:
+            requested_space_ids = [space_id]
+            for extra_space_id in kwargs.get("space_ids") or []:
+                extra_uuid = extra_space_id if isinstance(extra_space_id, uuid.UUID) else uuid.UUID(str(extra_space_id))
+                if extra_uuid != space_id:
+                    requested_space_ids.append(extra_uuid)
+            kwargs["space_ids"] = requested_space_ids
         project_id = self._get_space_project_id(space_id)
         if project_id:
-            item = self.update_collection(project_id, collection_id, **kwargs)
-        else:
-            item = self._update_collection_without_project(collection_id, **kwargs)
-        item.research_space_id = space_id
-        item.project_id = project_id
-        self.db.commit()
-        self.db.refresh(item)
-        return item
+            return self.update_collection(project_id, collection_id, **kwargs)
+        return self._update_collection_without_project(collection_id, **kwargs)
 
     def _update_collection_without_project(self, collection_id: uuid.UUID, **kwargs) -> ResearchCollection:
         item = self.db.get(ResearchCollection, collection_id)
@@ -677,6 +750,12 @@ class ResearchService:
             item.paper_sections = sections
         if "output_status" in kwargs and kwargs["output_status"] is not None:
             item.output_status = self._output_status(kwargs["output_status"])
+        if "space_ids" in kwargs and kwargs["space_ids"] is not UNSET:
+            normalized_space_ids = [
+                entry if isinstance(entry, uuid.UUID) else uuid.UUID(str(entry))
+                for entry in (kwargs["space_ids"] or [])
+            ]
+            self._set_collection_spaces(item.id, normalized_space_ids)
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -1170,15 +1249,17 @@ class ResearchService:
 
     def list_collections(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         *,
         status_filter: str | None = None,
         member_id: uuid.UUID | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[ResearchCollection], int]:
-        self._get_project(project_id)
-        stmt = select(ResearchCollection).where(ResearchCollection.project_id == project_id)
+        stmt = select(ResearchCollection)
+        if project_id and project_id != GLOBAL_RESEARCH_PROJECT_ID:
+            self._get_project(project_id)
+            stmt = stmt.where(ResearchCollection.project_id == project_id)
         if status_filter:
             stmt = stmt.where(ResearchCollection.status == status_filter)
         if member_id:
@@ -1197,6 +1278,8 @@ class ResearchService:
         return items, total
 
     def get_collection(self, project_id: uuid.UUID, collection_id: uuid.UUID) -> ResearchCollection:
+        if project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            return self.get_collection_any(collection_id)
         item = self.db.scalar(
             select(ResearchCollection).where(
                 ResearchCollection.project_id == project_id,
@@ -1209,9 +1292,10 @@ class ResearchService:
 
     def create_collection(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         *,
         title: str,
+        space_ids: list[uuid.UUID] | None = None,
         description: str | None = None,
         hypothesis: str | None = None,
         open_questions: list[str] | None = None,
@@ -1232,8 +1316,46 @@ class ResearchService:
         paper_sections: list[dict] | None = None,
         output_status: str = "not_started",
         created_by_member_id: uuid.UUID | None = None,
+        creator_user_id: uuid.UUID | None = None,
     ) -> ResearchCollection:
+        if (not project_id or project_id == GLOBAL_RESEARCH_PROJECT_ID) and space_ids:
+            linked_project_ids = {
+                linked_project_id
+                for linked_project_id in (self._get_space_project_id(space_id) for space_id in space_ids)
+                if linked_project_id
+            }
+            if len(linked_project_ids) > 1:
+                raise ValidationError("A study cannot span spaces linked to different projects.")
+            if linked_project_ids:
+                project_id = next(iter(linked_project_ids))
+        if not project_id or project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            return self._create_collection_without_project(
+                title=title,
+                space_ids=space_ids,
+                description=description,
+                hypothesis=hypothesis,
+                open_questions=open_questions,
+                status=status,
+                tags=tags,
+                overleaf_url=overleaf_url,
+                paper_motivation=paper_motivation,
+                target_output_title=target_output_title,
+                target_venue=target_venue,
+                registration_deadline=registration_deadline,
+                submission_deadline=submission_deadline,
+                decision_date=decision_date,
+                study_iterations=study_iterations,
+                study_results=study_results,
+                paper_authors=paper_authors,
+                paper_questions=paper_questions,
+                paper_claims=paper_claims,
+                paper_sections=paper_sections,
+                output_status=output_status,
+                created_by_member_id=created_by_member_id,
+                creator_user_id=creator_user_id,
+            )
         self._get_project(project_id)
+        normalized_space_ids = [item if isinstance(item, uuid.UUID) else uuid.UUID(str(item)) for item in (space_ids or [])]
         authors, questions, claims, sections, results = self._normalize_paper_workspace(
             study_results=study_results,
             paper_authors=paper_authors,
@@ -1248,6 +1370,7 @@ class ResearchService:
         iterations = self._study_iteration_items(study_iterations, set(), set(), set(), {str(item["id"]) for item in results})
         item = ResearchCollection(
             project_id=project_id,
+            research_space_id=normalized_space_ids[0] if normalized_space_ids else None,
             title=title[:255].strip(),
             description=(description or "").strip() or None,
             hypothesis=(hypothesis or "").strip() or None,
@@ -1271,16 +1394,19 @@ class ResearchService:
             created_by_member_id=created_by_member_id,
         )
         self.db.add(item)
+        self.db.flush()
+        self._set_collection_spaces(item.id, normalized_space_ids)
         self.db.commit()
         self.db.refresh(item)
         return item
 
     def update_collection(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         collection_id: uuid.UUID,
         *,
         title: str | None = None,
+        space_ids: list[uuid.UUID] | object = UNSET,
         description: str | None = None,
         hypothesis: str | None = None,
         open_questions: list[str] | None = None,
@@ -1301,6 +1427,31 @@ class ResearchService:
         paper_sections: list[dict] | None = None,
         output_status: str | None = None,
     ) -> ResearchCollection:
+        if not project_id or project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            return self._update_collection_without_project(
+                collection_id,
+                title=title,
+                space_ids=space_ids,
+                description=description,
+                hypothesis=hypothesis,
+                open_questions=open_questions,
+                status=status,
+                tags=tags,
+                overleaf_url=overleaf_url,
+                paper_motivation=paper_motivation,
+                target_output_title=target_output_title,
+                target_venue=target_venue,
+                registration_deadline=registration_deadline,
+                submission_deadline=submission_deadline,
+                decision_date=decision_date,
+                study_iterations=study_iterations,
+                study_results=study_results,
+                paper_authors=paper_authors,
+                paper_questions=paper_questions,
+                paper_claims=paper_claims,
+                paper_sections=paper_sections,
+                output_status=output_status,
+            )
         item = self.get_collection(project_id, collection_id)
         if title is not None:
             item.title = title[:255].strip()
@@ -1381,6 +1532,12 @@ class ResearchService:
             item.paper_sections = sections
         if output_status is not None:
             item.output_status = self._output_status(output_status)
+        if space_ids is not UNSET:
+            normalized_space_ids = [
+                entry if isinstance(entry, uuid.UUID) else uuid.UUID(str(entry))
+                for entry in (space_ids or [])
+            ]
+            self._set_collection_spaces(item.id, normalized_space_ids)
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -1504,14 +1661,22 @@ class ResearchService:
         return item
 
     def delete_collection(self, project_id: uuid.UUID, collection_id: uuid.UUID) -> None:
+        if project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            item = self.get_collection_any(collection_id)
+            self.db.delete(item)
+            self.db.commit()
+            return
         item = self.get_collection(project_id, collection_id)
         self.db.delete(item)
         self.db.commit()
 
     # ── collection members ─────────────────────────────────────────────
 
-    def list_collection_members(self, project_id: uuid.UUID, collection_id: uuid.UUID) -> list[dict]:
-        self.get_collection(project_id, collection_id)
+    def list_collection_members(self, project_id: uuid.UUID | None, collection_id: uuid.UUID) -> list[dict]:
+        if project_id:
+            self.get_collection(project_id, collection_id)
+        else:
+            self.get_collection_any(collection_id)
         return self._list_collection_members_common(collection_id)
 
     def list_collection_members_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID) -> list[dict]:
@@ -1621,13 +1786,16 @@ class ResearchService:
 
     def update_collection_member_role(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         collection_id: uuid.UUID,
         member_record_id: uuid.UUID,
         *,
         role: str,
     ) -> dict:
-        self.get_collection(project_id, collection_id)
+        if project_id:
+            self.get_collection(project_id, collection_id)
+        else:
+            self.get_collection_any(collection_id)
         cm = self.db.scalar(
             select(ResearchCollectionMember).where(
                 ResearchCollectionMember.collection_id == collection_id,
@@ -1666,15 +1834,18 @@ class ResearchService:
         role: str,
     ) -> dict:
         self.get_collection_for_space(space_id, collection_id)
-        return self.update_collection_member_role(self._require_space_project_id(space_id), collection_id, member_record_id, role=role)
+        return self.update_collection_member_role(self._get_space_project_id(space_id), collection_id, member_record_id, role=role)
 
     def remove_collection_member(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         collection_id: uuid.UUID,
         member_record_id: uuid.UUID,
     ) -> None:
-        self.get_collection(project_id, collection_id)
+        if project_id:
+            self.get_collection(project_id, collection_id)
+        else:
+            self.get_collection_any(collection_id)
         cm = self.db.scalar(
             select(ResearchCollectionMember).where(
                 ResearchCollectionMember.collection_id == collection_id,
@@ -1688,7 +1859,7 @@ class ResearchService:
 
     def remove_collection_member_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID, member_record_id: uuid.UUID) -> None:
         self.get_collection_for_space(space_id, collection_id)
-        self.remove_collection_member(self._require_space_project_id(space_id), collection_id, member_record_id)
+        self.remove_collection_member(self._get_space_project_id(space_id), collection_id, member_record_id)
 
     # ── WBS links ──────────────────────────────────────────────────────
 
@@ -1902,6 +2073,36 @@ class ResearchService:
         )
         return items, total
 
+    def list_references_any(
+        self,
+        *,
+        collection_id: uuid.UUID | None = None,
+        reading_status: str | None = None,
+        tag: str | None = None,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[ResearchReference], int]:
+        stmt = select(ResearchReference)
+        if collection_id:
+            stmt = stmt.where(ResearchReference.collection_id == collection_id)
+        if reading_status:
+            stmt = stmt.where(ResearchReference.reading_status == reading_status)
+        if tag:
+            stmt = stmt.where(ResearchReference.tags.contains([tag]))
+        if search:
+            pattern = f"%{search}%"
+            stmt = stmt.where(ResearchReference.title.ilike(pattern))
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(ResearchReference.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+        return items, total
+
     def get_reference(self, project_id: uuid.UUID, reference_id: uuid.UUID) -> ResearchReference:
         item = self.db.scalar(
             select(ResearchReference).where(
@@ -1920,6 +2121,12 @@ class ResearchService:
                 ResearchReference.id == reference_id,
             )
         )
+        if not item:
+            raise NotFoundError("Reference not found.")
+        return item
+
+    def get_reference_any(self, reference_id: uuid.UUID) -> ResearchReference:
+        item = self.db.get(ResearchReference, reference_id)
         if not item:
             raise NotFoundError("Reference not found.")
         return item
@@ -2024,6 +2231,48 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def create_reference_for_collection(self, collection_id: uuid.UUID, **kwargs) -> ResearchReference:
+        collection = self.get_collection_any(collection_id)
+        primary_space_id = collection.research_space_id
+        project_id = collection.project_id
+        if primary_space_id:
+            return self.create_reference_for_space(primary_space_id, collection_id=collection_id, **kwargs)
+        if project_id:
+            return self.create_reference(project_id, collection_id=collection_id, **kwargs)
+        bibliography = self.create_bibliography_reference(
+            title=kwargs["title"],
+            authors=kwargs.get("authors") or [],
+            year=kwargs.get("year"),
+            venue=kwargs.get("venue"),
+            doi=kwargs.get("doi"),
+            url=kwargs.get("url"),
+            abstract=kwargs.get("abstract"),
+            bibtex_raw=None,
+            visibility=kwargs.get("bibliography_visibility") or "shared",
+            created_by_user_id=kwargs.get("created_by_user_id"),
+        )
+        item = ResearchReference(
+            research_space_id=None,
+            project_id=None,
+            bibliography_reference_id=bibliography.id,
+            title=kwargs["title"][:512].strip(),
+            collection_id=collection_id,
+            authors=kwargs.get("authors") or [],
+            year=kwargs.get("year"),
+            venue=(kwargs.get("venue") or "").strip() or None,
+            doi=(kwargs.get("doi") or "").strip() or None,
+            url=(kwargs.get("url") or "").strip() or None,
+            abstract=(kwargs.get("abstract") or "").strip() or None,
+            document_key=kwargs.get("document_key"),
+            tags=kwargs.get("tags") or [],
+            reading_status=self._reading_status(kwargs.get("reading_status") or "unread"),
+            added_by_member_id=kwargs.get("added_by_member_id"),
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def update_reference(
         self,
         project_id: uuid.UUID,
@@ -2121,8 +2370,56 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def update_reference_any(self, reference_id: uuid.UUID, **kwargs) -> ResearchReference:
+        item = self.get_reference_any(reference_id)
+        if item.project_id:
+            return self.update_reference(item.project_id, reference_id, **kwargs)
+        if item.research_space_id:
+            return self.update_reference_for_space(item.research_space_id, reference_id, **kwargs)
+        if kwargs.get("title") is not None:
+            item.title = kwargs["title"][:512].strip()
+        if kwargs.get("collection_id") is not None:
+            item.collection_id = uuid.UUID(kwargs["collection_id"]) if kwargs["collection_id"] else None
+        if kwargs.get("authors") is not None:
+            item.authors = kwargs["authors"]
+        if kwargs.get("year") is not None:
+            item.year = kwargs["year"]
+        if kwargs.get("venue") is not None:
+            item.venue = kwargs["venue"].strip() or None
+        if kwargs.get("doi") is not None:
+            item.doi = kwargs["doi"].strip() or None
+        if kwargs.get("url") is not None:
+            item.url = kwargs["url"].strip() or None
+        if kwargs.get("abstract") is not None:
+            item.abstract = kwargs["abstract"].strip() or None
+        if kwargs.get("document_key") is not None:
+            item.document_key = uuid.UUID(kwargs["document_key"]) if kwargs["document_key"] else None
+        if kwargs.get("tags") is not None:
+            item.tags = kwargs["tags"]
+        if kwargs.get("reading_status") is not None:
+            item.reading_status = self._reading_status(kwargs["reading_status"])
+        if item.bibliography_reference_id:
+            bibliography = self.get_bibliography_reference(item.bibliography_reference_id)
+            bibliography.title = item.title
+            bibliography.authors = item.authors or []
+            bibliography.year = item.year
+            bibliography.venue = item.venue
+            bibliography.doi = item.doi
+            bibliography.url = item.url
+            bibliography.abstract = item.abstract
+            if kwargs.get("bibliography_visibility") is not None:
+                bibliography.visibility = self._bibliography_visibility(kwargs["bibliography_visibility"])
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def delete_reference_for_space(self, space_id: uuid.UUID, reference_id: uuid.UUID) -> None:
         item = self.get_reference_for_space(space_id, reference_id)
+        self.db.delete(item)
+        self.db.commit()
+
+    def delete_reference_any(self, reference_id: uuid.UUID) -> None:
+        item = self.get_reference_any(reference_id)
         self.db.delete(item)
         self.db.commit()
 
@@ -2133,8 +2430,22 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def move_reference_any(self, reference_id: uuid.UUID, *, collection_id: uuid.UUID | None) -> ResearchReference:
+        item = self.get_reference_any(reference_id)
+        item.collection_id = collection_id
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def update_reference_status_for_space(self, space_id: uuid.UUID, reference_id: uuid.UUID, *, reading_status: str) -> ResearchReference:
         item = self.get_reference_for_space(space_id, reference_id)
+        item.reading_status = self._reading_status(reading_status)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def update_reference_status_any(self, reference_id: uuid.UUID, *, reading_status: str) -> ResearchReference:
+        item = self.get_reference_any(reference_id)
         item.reading_status = self._reading_status(reading_status)
         self.db.commit()
         self.db.refresh(item)
@@ -3792,6 +4103,39 @@ class ResearchService:
         )
         return items, total
 
+    def list_notes_any(
+        self,
+        *,
+        collection_id: uuid.UUID | None = None,
+        lane: str | None = None,
+        note_type: str | None = None,
+        author_member_id: uuid.UUID | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[ResearchNote], int]:
+        stmt = select(ResearchNote)
+        if collection_id:
+            stmt = stmt.where(ResearchNote.collection_id == collection_id)
+        normalized_lane = self._note_lane(lane)
+        if lane is not None:
+            if normalized_lane:
+                stmt = stmt.where(ResearchNote.lane == normalized_lane)
+            else:
+                stmt = stmt.where(ResearchNote.lane.is_(None))
+        if note_type:
+            stmt = stmt.where(ResearchNote.note_type == note_type)
+        if author_member_id:
+            stmt = stmt.where(ResearchNote.author_member_id == author_member_id)
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(ResearchNote.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+        return items, total
+
     def get_note(self, project_id: uuid.UUID, note_id: uuid.UUID) -> ResearchNote:
         item = self.db.scalar(
             select(ResearchNote).where(
@@ -3810,6 +4154,12 @@ class ResearchService:
                 ResearchNote.id == note_id,
             )
         )
+        if not item:
+            raise NotFoundError("Note not found.")
+        return item
+
+    def get_note_any(self, note_id: uuid.UUID) -> ResearchNote:
+        item = self.db.get(ResearchNote, note_id)
         if not item:
             raise NotFoundError("Note not found.")
         return item
@@ -3889,6 +4239,37 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def create_note_for_collection(self, collection_id: uuid.UUID, **kwargs) -> ResearchNote:
+        collection = self.get_collection_any(collection_id)
+        if collection.research_space_id:
+            return self.create_note_for_space(collection.research_space_id, collection_id=collection_id, **kwargs)
+        if collection.project_id:
+            return self.create_note(collection.project_id, collection_id=collection_id, **kwargs)
+        item = ResearchNote(
+            research_space_id=None,
+            project_id=None,
+            title=kwargs["title"][:255].strip(),
+            content=kwargs["content"].strip(),
+            collection_id=collection_id,
+            lane=self._note_lane(kwargs.get("lane")),
+            note_type=self._note_type(kwargs.get("note_type") or "observation"),
+            tags=kwargs.get("tags") or [],
+            author_member_id=kwargs.get("author_member_id"),
+        )
+        self.db.add(item)
+        self.db.flush()
+        if kwargs.get("linked_reference_ids"):
+            for rid in kwargs["linked_reference_ids"]:
+                self.db.execute(insert(research_note_references).values(note_id=item.id, reference_id=uuid.UUID(rid)))
+        if kwargs.get("linked_file_ids"):
+            allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(collection_id)}
+            for file_id in kwargs["linked_file_ids"]:
+                if file_id in allowed_ids:
+                    self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def update_note(
         self,
         project_id: uuid.UUID,
@@ -3951,8 +4332,41 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def update_note_any(self, note_id: uuid.UUID, **kwargs) -> ResearchNote:
+        item = self.get_note_any(note_id)
+        if item.project_id:
+            return self.update_note(item.project_id, note_id, **kwargs)
+        if item.research_space_id:
+            return self.update_note_for_space(item.research_space_id, note_id, **kwargs)
+        if kwargs.get("title") is not None:
+            item.title = kwargs["title"][:255].strip()
+        if kwargs.get("content") is not None:
+            item.content = kwargs["content"].strip()
+        if kwargs.get("collection_id") is not None:
+            item.collection_id = uuid.UUID(kwargs["collection_id"]) if kwargs["collection_id"] else None
+        if kwargs.get("lane") is not None:
+            item.lane = self._note_lane(kwargs["lane"])
+        if kwargs.get("note_type") is not None:
+            item.note_type = self._note_type(kwargs["note_type"])
+        if kwargs.get("tags") is not None:
+            item.tags = kwargs["tags"]
+        if kwargs.get("linked_file_ids") is not None:
+            self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
+            allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
+            for file_id in kwargs["linked_file_ids"]:
+                if file_id in allowed_ids:
+                    self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def delete_note_for_space(self, space_id: uuid.UUID, note_id: uuid.UUID) -> None:
         item = self.get_note_for_space(space_id, note_id)
+        self.db.delete(item)
+        self.db.commit()
+
+    def delete_note_any(self, note_id: uuid.UUID) -> None:
+        item = self.get_note_any(note_id)
         self.db.delete(item)
         self.db.commit()
 
@@ -3986,6 +4400,20 @@ class ResearchService:
         reference_ids: list[str],
     ) -> ResearchNote:
         item = self.get_note_for_space(space_id, note_id)
+        self.db.execute(delete(research_note_references).where(research_note_references.c.note_id == item.id))
+        for rid in reference_ids:
+            self.db.execute(insert(research_note_references).values(note_id=item.id, reference_id=uuid.UUID(rid)))
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def set_note_references_any(
+        self,
+        note_id: uuid.UUID,
+        *,
+        reference_ids: list[str],
+    ) -> ResearchNote:
+        item = self.get_note_any(note_id)
         self.db.execute(delete(research_note_references).where(research_note_references.c.note_id == item.id))
         for rid in reference_ids:
             self.db.execute(insert(research_note_references).values(note_id=item.id, reference_id=uuid.UUID(rid)))
@@ -4099,6 +4527,23 @@ class ResearchService:
         )
         return items, total
 
+    def list_study_files_for_collection_scope(
+        self,
+        collection_id: uuid.UUID,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[list[ResearchStudyFile], int]:
+        self.get_collection_any(collection_id)
+        stmt = select(ResearchStudyFile).where(ResearchStudyFile.collection_id == collection_id)
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(ResearchStudyFile.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            ).all()
+        )
+        return items, total
+
     def upload_study_file(
         self,
         project_id: uuid.UUID,
@@ -4159,6 +4604,53 @@ class ResearchService:
         self.db.refresh(item)
         return item
 
+    def upload_study_file_for_collection(
+        self,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+        file_name: str,
+        content_type: str | None,
+        file_stream: BinaryIO,
+    ) -> ResearchStudyFile:
+        collection = self.get_collection_any(collection_id)
+        if collection.research_space_id:
+            return self.upload_study_file_for_space(
+                collection.research_space_id,
+                collection_id,
+                actor_user_id=actor_user_id,
+                file_name=file_name,
+                content_type=content_type,
+                file_stream=file_stream,
+            )
+        if collection.project_id:
+            return self.upload_study_file(
+                collection.project_id,
+                collection_id,
+                actor_user_id=actor_user_id,
+                file_name=file_name,
+                content_type=content_type,
+                file_stream=file_stream,
+            )
+        file_id = uuid.uuid4()
+        storage_path = self._study_file_storage_path(collection.id, file_id, file_name)
+        file_size_bytes = self._write_study_file(file_stream, storage_path)
+        item = ResearchStudyFile(
+            id=file_id,
+            project_id=None,
+            research_space_id=None,
+            collection_id=collection.id,
+            uploaded_by_user_id=actor_user_id,
+            original_filename=Path(file_name).name or "file.bin",
+            storage_uri=str(storage_path),
+            mime_type=(content_type or "application/octet-stream").strip() or "application/octet-stream",
+            file_size_bytes=file_size_bytes,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
     def get_study_file(self, project_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> ResearchStudyFile:
         self.get_collection(project_id, collection_id)
         item = self.db.scalar(
@@ -4185,6 +4677,18 @@ class ResearchService:
             raise NotFoundError("Study file not found.")
         return item
 
+    def get_study_file_any(self, collection_id: uuid.UUID, file_id: uuid.UUID) -> ResearchStudyFile:
+        self.get_collection_any(collection_id)
+        item = self.db.scalar(
+            select(ResearchStudyFile).where(
+                ResearchStudyFile.collection_id == collection_id,
+                ResearchStudyFile.id == file_id,
+            )
+        )
+        if not item:
+            raise NotFoundError("Study file not found.")
+        return item
+
     def delete_study_file(self, project_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> None:
         item = self.get_study_file(project_id, collection_id, file_id)
         path = Path(item.storage_uri)
@@ -4199,6 +4703,18 @@ class ResearchService:
 
     def delete_study_file_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> None:
         item = self.get_study_file_for_space(space_id, collection_id, file_id)
+        path = Path(item.storage_uri)
+        self.db.delete(item)
+        self.db.commit()
+        if path.exists():
+            path.unlink(missing_ok=True)
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+
+    def delete_study_file_any(self, collection_id: uuid.UUID, file_id: uuid.UUID) -> None:
+        item = self.get_study_file_any(collection_id, file_id)
         path = Path(item.storage_uri)
         self.db.delete(item)
         self.db.commit()

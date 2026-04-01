@@ -1214,6 +1214,7 @@ export type ResearchSpace = {
 export type ResearchCollection = {
   id: string;
   research_space_id: string | null;
+  space_ids: string[];
   project_id: string | null;
   title: string;
   description: string | null;

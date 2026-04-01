@@ -55,6 +55,7 @@ import type {
   ResearchPaperClaim,
   ResearchPaperQuestion,
   ResearchPaperSection,
+  ResearchSpace,
   ResearchStudyFile,
   ResearchStudyIteration,
   ResearchResultComparison,
@@ -370,40 +371,57 @@ function deriveLogTitle(content: string): string {
 
 export function ResearchWorkspace({
   researchSpaceId,
+  availableResearchSpaces,
   selectedProjectId,
   currentUser,
   accessToken,
   bibliographyOnly = false,
   isAdmin = false,
   currentProject = null,
+  onClearResearchSpaceFilter,
+  navigationState,
+  onNavigationStateChange,
   openBibliographyReferenceId = null,
   onOpenBibliographyReferenceConsumed,
   researchTourActive = false,
   researchTourStepId = null,
 }: {
   researchSpaceId: string;
+  availableResearchSpaces: ResearchSpace[];
   selectedProjectId: string;
   currentUser: AuthUser;
   accessToken: string;
   bibliographyOnly?: boolean;
   isAdmin?: boolean;
   currentProject?: Project | null;
+  onClearResearchSpaceFilter?: () => void;
+  navigationState?: {
+    selectedCollectionId: string | null;
+    tab: Tab;
+    selectedBibliographyCollectionId: string | null;
+  };
+  onNavigationStateChange?: (state: {
+    selectedCollectionId: string | null;
+    tab: Tab;
+    selectedBibliographyCollectionId: string | null;
+  }) => void;
   openBibliographyReferenceId?: string | null;
   onOpenBibliographyReferenceConsumed?: () => void;
   researchTourActive?: boolean;
   researchTourStepId?: string | null;
 }) {
   const activeResearchSpaceId = researchSpaceId || "";
+  const activeResearchSpace = availableResearchSpaces.find((item) => item.id === activeResearchSpaceId) ?? null;
   const hasProjectContext = Boolean(currentProject?.id);
   const [collections, setCollections] = useState<ResearchCollection[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(navigationState?.selectedCollectionId ?? null);
   const [bulkResearchTargetCollectionId, setBulkResearchTargetCollectionId] = useState("");
   const [collectionDetail, setCollectionDetail] = useState<ResearchCollectionDetail | null>(null);
 
   const [references, setReferences] = useState<ResearchReference[]>([]);
   const [bibliography, setBibliography] = useState<BibliographyReference[]>([]);
   const [bibliographyCollections, setBibliographyCollections] = useState<BibliographyCollection[]>([]);
-  const [selectedBibliographyCollectionId, setSelectedBibliographyCollectionId] = useState<string | null>(null);
+  const [selectedBibliographyCollectionId, setSelectedBibliographyCollectionId] = useState<string | null>(navigationState?.selectedBibliographyCollectionId ?? null);
   const [selectedBibliographyCollectionPaperIds, setSelectedBibliographyCollectionPaperIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<ResearchNote[]>([]);
   const [studyFiles, setStudyFiles] = useState<ResearchStudyFile[]>([]);
@@ -416,7 +434,7 @@ export function ResearchWorkspace({
   const [tasks, setTasks] = useState<WorkEntity[]>([]);
   const [deliverables, setDeliverables] = useState<WorkEntity[]>([]);
 
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(navigationState?.tab ?? "overview");
   const [loading, setLoading] = useState(true);
   const { error, setError, setStatus } = useStatusToast();
   const [showArchived, setShowArchived] = useState(false);
@@ -446,6 +464,11 @@ export function ResearchWorkspace({
   const [collectionTitle, setCollectionTitle] = useState("");
   const [collectionDescription, setCollectionDescription] = useState("");
   const [collectionStatus, setCollectionStatus] = useState("active");
+  const [collectionSpaceIds, setCollectionSpaceIds] = useState<string[]>([]);
+  const [inlineStudyTitle, setInlineStudyTitle] = useState("");
+  const [inlineStudyFocus, setInlineStudyFocus] = useState("");
+  const [editingStudyTitle, setEditingStudyTitle] = useState(false);
+  const [editingStudyFocus, setEditingStudyFocus] = useState(false);
   const [paperTitle, setPaperTitle] = useState("");
   const [paperMotivation, setPaperMotivation] = useState("");
   const [paperVenue, setPaperVenue] = useState("");
@@ -595,6 +618,8 @@ export function ResearchWorkspace({
   const quickLogFileInputRef = useRef<HTMLInputElement | null>(null);
   const inlineEditFileInputRef = useRef<HTMLInputElement | null>(null);
   const [studySearchQuery, setStudySearchQuery] = useState("");
+  const syncingNavigationStateRef = useRef(false);
+  const lastAppliedNavigationStateRef = useRef<string | null>(null);
 
   const activeCollections = collections.filter((item) => item.status === "active");
   const archivedCollections = collections.filter((item) => item.status !== "active");
@@ -633,6 +658,42 @@ export function ResearchWorkspace({
   }, [notes, selectedCollectionId, paperQuestions, paperClaims, paperSections, unreadRefCount]);
   const selectedCollection = collections.find((item) => item.id === selectedCollectionId) ?? null;
   const selectedBibliographyCollection = bibliographyCollections.find((item) => item.id === selectedBibliographyCollectionId) ?? null;
+
+  useEffect(() => {
+    if (!navigationState) return;
+    const signature = JSON.stringify({
+      selectedCollectionId: navigationState.selectedCollectionId ?? null,
+      tab: navigationState.tab,
+      selectedBibliographyCollectionId: navigationState.selectedBibliographyCollectionId ?? null,
+    });
+    if (lastAppliedNavigationStateRef.current === signature) return;
+    lastAppliedNavigationStateRef.current = signature;
+    syncingNavigationStateRef.current = true;
+    setSelectedCollectionId(navigationState.selectedCollectionId ?? null);
+    setTab(navigationState.tab);
+    setSelectedBibliographyCollectionId(navigationState.selectedBibliographyCollectionId ?? null);
+  }, [navigationState]);
+
+  useEffect(() => {
+    if (syncingNavigationStateRef.current) {
+      syncingNavigationStateRef.current = false;
+      return;
+    }
+    const nextState = {
+      selectedCollectionId,
+      tab,
+      selectedBibliographyCollectionId,
+    };
+    if (
+      navigationState &&
+      (navigationState.selectedCollectionId ?? null) === nextState.selectedCollectionId &&
+      navigationState.tab === nextState.tab &&
+      (navigationState.selectedBibliographyCollectionId ?? null) === nextState.selectedBibliographyCollectionId
+    ) {
+      return;
+    }
+    onNavigationStateChange?.(nextState);
+  }, [selectedCollectionId, tab, selectedBibliographyCollectionId, navigationState, onNavigationStateChange]);
 
   const referenceUsageMap = useMemo(() => {
     const map = new Map<string, { claimCount: number; sectionCount: number; noteCount: number; total: number }>();
@@ -731,6 +792,10 @@ export function ResearchWorkspace({
     setPaperSections(collectionDetail?.paper_sections || []);
     setPaperDirty(false);
     paperSyncedRef.current = false;
+    setInlineStudyTitle(collectionDetail?.title || "");
+    setInlineStudyFocus(collectionDetail?.description || collectionDetail?.hypothesis || "");
+    setEditingStudyTitle(false);
+    setEditingStudyFocus(false);
   }, [collectionDetail]);
 
   // Warn before leaving with unsaved paper changes
@@ -965,12 +1030,19 @@ export function ResearchWorkspace({
 
   async function refreshWorkspace(projectId = selectedProjectId, collectionId = selectedCollectionId) {
     if (!projectId) return;
-    const tasksToRun: Promise<unknown>[] = [loadReferences(collectionId, projectId), loadNotes(collectionId, projectId), loadStudyFiles(collectionId, projectId)];
-    if (collectionId) {
-      tasksToRun.push(loadCollectionDetail(collectionId, projectId));
-    } else {
+    if (!collectionId) {
+      setReferences([]);
+      setNotes([]);
+      setStudyFiles([]);
       setCollectionDetail(null);
+      return;
     }
+    const tasksToRun: Promise<unknown>[] = [
+      loadReferences(collectionId, projectId),
+      loadNotes(collectionId, projectId),
+      loadStudyFiles(collectionId, projectId),
+      loadCollectionDetail(collectionId, projectId),
+    ];
     await Promise.all(tasksToRun);
   }
 
@@ -1012,7 +1084,6 @@ export function ResearchWorkspace({
     setLoading(true);
     setError("");
     setStatus("");
-    setSelectedCollectionId(null);
     setCollectionDetail(null);
     Promise.all([
       loadBibliographyCollections(),
@@ -1021,9 +1092,6 @@ export function ResearchWorkspace({
       loadSupportData(selectedProjectId),
       loadBibliography(selectedProjectId),
       loadBibliographyTags(),
-      loadReferences(null, selectedProjectId),
-      loadNotes(null, selectedProjectId),
-      loadStudyFiles(null, selectedProjectId),
     ])
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Failed to load research workspace");
@@ -1033,7 +1101,21 @@ export function ResearchWorkspace({
 
   useEffect(() => {
     if (bibliographyOnly) return;
+    if (!selectedCollectionId) return;
+    if (collections.some((item) => item.id === selectedCollectionId)) return;
+    setSelectedCollectionId(null);
+  }, [bibliographyOnly, collections, selectedCollectionId]);
+
+  useEffect(() => {
+    if (bibliographyOnly) return;
     if (!selectedProjectId) return;
+    if (!selectedCollectionId) {
+      setReferences([]);
+      setNotes([]);
+      setStudyFiles([]);
+      setCollectionDetail(null);
+      return;
+    }
     refreshWorkspace(selectedProjectId, selectedCollectionId).catch((err) => {
       setError(err instanceof Error ? err.message : "Failed to refresh research workspace");
     });
@@ -1089,6 +1171,7 @@ export function ResearchWorkspace({
     setCollectionTitle("");
     setCollectionDescription("");
     setCollectionStatus("active");
+    setCollectionSpaceIds(activeResearchSpaceId ? [activeResearchSpaceId] : []);
     setEditingCollectionId(null);
   }
 
@@ -1242,6 +1325,7 @@ export function ResearchWorkspace({
     setCollectionTitle(collectionDetail.title);
     setCollectionDescription(collectionDetail.description || collectionDetail.hypothesis || "");
     setCollectionStatus(collectionDetail.status);
+    setCollectionSpaceIds(collectionDetail.space_ids || []);
     setCollectionModalOpen(true);
   }
 
@@ -1251,7 +1335,42 @@ export function ResearchWorkspace({
     setCollectionTitle(item.title);
     setCollectionDescription(item.description || item.hypothesis || "");
     setCollectionStatus(item.status);
+    setCollectionSpaceIds(item.space_ids || []);
     setCollectionModalOpen(true);
+  }
+
+  function openStudyFromCard(collectionId: string) {
+    setSelectedCollectionId(collectionId);
+    setTab("overview");
+  }
+
+  async function handleInlineStudyHeaderSave(field: "title" | "focus") {
+    if (!selectedProjectId || !selectedCollectionId || !collectionDetail) return;
+    const nextTitle = field === "title" ? inlineStudyTitle.trim() : collectionDetail.title;
+    const nextFocus = field === "focus" ? inlineStudyFocus.trim() : (collectionDetail.description || collectionDetail.hypothesis || "");
+    if (!nextTitle) {
+      setError("Title is required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      await api.updateResearchCollection(selectedProjectId, selectedCollectionId, {
+        title: nextTitle,
+        description: nextFocus || null,
+        status: collectionDetail.status,
+        space_ids: collectionDetail.space_ids || [],
+      }, activeResearchSpaceId);
+      await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
+      setStatus("Study updated.");
+      if (field === "title") setEditingStudyTitle(false);
+      if (field === "focus") setEditingStudyFocus(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update study.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function openCreateReferenceModal(tabName: ReferenceModalTab = "manual") {
@@ -1823,6 +1942,7 @@ function newStudyResult(): ResearchStudyResult {
       if (collectionModalMode === "create") {
         const created = await api.createResearchCollection(selectedProjectId, {
           title: collectionTitle.trim(),
+          space_ids: collectionSpaceIds,
           description: collectionDescription.trim() || undefined,
         }, activeResearchSpaceId);
         await loadCollections();
@@ -1831,6 +1951,7 @@ function newStudyResult(): ResearchStudyResult {
       } else if (editingCollectionId) {
         await api.updateResearchCollection(selectedProjectId, editingCollectionId, {
           title: collectionTitle.trim(),
+          space_ids: collectionSpaceIds,
           description: collectionDescription.trim() || null,
           status: collectionStatus,
         }, activeResearchSpaceId);
@@ -3234,7 +3355,6 @@ function newStudyResult(): ResearchStudyResult {
     }
   }
 
-  if (!activeResearchSpaceId && !bibliographyOnly) return <p className="empty-message">Select a research space.</p>;
   if (loading) return <SkeletonTable rows={6} cols={4} />;
   const showSpaceHome = !bibliographyOnly && !selectedCollectionId;
 
@@ -3259,6 +3379,7 @@ function newStudyResult(): ResearchStudyResult {
       {!bibliographyOnly && showSpaceHome ? (
         <div className="setup-summary-bar" data-tour-id="research-study-home">
           <div className="workspace-browser-summary-actions">
+            {activeResearchSpace ? <span className="chip small">{activeResearchSpace.title}</span> : null}
             <div className="topbar-project-search workspace-browser-search">
               <FontAwesomeIcon icon={faSearch} />
               <input
@@ -3268,6 +3389,11 @@ function newStudyResult(): ResearchStudyResult {
                 placeholder="Search studies"
               />
             </div>
+            {activeResearchSpace ? (
+              <button type="button" className="ghost" onClick={() => onClearResearchSpaceFilter?.()}>
+                All Studies
+              </button>
+            ) : null}
             <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
               <FontAwesomeIcon icon={faPlus} /> New Study
             </button>
@@ -3304,11 +3430,11 @@ function newStudyResult(): ResearchStudyResult {
                       role="button"
                       tabIndex={0}
                       aria-label={`Open ${item.title}`}
+                      onClick={() => openStudyFromCard(item.id)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          setSelectedCollectionId(item.id);
-                          setTab("overview");
+                          openStudyFromCard(item.id);
                         } else if (event.key.toLowerCase() === "e") {
                           event.preventDefault();
                           openEditCollectionFromCard(item);
@@ -3324,8 +3450,18 @@ function newStudyResult(): ResearchStudyResult {
                         <span className={`chip small ${item.status === "active" ? "status-ok" : ""}`}>{item.status}</span>
                       </div>
                       <div className="workspace-browser-card-body">
-                        <strong>{item.title}</strong>
+                        <div className="workspace-browser-card-title">{item.title || "Untitled Study"}</div>
                         <p>{item.description || item.hypothesis || "No focus"}</p>
+                        {item.space_ids.length > 0 ? (
+                          <div className="research-chip-group">
+                            {item.space_ids.slice(0, 3).map((spaceId) => {
+                              const space = availableResearchSpaces.find((entry) => entry.id === spaceId);
+                              if (!space) return null;
+                              return <span key={`${item.id}-${space.id}`} className="chip small">{space.title}</span>;
+                            })}
+                            {item.space_ids.length > 3 ? <span className="chip small">+{item.space_ids.length - 3}</span> : null}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="workspace-browser-card-foot">
                         <div className="workspace-browser-meta-stack">
@@ -3334,10 +3470,10 @@ function newStudyResult(): ResearchStudyResult {
                           <span className="workspace-browser-meta">{formatRelativeTime(item.updated_at)}</span>
                         </div>
                         <div className="workspace-browser-card-actions">
-                          <button type="button" className="ghost" tabIndex={-1} onClick={() => openEditCollectionFromCard(item)}>
+                          <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditCollectionFromCard(item); }}>
                             Edit
                           </button>
-                          <button type="button" tabIndex={-1} onClick={() => { setSelectedCollectionId(item.id); setTab("overview"); }}>
+                          <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openStudyFromCard(item.id); }}>
                             Open
                           </button>
                         </div>
@@ -3355,11 +3491,11 @@ function newStudyResult(): ResearchStudyResult {
                       role="button"
                       tabIndex={0}
                       aria-label={`Open ${item.title}`}
+                      onClick={() => openStudyFromCard(item.id)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          setSelectedCollectionId(item.id);
-                          setTab("overview");
+                          openStudyFromCard(item.id);
                         } else if (event.key.toLowerCase() === "e") {
                           event.preventDefault();
                           openEditCollectionFromCard(item);
@@ -3374,8 +3510,18 @@ function newStudyResult(): ResearchStudyResult {
                         <span className="chip small">Archived</span>
                       </div>
                       <div className="workspace-browser-card-body">
-                        <strong>{item.title}</strong>
+                        <div className="workspace-browser-card-title">{item.title || "Untitled Study"}</div>
                         <p>{item.description || item.hypothesis || "No focus"}</p>
+                        {item.space_ids.length > 0 ? (
+                          <div className="research-chip-group">
+                            {item.space_ids.slice(0, 3).map((spaceId) => {
+                              const space = availableResearchSpaces.find((entry) => entry.id === spaceId);
+                              if (!space) return null;
+                              return <span key={`${item.id}-${space.id}`} className="chip small">{space.title}</span>;
+                            })}
+                            {item.space_ids.length > 3 ? <span className="chip small">+{item.space_ids.length - 3}</span> : null}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="workspace-browser-card-foot">
                         <div className="workspace-browser-meta-stack">
@@ -3384,10 +3530,10 @@ function newStudyResult(): ResearchStudyResult {
                           <span className="workspace-browser-meta">{formatRelativeTime(item.updated_at)}</span>
                         </div>
                         <div className="workspace-browser-card-actions">
-                          <button type="button" className="ghost" tabIndex={-1} onClick={() => openEditCollectionFromCard(item)}>
+                          <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditCollectionFromCard(item); }}>
                             Edit
                           </button>
-                          <button type="button" tabIndex={-1} onClick={() => { setSelectedCollectionId(item.id); setTab("overview"); }}>
+                          <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openStudyFromCard(item.id); }}>
                             Open
                           </button>
                         </div>
@@ -3407,7 +3553,39 @@ function newStudyResult(): ResearchStudyResult {
             <button type="button" className="ghost research-space-back-btn" onClick={() => { setSelectedCollectionId(null); setTab("overview"); }}>
               <FontAwesomeIcon icon={faChevronLeft} />
             </button>
-            <h2 className="study-header-title">{collectionDetail.title}</h2>
+            <div className="study-header-title-wrap">
+              {editingStudyTitle ? (
+                <input
+                  className="study-header-title-input"
+                  value={inlineStudyTitle}
+                  autoFocus
+                  onChange={(event) => setInlineStudyTitle(event.target.value)}
+                  onBlur={() => {
+                    setInlineStudyTitle(collectionDetail.title || "");
+                    setEditingStudyTitle(false);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleInlineStudyHeaderSave("title");
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setInlineStudyTitle(collectionDetail.title || "");
+                      setEditingStudyTitle(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="study-header-title-button"
+                  onClick={() => setEditingStudyTitle(true)}
+                  title="Edit title"
+                >
+                  <h2 className="study-header-title">{collectionDetail.title}</h2>
+                </button>
+              )}
+            </div>
             {collectionDetail.members.length > 0 && (
               <div className="study-header-avatars">
                 {collectionDetail.members.slice(0, 5).map((member: ResearchCollectionMember) => (
@@ -3445,9 +3623,42 @@ function newStudyResult(): ResearchStudyResult {
             <span className="study-header-stat">{collectionDetail.reference_count} refs</span>
             <span className="study-header-stat">{collectionDetail.note_count} logs</span>
             <span className="study-header-stat">{collectionDetail.member_count} members</span>
-            {collectionDetail.hypothesis ? (
-              <span className="study-header-hypothesis" title={collectionDetail.hypothesis}>{collectionDetail.hypothesis}</span>
-            ) : null}
+            {collectionDetail.space_ids.map((spaceId) => {
+              const space = availableResearchSpaces.find((item) => item.id === spaceId);
+              if (!space) return null;
+              return <span key={`study-space-${space.id}`} className="chip small">{space.title}</span>;
+            })}
+            {editingStudyFocus ? (
+              <input
+                className="study-header-focus-input"
+                value={inlineStudyFocus}
+                autoFocus
+                onChange={(event) => setInlineStudyFocus(event.target.value)}
+                onBlur={() => {
+                  setInlineStudyFocus(collectionDetail.description || collectionDetail.hypothesis || "");
+                  setEditingStudyFocus(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleInlineStudyHeaderSave("focus");
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    setInlineStudyFocus(collectionDetail.description || collectionDetail.hypothesis || "");
+                    setEditingStudyFocus(false);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className={`study-header-focus-button${inlineStudyFocus.trim() ? "" : " is-empty"}`}
+                onClick={() => setEditingStudyFocus(true)}
+                title="Edit focus"
+              >
+                {inlineStudyFocus.trim() || "No focus"}
+              </button>
+            )}
           </div>
         </div>
       ) : null}
@@ -6459,6 +6670,26 @@ function newStudyResult(): ResearchStudyResult {
               Focus
               <textarea value={collectionDescription} onChange={(event) => setCollectionDescription(event.target.value)} rows={4} />
             </label>
+            {availableResearchSpaces.length > 0 ? (
+              <div className="full-span">
+                <span className="form-label">Spaces</span>
+                <div className="research-lane-pills">
+                  {availableResearchSpaces.map((space) => {
+                    const active = collectionSpaceIds.includes(space.id);
+                    return (
+                      <button
+                        key={space.id}
+                        type="button"
+                        className={`research-lane-pill ${active ? "active" : ""}`}
+                        onClick={() => setCollectionSpaceIds((current) => toggleListValue(current, space.id))}
+                      >
+                        {space.title}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             {collectionModalMode === "edit" ? (
               <label>
                 Status

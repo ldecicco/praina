@@ -14,6 +14,7 @@ import {
   faChartLine,
   faChevronDown,
   faChevronLeft,
+  faChevronRight,
   faClipboardCheck,
   faComments,
   faGear,
@@ -65,6 +66,19 @@ import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrie
 
 type View = "my-work" | "projects-home" | "research-home" | "teaching-home" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
 type WorkspaceFamily = "projects" | "research" | "teaching";
+type ResearchTabState = "references" | "notes" | "paper" | "iterations" | "overview" | "chat" | "files";
+type ResearchNavigationState = {
+  selectedCollectionId: string | null;
+  tab: ResearchTabState;
+  selectedBibliographyCollectionId: string | null;
+};
+type AppNavigationSnapshot = {
+  view: View;
+  workspaceFamily: WorkspaceFamily;
+  selectedProjectId: string;
+  selectedResearchSpaceId: string;
+  research: ResearchNavigationState;
+};
 type NavItem = { id: View; label: string; icon: typeof faSitemap };
 type NavSection = { key: string; label: string; collapsible: boolean; items: NavItem[] };
 const ASSISTANT_PENDING_PROMPT_KEY = "assistant_pending_prompt";
@@ -77,6 +91,10 @@ const REFRESH_TOKEN_KEY = "auth_refresh_token";
 const RESEARCH_ROUTE_FALLBACK_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 const RESEARCH_TOUR_KEY = "research_tour_version";
 const RESEARCH_TOUR_VERSION = "2026-04-research-v1";
+
+function normalizeSnapshot(snapshot: AppNavigationSnapshot): string {
+  return JSON.stringify(snapshot);
+}
 
 const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   deliverable: "delivery",
@@ -101,18 +119,28 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
 };
 
 export default function App() {
+  const defaultResearchNavigationState: ResearchNavigationState = {
+    selectedCollectionId: null,
+    tab: "overview",
+    selectedBibliographyCollectionId: null,
+  };
   const [workspaceFamily, setWorkspaceFamily] = useState<WorkspaceFamily>("projects");
   const [view, setView] = useState<View>("projects-home");
   const [projects, setProjects] = useState<Project[]>([]);
   const [researchSpaces, setResearchSpaces] = useState<ResearchSpace[]>([]);
   const [authTokens, setAuthTokens] = useState<AuthTokens | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
+  const currentUser = me?.user ?? null;
+  const canAccessResearch = currentUser?.can_access_research ?? false;
+  const canAccessTeaching = currentUser?.can_access_teaching ?? false;
+  const isSuperAdmin = currentUser?.platform_role === "super_admin";
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_PROJECT_KEY) || "" : "")
   );
   const [selectedResearchSpaceId, setSelectedResearchSpaceId] = useState<string>(
     () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_RESEARCH_SPACE_KEY) || "" : "")
   );
+  const [researchNavigationState, setResearchNavigationState] = useState<ResearchNavigationState>(defaultResearchNavigationState);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
   );
@@ -156,6 +184,18 @@ export default function App() {
   const [suggestionContent, setSuggestionContent] = useState("");
   const [savingSuggestion, setSavingSuggestion] = useState(false);
   const workspaceBrowserSearchRef = useRef<HTMLInputElement>(null);
+  const navigationHistoryRef = useRef<AppNavigationSnapshot[]>([]);
+  const restoringNavigationRef = useRef(false);
+  const restoreTargetSnapshotRef = useRef<string | null>(null);
+  const [navigationHistoryIndex, setNavigationHistoryIndex] = useState(-1);
+
+  const currentNavigationSnapshot = useMemo<AppNavigationSnapshot>(() => ({
+    view,
+    workspaceFamily,
+    selectedProjectId,
+    selectedResearchSpaceId,
+    research: researchNavigationState,
+  }), [view, workspaceFamily, selectedProjectId, selectedResearchSpaceId, researchNavigationState]);
 
   const researchTourSteps: GuidedTourStep[] = useMemo(() => ([
     { id: "spaces", target: "research-space-grid", title: "Spaces", text: "Spaces group studies around a broad topic." },
@@ -327,7 +367,7 @@ export default function App() {
       setResearchSpaces(response.items);
       setSelectedResearchSpaceId((current) => {
         const exists = response.items.some((item) => item.id === current);
-        const resolved = exists ? current : (response.items[0]?.id ?? "");
+        const resolved = exists ? current : "";
         if (typeof window !== "undefined") {
           if (resolved) window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, resolved);
           else window.sessionStorage.removeItem(ACTIVE_RESEARCH_SPACE_KEY);
@@ -400,11 +440,38 @@ export default function App() {
       setResearchSpaces([]);
       setSelectedProjectId("");
       setSelectedResearchSpaceId("");
+      setResearchNavigationState(defaultResearchNavigationState);
+      navigationHistoryRef.current = [];
+      setNavigationHistoryIndex(-1);
       return;
     }
     void loadProjects();
     void loadResearchSpaces();
   }, [me?.user.id]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const snapshot = currentNavigationSnapshot;
+    if (restoreTargetSnapshotRef.current) {
+      return;
+    }
+    const currentEntry = navigationHistoryIndex >= 0 ? navigationHistoryRef.current[navigationHistoryIndex] : null;
+    if (currentEntry && normalizeSnapshot(currentEntry) === normalizeSnapshot(snapshot)) {
+      return;
+    }
+    const nextHistory = navigationHistoryRef.current.slice(0, navigationHistoryIndex + 1);
+    nextHistory.push(snapshot);
+    navigationHistoryRef.current = nextHistory;
+    setNavigationHistoryIndex(nextHistory.length - 1);
+  }, [currentUser, currentNavigationSnapshot, navigationHistoryIndex]);
+
+  useEffect(() => {
+    const target = restoreTargetSnapshotRef.current;
+    if (!target) return;
+    if (normalizeSnapshot(currentNavigationSnapshot) !== target) return;
+    restoreTargetSnapshotRef.current = null;
+    restoringNavigationRef.current = false;
+  }, [currentNavigationSnapshot]);
 
   function handleAuthenticated(tokens: AuthTokens, meResponse: MeResponse) {
     api.setAuthToken(tokens.access_token);
@@ -485,7 +552,7 @@ export default function App() {
   function handleSelectResearchSpace(spaceId: string) {
     setSelectedResearchSpaceId(spaceId);
     const selected = researchSpaces.find((item) => item.id === spaceId) ?? null;
-    if (selected?.linked_project_id) {
+    if (selected?.linked_project_id && projects.some((project) => project.id === selected.linked_project_id)) {
       setSelectedProjectId(selected.linked_project_id);
       if (typeof window !== "undefined") {
         window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, selected.linked_project_id);
@@ -496,6 +563,59 @@ export default function App() {
       else window.sessionStorage.removeItem(ACTIVE_RESEARCH_SPACE_KEY);
     }
   }
+
+  function openResearchSpace(spaceId: string) {
+    handleSelectResearchSpace(spaceId);
+    setResearchNavigationState({
+      selectedCollectionId: null,
+      tab: "overview",
+      selectedBibliographyCollectionId: null,
+    });
+    setWorkspaceFamily("research");
+    setView("research");
+  }
+
+  function applyNavigationSnapshot(snapshot: AppNavigationSnapshot) {
+    restoringNavigationRef.current = true;
+    restoreTargetSnapshotRef.current = normalizeSnapshot(snapshot);
+    setWorkspaceFamily(snapshot.workspaceFamily);
+    setView(snapshot.view);
+    setSelectedProjectId(snapshot.selectedProjectId);
+    setSelectedResearchSpaceId(snapshot.selectedResearchSpaceId);
+    setResearchNavigationState(snapshot.research);
+    if (typeof window !== "undefined") {
+      if (snapshot.selectedProjectId) window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, snapshot.selectedProjectId);
+      else window.sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
+      if (snapshot.selectedResearchSpaceId) window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, snapshot.selectedResearchSpaceId);
+      else window.sessionStorage.removeItem(ACTIVE_RESEARCH_SPACE_KEY);
+    }
+  }
+
+  function handleNavigateBack() {
+    if (navigationHistoryIndex <= 0) return;
+    const nextIndex = navigationHistoryIndex - 1;
+    const snapshot = navigationHistoryRef.current[nextIndex];
+    if (!snapshot) return;
+    setNavigationHistoryIndex(nextIndex);
+    applyNavigationSnapshot(snapshot);
+  }
+
+  function handleNavigateForward() {
+    if (navigationHistoryIndex < 0 || navigationHistoryIndex >= navigationHistoryRef.current.length - 1) return;
+    const nextIndex = navigationHistoryIndex + 1;
+    const snapshot = navigationHistoryRef.current[nextIndex];
+    if (!snapshot) return;
+    setNavigationHistoryIndex(nextIndex);
+    applyNavigationSnapshot(snapshot);
+  }
+
+  const handleResearchNavigationStateChange = useCallback((next: ResearchNavigationState) => {
+    setResearchNavigationState((prev) => (
+      prev.selectedCollectionId === next.selectedCollectionId &&
+      prev.tab === next.tab &&
+      prev.selectedBibliographyCollectionId === next.selectedBibliographyCollectionId
+    ) ? prev : next);
+  }, []);
 
   function handleSelectProject(projectId: string) {
     setSelectedProjectId(projectId);
@@ -535,11 +655,7 @@ export default function App() {
     else if (["projects-home", "dashboard", "call", "proposal", "submission", "delivery", "workbench", "wizard", "matrix", "planning", "documents"].includes(targetView)) {
       targetFamily = "projects";
     }
-    if (targetFamily === "research" && targetView !== "research-home" && targetView !== "bibliography") {
-      if (!selectedResearchSpaceId && researchSpaces[0]) {
-        handleSelectResearchSpace(researchSpaces[0].id);
-      }
-    } else if (targetView !== "courses" && targetView !== "resources" && targetView !== "bibliography" && targetView !== "teaching-home" && targetView !== "projects-home") {
+    if (targetFamily !== "research" && targetView !== "courses" && targetView !== "resources" && targetView !== "bibliography" && targetView !== "teaching-home" && targetView !== "projects-home") {
       const sectionProjects = projects.filter((project) =>
         targetFamily === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
       );
@@ -550,6 +666,9 @@ export default function App() {
       if (!selectedMatchesSection && sectionProjects.length > 0) {
         handleSelectProject(sectionProjects[0].id);
       }
+    }
+    if (targetView === "research") {
+      handleSelectResearchSpace("");
     }
     setWorkspaceFamily(targetFamily);
     setView(targetView);
@@ -604,6 +723,7 @@ export default function App() {
   const activeResearchSpace = researchSpaces.find((item) => item.id === selectedResearchSpaceId) ?? null;
   const researchLinkedProject =
     projects.find((project) => project.id === activeResearchSpace?.linked_project_id) ?? null;
+  const effectiveResearchProjectId = researchLinkedProject?.id || RESEARCH_ROUTE_FALLBACK_PROJECT_ID;
 
   useEffect(() => {
     if (view === "courses" || view === "teaching") setWorkspaceFamily("teaching");
@@ -613,6 +733,7 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
+    if (restoreTargetSnapshotRef.current) return;
     if (workspaceFamily !== "research") return;
     if (selectedProjectId && activeResearchSpace?.linked_project_id !== selectedProjectId) {
       const matchingSpace = researchSpaces.find((item) => item.linked_project_id === selectedProjectId);
@@ -631,17 +752,6 @@ export default function App() {
       }
     }
   }, [workspaceFamily, activeResearchSpace?.linked_project_id, selectedProjectId, researchSpaces, selectedResearchSpaceId]);
-
-  useEffect(() => {
-    if (workspaceFamily !== "research" || selectedResearchSpaceId || !selectedProjectId) return;
-    const matchingSpace = researchSpaces.find((item) => item.linked_project_id === selectedProjectId);
-    if (matchingSpace) {
-      setSelectedResearchSpaceId(matchingSpace.id);
-      if (typeof window !== "undefined") {
-        window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, matchingSpace.id);
-      }
-    }
-  }, [workspaceFamily, selectedResearchSpaceId, selectedProjectId, researchSpaces]);
 
   useEffect(() => {
     function handleProjectDataChanged(event: Event) {
@@ -760,10 +870,6 @@ export default function App() {
     workspaceFamily === "teaching" ? project.project_kind === "teaching" : project.project_kind !== "teaching"
   );
   const visibleResearchProjects = projects.filter((project) => project.project_kind !== "teaching");
-  const currentUser = me?.user ?? null;
-  const canAccessResearch = currentUser?.can_access_research ?? false;
-  const canAccessTeaching = currentUser?.can_access_teaching ?? false;
-  const isSuperAdmin = currentUser?.platform_role === "super_admin";
   const proposalCallReady = Boolean(proposalCallBrief?.source_call_id || proposalCallBrief?.call_title?.trim());
   const navSections: NavSection[] =
     workspaceFamily === "teaching"
@@ -797,6 +903,7 @@ export default function App() {
                 label: "Research",
                 collapsible: false,
                 items: [
+                  { id: "research", label: "Studies", icon: faBook },
                   { id: "research-home", label: "Spaces", icon: faFlask },
                   { id: "assistant", label: "Assistant", icon: faComments },
                   { id: "search", label: "Search", icon: faSearch },
@@ -884,7 +991,7 @@ export default function App() {
       return;
     }
     if (nextFamily === "research") {
-      setView("research-home");
+      setView("research");
       return;
     }
     const projectContext = projects.find((project) => project.project_kind !== "teaching");
@@ -1089,9 +1196,7 @@ export default function App() {
       setResearchSpaces((prev) =>
         editingResearchSpaceId ? prev.map((space) => (space.id === saved.id ? saved : space)) : [saved, ...prev]
       );
-      handleSelectResearchSpace(saved.id);
-      setWorkspaceFamily("research");
-      setView("research");
+      openResearchSpace(saved.id);
       setEditingResearchSpaceId(null);
       setNewResearchSpaceTitle("");
       setNewResearchSpaceFocus("");
@@ -1155,6 +1260,7 @@ export default function App() {
             {isResearchBrowser
               ? browserResearchSpaces.map((space) => {
                   const linkedProject = projects.find((project) => project.id === space.linked_project_id) ?? null;
+                  const openSpace = () => openResearchSpace(space.id);
                   return (
                     <div
                       key={space.id}
@@ -1162,11 +1268,11 @@ export default function App() {
                       role="button"
                       tabIndex={0}
                       aria-label={`Open ${space.title}`}
+                      onClick={openSpace}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          handleSelectResearchSpace(space.id);
-                          setView("research");
+                          openSpace();
                         } else if (event.key.toLowerCase() === "e") {
                           event.preventDefault();
                           openEditResearchSpaceModal(space);
@@ -1182,21 +1288,21 @@ export default function App() {
                         {linkedProject ? <span className="chip small">{linkedProject.code}</span> : <span className="chip small">Unlinked</span>}
                       </div>
                       <div className="workspace-browser-card-body">
-                        <strong>{space.title}</strong>
+                        <div className="workspace-browser-card-title">{space.title || "Untitled Space"}</div>
                         {space.focus ? <p>{space.focus}</p> : <p>{linkedProject?.title || "No linked project"}</p>}
                       </div>
                       <div className="workspace-browser-card-foot">
                         <span className="workspace-browser-meta">{linkedProject?.title || "No linked project"}</span>
                         <div className="workspace-browser-card-actions">
-                          <button type="button" className="ghost" tabIndex={-1} onClick={() => openEditResearchSpaceModal(space)}>
+                          <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditResearchSpaceModal(space); }}>
                             Edit
                           </button>
                           <button
                             type="button"
                             tabIndex={-1}
-                            onClick={() => {
-                              handleSelectResearchSpace(space.id);
-                              setView("research");
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openSpace();
                             }}
                           >
                             Open
@@ -1206,17 +1312,20 @@ export default function App() {
                     </div>
                   );
                 })
-              : (isTeachingBrowser ? browserTeachingProjects : browserResearchProjects).map((project) => (
+              : (isTeachingBrowser ? browserTeachingProjects : browserResearchProjects).map((project) => {
+                  const openProject = () => openProjectFromBrowser(project.id);
+                  return (
                   <div
                     key={project.id}
                     className={`workspace-browser-card ${isTeachingBrowser ? "teaching-project" : "funded-project"}`}
                     role="button"
                     tabIndex={0}
                     aria-label={`Open ${project.title}`}
+                    onClick={openProject}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        openProjectFromBrowser(project.id);
+                        openProject();
                       } else if (event.key.toLowerCase() === "e") {
                         event.preventDefault();
                         openProjectSettings(project.id);
@@ -1232,26 +1341,29 @@ export default function App() {
                       <span className="chip small">{project.code}</span>
                     </div>
                     <div className="workspace-browser-card-body">
-                      <strong>{project.title}</strong>
+                      <div className="workspace-browser-card-title">{project.title || "Untitled Project"}</div>
                       <p>{project.description || project.status}</p>
                     </div>
                     <div className="workspace-browser-card-foot">
                       <span className="workspace-browser-meta">{project.status}</span>
                       <div className="workspace-browser-card-actions">
-                        <button type="button" className="ghost" tabIndex={-1} onClick={() => openProjectSettings(project.id)}>
+                        <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openProjectSettings(project.id); }}>
                           Edit
                         </button>
                         <button
                           type="button"
                           tabIndex={-1}
-                          onClick={() => openProjectFromBrowser(project.id)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openProject();
+                          }}
                         >
                           Open
                         </button>
                       </div>
                     </div>
                   </div>
-                ))}
+                );})}
           </div>
         )}
       </div>
@@ -1369,6 +1481,26 @@ export default function App() {
       <div className="app-main">
         <header className="topbar">
           <div className="topbar-left">
+            <div className="topbar-history-controls">
+              <button
+                type="button"
+                className="ghost icon-only"
+                title="Back"
+                onClick={handleNavigateBack}
+                disabled={navigationHistoryIndex <= 0}
+              >
+                <FontAwesomeIcon icon={faChevronLeft} />
+              </button>
+              <button
+                type="button"
+                className="ghost icon-only"
+                title="Forward"
+                onClick={handleNavigateForward}
+                disabled={navigationHistoryIndex < 0 || navigationHistoryIndex >= navigationHistoryRef.current.length - 1}
+              >
+                <FontAwesomeIcon icon={faChevronRight} />
+              </button>
+            </div>
             <h2>{viewTitle[view]}</h2>
             {showContextLink && contextLabel ? (
               <button
@@ -1566,39 +1698,32 @@ export default function App() {
           {view === "documents" ? <DocumentLibrary selectedProjectId={selectedProjectId} highlightDocumentKey={pendingDocumentKey} onHighlightConsumed={() => setPendingDocumentKey(null)} /> : null}
           {view === "todos" ? <ProjectTodos selectedProjectId={selectedProjectId} /> : null}
           {view === "research" ? (
-            activeResearchSpace ? (
-              <ResearchWorkspace
-                selectedProjectId={activeResearchSpace.linked_project_id || RESEARCH_ROUTE_FALLBACK_PROJECT_ID}
-                currentUser={currentUser}
-                accessToken={authTokens.access_token}
-                currentProject={researchLinkedProject}
-                researchSpaceId={activeResearchSpace.id}
-                isAdmin={isSuperAdmin}
-                researchTourActive={researchTourOpen}
-                researchTourStepId={currentResearchTourStep?.target || null}
-              />
-            ) : (
-              <div className="empty-state-card research-space-empty-state">
-                <strong>No research spaces.</strong>
-                {canCreateResearchSpaces ? (
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={openNewResearchSpaceModal}
-                  >
-                    + New Space
-                  </button>
-                ) : null}
-              </div>
-            )
+            <ResearchWorkspace
+              selectedProjectId={effectiveResearchProjectId}
+              currentUser={currentUser}
+              accessToken={authTokens.access_token}
+              currentProject={activeResearchSpace ? (researchLinkedProject ?? activeProject) : null}
+              researchSpaceId={activeResearchSpace?.id || ""}
+              availableResearchSpaces={researchSpaces}
+              onClearResearchSpaceFilter={() => handleSelectResearchSpace("")}
+              navigationState={researchNavigationState}
+              onNavigationStateChange={handleResearchNavigationStateChange}
+              isAdmin={isSuperAdmin}
+              researchTourActive={researchTourOpen}
+              researchTourStepId={currentResearchTourStep?.target || null}
+            />
           ) : null}
           {view === "bibliography" ? (
             <ResearchWorkspace
-              selectedProjectId={activeResearchSpace?.linked_project_id || selectedProjectId || RESEARCH_ROUTE_FALLBACK_PROJECT_ID}
+              selectedProjectId={activeResearchSpace ? effectiveResearchProjectId : (selectedProjectId || RESEARCH_ROUTE_FALLBACK_PROJECT_ID)}
               currentUser={currentUser}
               accessToken={authTokens.access_token}
               currentProject={researchLinkedProject ?? activeProject}
               researchSpaceId={activeResearchSpace?.id || ""}
+              availableResearchSpaces={researchSpaces}
+              onClearResearchSpaceFilter={() => handleSelectResearchSpace("")}
+              navigationState={researchNavigationState}
+              onNavigationStateChange={handleResearchNavigationStateChange}
               bibliographyOnly
               isAdmin={isSuperAdmin}
               openBibliographyReferenceId={pendingBibliographyReferenceId}

@@ -37,6 +37,7 @@ services:
       APP_NAME: ${APP_NAME:-Praina API}
       ENVIRONMENT: ${ENVIRONMENT:-prod}
       API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+      ROOT_PATH: ${ROOT_PATH:-}
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
       POSTGRES_HOST: postgres
@@ -79,11 +80,14 @@ services:
       context: ../../frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE: /api/v1
+        VITE_API_BASE: ${BASE_PATH:-}/api/v1
+        VITE_PUBLIC_BASE: ${BASE_PATH:-}/
         VITE_DEV_PORT: 5173
     restart: unless-stopped
     depends_on:
       - backend
+    environment:
+      BASE_PATH: ${BASE_PATH:-}
     ports:
       - "${FRONTEND_PORT:-8080}:80"
 

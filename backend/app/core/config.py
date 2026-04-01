@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "Project Tracker API"
     environment: str = "dev"
     api_v1_prefix: str = "/api/v1"
+    root_path: str = ""
     app_host: str | None = None
     app_port: int | None = None
     postgres_host: str | None = None

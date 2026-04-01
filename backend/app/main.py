@@ -20,7 +20,7 @@ def _configure_logging() -> None:
 
 def create_app() -> FastAPI:
     _configure_logging()
-    app = FastAPI(title=settings.app_name)
+    app = FastAPI(title=settings.app_name, root_path=settings.root_path)
     if settings.cors_allowed_origins_list:
         app.add_middleware(
             CORSMiddleware,

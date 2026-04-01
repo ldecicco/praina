@@ -835,6 +835,43 @@ export type ProjectChatMessage = {
   updated_at: string;
 };
 
+export type StudyChatRoom = {
+  project_id: string;
+  room_id: string;
+  room_name: string;
+  member_user_ids: string[];
+};
+
+export type StudyChatReaction = {
+  emoji: string;
+  count: number;
+  user_ids: string[];
+};
+
+export type StudyChatReplyPreview = {
+  id: string;
+  sender_user_id: string;
+  sender_display_name: string;
+  content: string;
+  deleted_at: string | null;
+  created_at: string;
+};
+
+export type StudyChatMessage = {
+  id: string;
+  collection_id: string;
+  sender_user_id: string;
+  sender_display_name: string;
+  content: string;
+  reply_to_message_id: string | null;
+  reply_to_message: StudyChatReplyPreview | null;
+  reactions: StudyChatReaction[];
+  edited_at: string | null;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectBroadcast = {
   id: string;
   project_id: string | null;
@@ -1217,6 +1254,7 @@ export type ResearchStudyIteration = {
   end_date: string | null;
   note_ids: string[];
   reference_ids: string[];
+  file_ids: string[];
   result_ids: string[];
   summary: string | null;
   what_changed: string[];
@@ -1234,6 +1272,7 @@ export type ResearchStudyResult = {
   title: string;
   note_ids: string[];
   reference_ids: string[];
+  file_ids: string[];
   summary: string | null;
   what_changed: string[];
   improvements: string[];
@@ -1261,6 +1300,7 @@ export type ResearchPaperClaim = {
   reference_ids: string[];
   note_ids: string[];
   result_ids: string[];
+  file_ids: string[];
   status: string;
   audit_status: string | null;
   audit_summary: string | null;
@@ -1279,6 +1319,7 @@ export type ResearchPaperSection = {
   reference_ids: string[];
   note_ids: string[];
   result_ids: string[];
+  file_ids: string[];
   status: string;
 };
 
@@ -1301,8 +1342,10 @@ export type ResearchCollectionDetail = ResearchCollection & {
 export type ResearchCollectionMember = {
   id: string;
   member_id: string;
+  user_id: string | null;
   member_name: string;
   organization_short_name: string;
+  avatar_url: string | null;
   role: string;
   created_at: string;
   updated_at: string;
@@ -1464,6 +1507,22 @@ export type ResearchNote = {
   note_type: string;
   tags: string[];
   linked_reference_ids: string[];
+  linked_file_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchStudyFile = {
+  id: string;
+  research_space_id: string | null;
+  project_id: string | null;
+  collection_id: string;
+  uploaded_by_user_id: string | null;
+  uploaded_by_name: string | null;
+  original_filename: string;
+  mime_type: string | null;
+  file_size_bytes: number;
+  download_url: string | null;
   created_at: string;
   updated_at: string;
 };

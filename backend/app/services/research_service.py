@@ -21,6 +21,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.meeting import MeetingRecord
 from app.models.auth import UserAccount
+from app.models.collaboration_chat import (
+    ProjectChatRoom,
+    ProjectChatRoomMember,
+    ResearchStudyChatMessage,
+    ResearchStudyChatMessageReaction,
+)
 from app.models.document import DocumentChunk, DocumentScope, DocumentStatus, ProjectDocument
 from app.models.organization import PartnerOrganization, TeamMember
 from app.models.project import Project, ProjectKind
@@ -40,6 +46,7 @@ from app.models.research import (
     ResearchAnnotation,
     ResearchCollection,
     ResearchCollectionMember,
+    ResearchStudyFile,
     ResearchSpace,
     ResearchNote,
     ResearchReference,
@@ -51,12 +58,14 @@ from app.models.research import (
     research_collection_tasks,
     research_collection_wps,
     research_note_references,
+    research_note_files,
 )
 from app.models.teaching import TeachingProjectBackgroundMaterial
 from app.services.onboarding_service import NotFoundError, ValidationError
 from app.services.auth_service import AuthService
 from app.services.document_service import DocumentService
 from app.services.document_ingestion_service import DocumentIngestionService
+from app.services.scoped_chat_service import ScopedChatService
 from app.services.text_extraction import extract_pdf_abstract
 from app.schemas.document import DocumentUploadPayload
 
@@ -89,6 +98,7 @@ def _tokenize_query_terms(value: str) -> set[str]:
 class ResearchService:
     def __init__(self, db: Session):
         self.db = db
+        self.scoped = ScopedChatService(db)
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -105,6 +115,28 @@ class ResearchService:
             return False
         return True
 
+    def get_user_display_name(self, user_id: uuid.UUID) -> str:
+        user = self.db.get(UserAccount, user_id)
+        return user.display_name if user else "Unknown"
+
+    def _space_linked_project_id(self, space_id: uuid.UUID) -> uuid.UUID | None:
+        item = self.db.get(ResearchSpace, space_id)
+        if not item:
+            raise NotFoundError("Research space not found.")
+        return item.linked_project_id
+
+    def discover_research_users(
+        self,
+        actor_user_id: uuid.UUID,
+        *,
+        page: int,
+        page_size: int,
+        search: str | None = None,
+    ) -> tuple[list[UserAccount], int]:
+        from app.services.auth_service import AuthService
+
+        return AuthService(self.db).discover_users(actor_user_id, page, page_size, search=search)
+
     def get_research_space(self, space_id: uuid.UUID, actor_user_id: uuid.UUID) -> ResearchSpace:
         item = self.db.get(ResearchSpace, space_id)
         if not item:
@@ -113,6 +145,192 @@ class ResearchService:
             if not item.linked_project_id or not self._can_access_project(item.linked_project_id, actor_user_id):
                 raise ValidationError("Cannot access this research space.")
         return item
+
+    def ensure_collection_chat_room_for_space(
+        self,
+        space_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+    ) -> ProjectChatRoom:
+        collection = self.get_collection_for_space(space_id, collection_id)
+        project_id = collection.project_id or self._space_linked_project_id(space_id)
+        if project_id and not self._can_access_project(project_id, actor_user_id):
+            raise ValidationError("Cannot access this study chat.")
+        return self._ensure_collection_chat_room(project_id, collection, actor_user_id=actor_user_id)
+
+    def ensure_collection_chat_room(
+        self,
+        project_id: uuid.UUID | None,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+    ) -> ProjectChatRoom:
+        if not project_id:
+            raise ValidationError("Project id is required for project-scoped study chat.")
+        collection = self.get_collection(project_id, collection_id)
+        if not self._can_access_project(project_id, actor_user_id):
+            raise ValidationError("Cannot access this study chat.")
+        return self._ensure_collection_chat_room(project_id, collection, actor_user_id=actor_user_id)
+
+    def _ensure_collection_chat_room(
+        self,
+        project_id: uuid.UUID | None,
+        collection: ResearchCollection,
+        *,
+        actor_user_id: uuid.UUID,
+    ) -> ProjectChatRoom:
+        allowed_user_ids = self._collection_chat_user_ids(collection.id)
+        if not allowed_user_ids:
+            raise ValidationError("Add study members with linked user accounts first.")
+        if actor_user_id not in allowed_user_ids:
+            raise ValidationError("Only study members can access this study chat.")
+
+        room = self.db.scalar(
+            select(ProjectChatRoom).where(
+                ProjectChatRoom.project_id == project_id,
+                ProjectChatRoom.scope_type == "research_collection",
+                ProjectChatRoom.scope_ref_id == collection.id,
+                ProjectChatRoom.is_archived.is_(False),
+            )
+        )
+        if not room:
+            base_name = f"Study · {collection.title.strip() or 'Untitled'}"
+            safe_name = base_name[:110].rstrip()
+            room = ProjectChatRoom(
+                project_id=project_id,
+                name=f"{safe_name} · {str(collection.id)[:8]}",
+                description=collection.title.strip() or None,
+                scope_type="research_collection",
+                scope_ref_id=collection.id,
+                is_archived=False,
+            )
+            self.db.add(room)
+            self.db.commit()
+            self.db.refresh(room)
+
+        existing_user_ids = set(
+            self.db.scalars(
+                select(ProjectChatRoomMember.user_id).where(ProjectChatRoomMember.thread_id == room.id)
+            ).all()
+        )
+        to_add = allowed_user_ids - existing_user_ids
+        to_remove = existing_user_ids - allowed_user_ids
+        if to_add:
+            self.db.add_all([ProjectChatRoomMember(thread_id=room.id, user_id=user_id) for user_id in sorted(to_add, key=str)])
+        if to_remove:
+            self.db.execute(
+                delete(ProjectChatRoomMember).where(
+                    ProjectChatRoomMember.thread_id == room.id,
+                    ProjectChatRoomMember.user_id.in_(list(to_remove)),
+                )
+            )
+        if to_add or to_remove:
+            self.db.commit()
+            self.db.refresh(room)
+        return room
+
+    def _collection_chat_user_ids(self, collection_id: uuid.UUID) -> set[uuid.UUID]:
+        direct_user_ids = set(
+            self.db.scalars(
+                select(ResearchCollectionMember.user_account_id).where(
+                    ResearchCollectionMember.collection_id == collection_id,
+                    ResearchCollectionMember.user_account_id.is_not(None),
+                )
+            ).all()
+        )
+        project_linked_user_ids = {
+            user_id
+            for (user_id,) in self.db.execute(
+                select(TeamMember.user_account_id)
+                .join(ResearchCollectionMember, ResearchCollectionMember.member_id == TeamMember.id)
+                .where(
+                    ResearchCollectionMember.collection_id == collection_id,
+                    TeamMember.is_active.is_(True),
+                    TeamMember.user_account_id.is_not(None),
+                )
+            ).all()
+            if user_id
+        }
+        return direct_user_ids | project_linked_user_ids
+
+    def can_access_collection_chat(self, collection_id: uuid.UUID, actor_user_id: uuid.UUID) -> bool:
+        return actor_user_id in self._collection_chat_user_ids(collection_id)
+
+    def list_study_chat_messages(
+        self,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[ResearchStudyChatMessage], int]:
+        if not self.can_access_collection_chat(collection_id, actor_user_id):
+            raise ValidationError("Only study members can access this chat.")
+        collection = self.db.get(ResearchCollection, collection_id)
+        if not collection:
+            raise NotFoundError("Study not found.")
+        room = self._ensure_collection_chat_room(collection.project_id, collection, actor_user_id=actor_user_id)
+        return self.scoped.list_messages(
+            ResearchStudyChatMessage,
+            scope_field="thread_id",
+            scope_id=room.id,
+            page=page,
+            page_size=page_size,
+        )
+
+    def create_study_chat_message(
+        self,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+        content: str,
+        reply_to_message_id: uuid.UUID | None = None,
+    ) -> ResearchStudyChatMessage:
+        if not self.can_access_collection_chat(collection_id, actor_user_id):
+            raise ValidationError("Only study members can write in this chat.")
+        collection = self.db.get(ResearchCollection, collection_id)
+        if not collection:
+            raise NotFoundError("Study not found.")
+        room = self._ensure_collection_chat_room(collection.project_id, collection, actor_user_id=actor_user_id)
+        return self.scoped.create_message(
+            ResearchStudyChatMessage,
+            scope_field="thread_id",
+            scope_id=room.id,
+            sender_user_id=actor_user_id,
+            content=content,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    def toggle_study_chat_reaction(
+        self,
+        collection_id: uuid.UUID,
+        message_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+        emoji: str,
+    ) -> ResearchStudyChatMessage:
+        if not self.can_access_collection_chat(collection_id, actor_user_id):
+            raise ValidationError("Only study members can react in this chat.")
+        collection = self.db.get(ResearchCollection, collection_id)
+        if not collection:
+            raise NotFoundError("Study not found.")
+        room = self._ensure_collection_chat_room(collection.project_id, collection, actor_user_id=actor_user_id)
+        return self.scoped.toggle_reaction(
+            ResearchStudyChatMessage,
+            ResearchStudyChatMessageReaction,
+            scope_field="thread_id",
+            scope_id=room.id,
+            message_id=message_id,
+            actor_user_id=actor_user_id,
+            emoji=emoji,
+        )
+
+    def study_chat_message_lookup(self, message_ids: list[uuid.UUID]) -> dict[uuid.UUID, ResearchStudyChatMessage]:
+        return self.scoped.message_lookup(ResearchStudyChatMessage, message_ids)
+
+    def study_chat_reaction_summary_by_message(self, message_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict]]:
+        return self.scoped.reaction_summary_by_message(ResearchStudyChatMessageReaction, message_ids)
 
     def list_research_spaces(
         self,
@@ -185,6 +403,27 @@ class ResearchService:
                 TeamMember.is_active.is_(True),
             )
         )
+
+    def _study_files_root(self) -> Path:
+        return Path(settings.documents_storage_path) / "research-study-files"
+
+    def _study_file_storage_path(self, collection_id: uuid.UUID, file_id: uuid.UUID, file_name: str) -> Path:
+        safe_name = Path(file_name).name or "file.bin"
+        target_dir = self._study_files_root() / str(collection_id) / str(file_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir / safe_name
+
+    def _write_study_file(self, file_stream: BinaryIO, storage_path: Path) -> int:
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        total = 0
+        with storage_path.open("wb") as output:
+            while True:
+                chunk = file_stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                total += len(chunk)
+        return total
 
     def update_research_space(
         self,
@@ -317,8 +556,9 @@ class ResearchService:
             member_ids=set(),
             reference_ids=set(),
             note_ids=set(),
+            file_ids=set(),
         )
-        iterations = self._study_iteration_items(kwargs.get("study_iterations"), set(), set(), {str(item["id"]) for item in results})
+        iterations = self._study_iteration_items(kwargs.get("study_iterations"), set(), set(), set(), {str(item["id"]) for item in results})
         item = ResearchCollection(
             project_id=None,
             title=kwargs["title"][:255].strip(),
@@ -400,13 +640,17 @@ class ResearchService:
             str(note_id)
             for note_id in self.db.scalars(select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)).all()
         }
+        collection_file_ids = {
+            str(file_id)
+            for file_id in self.db.scalars(select(ResearchStudyFile.id).where(ResearchStudyFile.collection_id == collection_id)).all()
+        }
         normalized_results = None
         if "study_results" in kwargs and kwargs["study_results"] is not None:
-            normalized_results = self._study_result_items(kwargs["study_results"], collection_note_ids, collection_reference_ids)
+            normalized_results = self._study_result_items(kwargs["study_results"], collection_note_ids, collection_reference_ids, collection_file_ids)
             item.study_results = normalized_results
         if "study_iterations" in kwargs and kwargs["study_iterations"] is not None:
             result_ids = {str(entry.get("id") or "") for entry in (normalized_results if normalized_results is not None else (item.study_results or [])) if isinstance(entry, dict)}
-            item.study_iterations = self._study_iteration_items(kwargs["study_iterations"], collection_note_ids, collection_reference_ids, result_ids)
+            item.study_iterations = self._study_iteration_items(kwargs["study_iterations"], collection_note_ids, collection_reference_ids, collection_file_ids, result_ids)
         if any(kwargs.get(key) is not None for key in ("study_results", "paper_authors", "paper_questions", "paper_claims", "paper_sections")):
             collection_member_ids = {
                 str(member_id)
@@ -423,6 +667,7 @@ class ResearchService:
                 member_ids=collection_member_ids,
                 reference_ids=collection_reference_ids,
                 note_ids=collection_note_ids,
+                file_ids=collection_file_ids,
             )
             if kwargs.get("study_results") is not None:
                 item.study_results = results
@@ -448,6 +693,7 @@ class ResearchService:
         reference_ids: set[str],
         note_ids: set[str],
         result_ids: set[str],
+        file_ids: set[str] | None = None,
     ) -> list[dict[str, object]]:
         normalized: list[dict[str, object]] = []
         for raw in items or []:
@@ -460,6 +706,7 @@ class ResearchService:
             reference_refs = [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids]
             note_refs = [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids]
             result_refs = [str(item) for item in (raw.get("result_ids") or []) if str(item) in result_ids]
+            file_refs = [str(item) for item in (raw.get("file_ids") or []) if str(item) in (file_ids or set())]
             supporting_reference_refs = [str(item) for item in (raw.get("supporting_reference_ids") or []) if str(item) in reference_ids]
             supporting_note_refs = [str(item) for item in (raw.get("supporting_note_ids") or []) if str(item) in note_ids]
             status = str(raw.get("status") or "draft").strip() or "draft"
@@ -483,6 +730,7 @@ class ResearchService:
                 "reference_ids": reference_refs,
                 "note_ids": note_refs,
                 "result_ids": result_refs,
+                "file_ids": file_refs,
                 "status": status[:64],
                 "audit_status": audit_status[:64] if audit_status else None,
                 "audit_summary": audit_summary[:4000] if audit_summary else None,
@@ -502,6 +750,7 @@ class ResearchService:
         reference_ids: set[str],
         note_ids: set[str],
         result_ids: set[str],
+        file_ids: set[str] | None = None,
     ) -> list[dict[str, object]]:
         normalized: list[dict[str, object]] = []
         for raw in items or []:
@@ -515,6 +764,7 @@ class ResearchService:
             reference_refs = [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids]
             note_refs = [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids]
             result_refs = [str(item) for item in (raw.get("result_ids") or []) if str(item) in result_ids]
+            file_refs = [str(item) for item in (raw.get("file_ids") or []) if str(item) in (file_ids or set())]
             status = str(raw.get("status") or "not_started").strip() or "not_started"
             normalized.append({
                 "id": str(raw.get("id") or uuid.uuid4()),
@@ -524,6 +774,7 @@ class ResearchService:
                 "reference_ids": reference_refs,
                 "note_ids": note_refs,
                 "result_ids": result_refs,
+                "file_ids": file_refs,
                 "status": status[:64],
             })
         return normalized
@@ -556,6 +807,7 @@ class ResearchService:
         items: list[dict] | None,
         note_ids: set[str],
         reference_ids: set[str],
+        file_ids: set[str] | None = None,
     ) -> list[dict[str, object]]:
         normalized: list[dict[str, object]] = []
         for raw in items or []:
@@ -570,6 +822,7 @@ class ResearchService:
                 "title": title[:255],
                 "note_ids": [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids],
                 "reference_ids": [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids],
+                "file_ids": [str(item) for item in (raw.get("file_ids") or []) if str(item) in (file_ids or set())],
                 "summary": str(raw.get("summary") or "").strip()[:4000] or None,
                 "what_changed": [str(item).strip()[:400] for item in (raw.get("what_changed") or []) if str(item).strip()],
                 "improvements": [str(item).strip()[:400] for item in (raw.get("improvements") or []) if str(item).strip()],
@@ -587,6 +840,7 @@ class ResearchService:
         items: list[dict] | None,
         note_ids: set[str],
         reference_ids: set[str],
+        file_ids: set[str] | None,
         result_ids: set[str],
     ) -> list[dict[str, object]]:
         normalized: list[dict[str, object]] = []
@@ -605,6 +859,7 @@ class ResearchService:
                 "end_date": end_date,
                 "note_ids": [str(item) for item in (raw.get("note_ids") or []) if str(item) in note_ids],
                 "reference_ids": [str(item) for item in (raw.get("reference_ids") or []) if str(item) in reference_ids],
+                "file_ids": [str(item) for item in (raw.get("file_ids") or []) if str(item) in (file_ids or set())],
                 "result_ids": [str(item) for item in (raw.get("result_ids") or []) if str(item) in result_ids],
                 "summary": str(raw.get("summary") or "").strip()[:4000] or None,
                 "what_changed": [str(item).strip()[:400] for item in (raw.get("what_changed") or []) if str(item).strip()],
@@ -628,15 +883,16 @@ class ResearchService:
         member_ids: set[str] | None = None,
         reference_ids: set[str] | None = None,
         note_ids: set[str] | None = None,
+        file_ids: set[str] | None = None,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
         authors = self._paper_author_items(paper_authors, member_ids or set())
         questions = self._paper_question_items(paper_questions, note_ids or set())
-        results = self._study_result_items(study_results, note_ids or set(), reference_ids or set())
+        results = self._study_result_items(study_results, note_ids or set(), reference_ids or set(), file_ids or set())
         result_ids = {str(item["id"]) for item in results}
         question_ids = {str(item["id"]) for item in questions}
-        claims = self._paper_claim_items(paper_claims, question_ids, reference_ids or set(), note_ids or set(), result_ids)
+        claims = self._paper_claim_items(paper_claims, question_ids, reference_ids or set(), note_ids or set(), result_ids, file_ids or set())
         claim_ids = {str(item["id"]) for item in claims}
-        sections = self._paper_section_items(paper_sections, question_ids, claim_ids, reference_ids or set(), note_ids or set(), result_ids)
+        sections = self._paper_section_items(paper_sections, question_ids, claim_ids, reference_ids or set(), note_ids or set(), result_ids, file_ids or set())
         return authors, questions, claims, sections, results
 
     def _member_role(self, value: str) -> CollectionMemberRole:
@@ -987,8 +1243,9 @@ class ResearchService:
             member_ids=set(),
             reference_ids=set(),
             note_ids=set(),
+            file_ids=set(),
         )
-        iterations = self._study_iteration_items(study_iterations, set(), set(), {str(item["id"]) for item in results})
+        iterations = self._study_iteration_items(study_iterations, set(), set(), set(), {str(item["id"]) for item in results})
         item = ResearchCollection(
             project_id=project_id,
             title=title[:255].strip(),
@@ -1079,13 +1336,17 @@ class ResearchService:
             str(note_id)
             for note_id in self.db.scalars(select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)).all()
         }
+        collection_file_ids = {
+            str(file_id)
+            for file_id in self.db.scalars(select(ResearchStudyFile.id).where(ResearchStudyFile.collection_id == collection_id)).all()
+        }
         normalized_results = None
         if study_results is not None:
-            normalized_results = self._study_result_items(study_results, collection_note_ids, collection_reference_ids)
+            normalized_results = self._study_result_items(study_results, collection_note_ids, collection_reference_ids, collection_file_ids)
             item.study_results = normalized_results
         if study_iterations is not None:
             result_ids = {str(entry.get("id") or "") for entry in (normalized_results if normalized_results is not None else (item.study_results or [])) if isinstance(entry, dict)}
-            item.study_iterations = self._study_iteration_items(study_iterations, collection_note_ids, collection_reference_ids, result_ids)
+            item.study_iterations = self._study_iteration_items(study_iterations, collection_note_ids, collection_reference_ids, collection_file_ids, result_ids)
         if (
             study_results is not None
             or
@@ -1110,6 +1371,7 @@ class ResearchService:
                 member_ids=collection_member_ids,
                 reference_ids=collection_reference_ids,
                 note_ids=collection_note_ids,
+                file_ids=collection_file_ids,
             )
             if study_results is not None:
                 item.study_results = results
@@ -1168,6 +1430,10 @@ class ResearchService:
                 str(note_id)
                 for note_id in self.db.scalars(select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)).all()
             },
+            file_ids={
+                str(file_id)
+                for file_id in self.db.scalars(select(ResearchStudyFile.id).where(ResearchStudyFile.collection_id == collection_id)).all()
+            },
         )
         item.study_results = results
         item.paper_authors = authors
@@ -1223,6 +1489,10 @@ class ResearchService:
                 str(note_id)
                 for note_id in self.db.scalars(select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)).all()
             },
+            file_ids={
+                str(file_id)
+                for file_id in self.db.scalars(select(ResearchStudyFile.id).where(ResearchStudyFile.collection_id == collection_id)).all()
+            },
         )
         item.study_results = results
         item.paper_authors = authors
@@ -1242,82 +1512,112 @@ class ResearchService:
 
     def list_collection_members(self, project_id: uuid.UUID, collection_id: uuid.UUID) -> list[dict]:
         self.get_collection(project_id, collection_id)
-        rows = self.db.execute(
-            select(ResearchCollectionMember, TeamMember.full_name, PartnerOrganization.short_name)
-            .join(TeamMember, ResearchCollectionMember.member_id == TeamMember.id)
-            .join(PartnerOrganization, TeamMember.organization_id == PartnerOrganization.id)
-            .where(ResearchCollectionMember.collection_id == collection_id)
-            .order_by(ResearchCollectionMember.created_at)
-        ).all()
-        return [
-            {
-                "item": cm,
-                "member_name": name or "",
-                "organization_short_name": org or "",
-            }
-            for cm, name, org in rows
-        ]
+        return self._list_collection_members_common(collection_id)
 
     def list_collection_members_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID) -> list[dict]:
         self.get_collection_for_space(space_id, collection_id)
-        rows = self.db.execute(
-            select(ResearchCollectionMember, TeamMember.full_name, PartnerOrganization.short_name)
-            .join(TeamMember, ResearchCollectionMember.member_id == TeamMember.id)
-            .join(PartnerOrganization, TeamMember.organization_id == PartnerOrganization.id)
+        return self._list_collection_members_common(collection_id)
+
+    def _list_collection_members_common(self, collection_id: uuid.UUID) -> list[dict]:
+        rows = self.db.scalars(
+            select(ResearchCollectionMember)
             .where(ResearchCollectionMember.collection_id == collection_id)
             .order_by(ResearchCollectionMember.created_at)
         ).all()
-        return [
-            {"item": cm, "member_name": name or "", "organization_short_name": org or ""}
-            for cm, name, org in rows
-        ]
+        items: list[dict] = []
+        for cm in rows:
+            if cm.user_account_id:
+                user = self.db.get(UserAccount, cm.user_account_id)
+                items.append(
+                    {
+                        "item": cm,
+                        "member_name": user.display_name if user else "",
+                        "organization_short_name": (user.organization or "") if user else "",
+                    }
+                )
+                continue
+            if cm.member_id:
+                row = self.db.execute(
+                    select(TeamMember.full_name, PartnerOrganization.short_name)
+                    .join(PartnerOrganization, TeamMember.organization_id == PartnerOrganization.id)
+                    .where(TeamMember.id == cm.member_id)
+                ).one_or_none()
+                items.append(
+                    {
+                        "item": cm,
+                        "member_name": row[0] if row else "",
+                        "organization_short_name": row[1] if row else "",
+                    }
+                )
+                continue
+            items.append({"item": cm, "member_name": "", "organization_short_name": ""})
+        return items
 
     def add_collection_member(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         collection_id: uuid.UUID,
         *,
-        member_id: uuid.UUID,
+        member_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
         role: str = "contributor",
     ) -> dict:
-        self.get_collection(project_id, collection_id)
-        existing = self.db.scalar(
-            select(ResearchCollectionMember).where(
-                ResearchCollectionMember.collection_id == collection_id,
-                ResearchCollectionMember.member_id == member_id,
+        if project_id:
+            self.get_collection(project_id, collection_id)
+        else:
+            collection = self.db.get(ResearchCollection, collection_id)
+            if not collection:
+                raise NotFoundError("Collection not found.")
+        if not member_id and not user_id:
+            raise ValidationError("Provide a member or user.")
+        if member_id and user_id:
+            raise ValidationError("Choose either a member or a user.")
+        if member_id:
+            existing = self.db.scalar(
+                select(ResearchCollectionMember).where(
+                    ResearchCollectionMember.collection_id == collection_id,
+                    ResearchCollectionMember.member_id == member_id,
+                )
             )
-        )
+        else:
+            existing = self.db.scalar(
+                select(ResearchCollectionMember).where(
+                    ResearchCollectionMember.collection_id == collection_id,
+                    ResearchCollectionMember.user_account_id == user_id,
+                )
+            )
         if existing:
             raise ValidationError("Member already in collection.")
         cm = ResearchCollectionMember(
             collection_id=collection_id,
             member_id=member_id,
+            user_account_id=user_id,
             role=self._member_role(role),
         )
         self.db.add(cm)
         self.db.commit()
         self.db.refresh(cm)
-        row = self.db.execute(
-            select(TeamMember.full_name, PartnerOrganization.short_name)
-            .join(PartnerOrganization, TeamMember.organization_id == PartnerOrganization.id)
-            .where(TeamMember.id == member_id)
-        ).one_or_none()
-        return {
-            "item": cm,
-            "member_name": row[0] if row else "",
-            "organization_short_name": row[1] if row else "",
-        }
+        return self._list_collection_members_common(collection_id)[-1]
 
     def add_collection_member_for_space(
         self,
         space_id: uuid.UUID,
         collection_id: uuid.UUID,
         *,
-        member_id: uuid.UUID,
+        member_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
         role: str = "contributor",
     ) -> dict:
         self.get_collection_for_space(space_id, collection_id)
-        return self.add_collection_member(self._require_space_project_id(space_id), collection_id, member_id=member_id, role=role)
+        project_id = self._space_linked_project_id(space_id)
+        if user_id:
+            item = self.db.get(UserAccount, user_id)
+            if not item or not item.can_access_research:
+                raise ValidationError("User cannot be added to Research.")
+            return self.add_collection_member(project_id, collection_id, user_id=user_id, role=role)
+        if not project_id:
+            raise ValidationError("Project-linked members require a linked project.")
+        return self.add_collection_member(project_id, collection_id, member_id=member_id, role=role)
 
     def update_collection_member_role(
         self,
@@ -1344,6 +1644,13 @@ class ResearchService:
             .join(PartnerOrganization, TeamMember.organization_id == PartnerOrganization.id)
             .where(TeamMember.id == cm.member_id)
         ).one_or_none()
+        if cm.user_account_id:
+            user = self.db.get(UserAccount, cm.user_account_id)
+            return {
+                "item": cm,
+                "member_name": user.display_name if user else "",
+                "organization_short_name": (user.organization or "") if user else "",
+            }
         return {
             "item": cm,
             "member_name": row[0] if row else "",
@@ -2844,7 +3151,6 @@ class ResearchService:
             tags=[],
             reading_status=self._reading_status(reading_status),
             added_by_member_id=added_by_member_id,
-            created_by_user_id=None,
         )
         self.db.add(item)
         self.db.commit()
@@ -3520,6 +3826,7 @@ class ResearchService:
         tags: list[str] | None = None,
         author_member_id: uuid.UUID | None = None,
         linked_reference_ids: list[str] | None = None,
+        linked_file_ids: list[str] | None = None,
     ) -> ResearchNote:
         self._get_project(project_id)
         item = ResearchNote(
@@ -3539,6 +3846,11 @@ class ResearchService:
                 self.db.execute(
                     insert(research_note_references).values(note_id=item.id, reference_id=uuid.UUID(rid))
                 )
+        if linked_file_ids:
+            allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(collection_id)}
+            for file_id in linked_file_ids:
+                if file_id in allowed_ids:
+                    self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -3564,6 +3876,11 @@ class ResearchService:
             if kwargs.get("linked_reference_ids"):
                 for rid in kwargs["linked_reference_ids"]:
                     self.db.execute(insert(research_note_references).values(note_id=item.id, reference_id=uuid.UUID(rid)))
+            if kwargs.get("linked_file_ids"):
+                allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(kwargs.get("collection_id"))}
+                for file_id in kwargs["linked_file_ids"]:
+                    if file_id in allowed_ids:
+                        self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
             self.db.commit()
             self.db.refresh(item)
         item.research_space_id = space_id
@@ -3583,6 +3900,7 @@ class ResearchService:
         lane: str | None = None,
         note_type: str | None = None,
         tags: list[str] | None = None,
+        linked_file_ids: list[str] | None = None,
     ) -> ResearchNote:
         item = self.get_note(project_id, note_id)
         if title is not None:
@@ -3597,6 +3915,12 @@ class ResearchService:
             item.note_type = self._note_type(note_type)
         if tags is not None:
             item.tags = tags
+        if linked_file_ids is not None:
+            self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
+            allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
+            for file_id in linked_file_ids:
+                if file_id in allowed_ids:
+                    self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -3617,6 +3941,12 @@ class ResearchService:
             item.note_type = self._note_type(kwargs["note_type"])
         if kwargs.get("tags") is not None:
             item.tags = kwargs["tags"]
+        if kwargs.get("linked_file_ids") is not None:
+            self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
+            allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
+            for file_id in kwargs["linked_file_ids"]:
+                if file_id in allowed_ids:
+                    self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -3668,6 +3998,216 @@ class ResearchService:
             select(research_note_references.c.reference_id).where(research_note_references.c.note_id == note_id)
         ).all()
         return [str(r[0]) for r in rows]
+
+    def get_note_file_ids(self, note_id: uuid.UUID) -> list[str]:
+        rows = self.db.execute(
+            select(research_note_files.c.file_id).where(research_note_files.c.note_id == note_id)
+        ).all()
+        return [str(r[0]) for r in rows]
+
+    def set_note_files(
+        self,
+        project_id: uuid.UUID,
+        note_id: uuid.UUID,
+        *,
+        file_ids: list[str],
+    ) -> ResearchNote:
+        item = self.get_note(project_id, note_id)
+        allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
+        self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
+        for raw_id in file_ids:
+            if raw_id not in allowed_ids:
+                continue
+            self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(raw_id)))
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def set_note_files_for_space(
+        self,
+        space_id: uuid.UUID,
+        note_id: uuid.UUID,
+        *,
+        file_ids: list[str],
+    ) -> ResearchNote:
+        item = self.get_note_for_space(space_id, note_id)
+        allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
+        self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
+        for raw_id in file_ids:
+            if raw_id not in allowed_ids:
+                continue
+            self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(raw_id)))
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def list_study_files_for_collection(
+        self,
+        collection_id: uuid.UUID | None,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> list[ResearchStudyFile]:
+        if not collection_id:
+            return []
+        return list(
+            self.db.scalars(
+                select(ResearchStudyFile)
+                .where(ResearchStudyFile.collection_id == collection_id)
+                .order_by(ResearchStudyFile.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+
+    def list_study_files(
+        self,
+        project_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[list[ResearchStudyFile], int]:
+        self.get_collection(project_id, collection_id)
+        stmt = select(ResearchStudyFile).where(ResearchStudyFile.collection_id == collection_id)
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(ResearchStudyFile.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            ).all()
+        )
+        return items, total
+
+    def list_study_files_for_space_scope(
+        self,
+        space_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[list[ResearchStudyFile], int]:
+        self.get_collection_for_space(space_id, collection_id)
+        stmt = select(ResearchStudyFile).where(
+            ResearchStudyFile.research_space_id == space_id,
+            ResearchStudyFile.collection_id == collection_id,
+        )
+        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        items = list(
+            self.db.scalars(
+                stmt.order_by(ResearchStudyFile.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            ).all()
+        )
+        return items, total
+
+    def upload_study_file(
+        self,
+        project_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+        file_name: str,
+        content_type: str | None,
+        file_stream: BinaryIO,
+    ) -> ResearchStudyFile:
+        collection = self.get_collection(project_id, collection_id)
+        file_id = uuid.uuid4()
+        storage_path = self._study_file_storage_path(collection.id, file_id, file_name)
+        file_size_bytes = self._write_study_file(file_stream, storage_path)
+        item = ResearchStudyFile(
+            id=file_id,
+            project_id=project_id,
+            research_space_id=collection.research_space_id,
+            collection_id=collection.id,
+            uploaded_by_user_id=actor_user_id,
+            original_filename=Path(file_name).name or "file.bin",
+            storage_uri=str(storage_path),
+            mime_type=(content_type or "application/octet-stream").strip() or "application/octet-stream",
+            file_size_bytes=file_size_bytes,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def upload_study_file_for_space(
+        self,
+        space_id: uuid.UUID,
+        collection_id: uuid.UUID,
+        *,
+        actor_user_id: uuid.UUID,
+        file_name: str,
+        content_type: str | None,
+        file_stream: BinaryIO,
+    ) -> ResearchStudyFile:
+        collection = self.get_collection_for_space(space_id, collection_id)
+        file_id = uuid.uuid4()
+        storage_path = self._study_file_storage_path(collection.id, file_id, file_name)
+        file_size_bytes = self._write_study_file(file_stream, storage_path)
+        item = ResearchStudyFile(
+            id=file_id,
+            project_id=collection.project_id,
+            research_space_id=space_id,
+            collection_id=collection.id,
+            uploaded_by_user_id=actor_user_id,
+            original_filename=Path(file_name).name or "file.bin",
+            storage_uri=str(storage_path),
+            mime_type=(content_type or "application/octet-stream").strip() or "application/octet-stream",
+            file_size_bytes=file_size_bytes,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def get_study_file(self, project_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> ResearchStudyFile:
+        self.get_collection(project_id, collection_id)
+        item = self.db.scalar(
+            select(ResearchStudyFile).where(
+                ResearchStudyFile.project_id == project_id,
+                ResearchStudyFile.collection_id == collection_id,
+                ResearchStudyFile.id == file_id,
+            )
+        )
+        if not item:
+            raise NotFoundError("Study file not found.")
+        return item
+
+    def get_study_file_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> ResearchStudyFile:
+        self.get_collection_for_space(space_id, collection_id)
+        item = self.db.scalar(
+            select(ResearchStudyFile).where(
+                ResearchStudyFile.research_space_id == space_id,
+                ResearchStudyFile.collection_id == collection_id,
+                ResearchStudyFile.id == file_id,
+            )
+        )
+        if not item:
+            raise NotFoundError("Study file not found.")
+        return item
+
+    def delete_study_file(self, project_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> None:
+        item = self.get_study_file(project_id, collection_id, file_id)
+        path = Path(item.storage_uri)
+        self.db.delete(item)
+        self.db.commit()
+        if path.exists():
+            path.unlink(missing_ok=True)
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+
+    def delete_study_file_for_space(self, space_id: uuid.UUID, collection_id: uuid.UUID, file_id: uuid.UUID) -> None:
+        item = self.get_study_file_for_space(space_id, collection_id, file_id)
+        path = Path(item.storage_uri)
+        self.db.delete(item)
+        self.db.commit()
+        if path.exists():
+            path.unlink(missing_ok=True)
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
 
     def get_author_name(self, member_id: uuid.UUID | None) -> str | None:
         if not member_id:

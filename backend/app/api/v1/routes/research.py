@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
+from collections import defaultdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.v1.routes.chat_serialization import build_scoped_chat_message_payload
 from app.core.config import settings
-from app.core.security import get_current_user
-from app.db.session import get_db
+from app.core.security import decode_token, get_current_user
+from app.db.session import SessionLocal, get_db
 from app.models.auth import UserAccount
+from app.models.collaboration_chat import ProjectChatRoomMember
 from app.models.research import BibliographyReference
 from app.models.organization import TeamMember
 from app.schemas.research import (
@@ -63,6 +68,8 @@ from app.schemas.research import (
     CollectionRead,
     CollectionUpdate,
     NoteCreate,
+    StudyFileListRead,
+    StudyFileRead,
     NoteListRead,
     NoteRead,
     NoteReferencesPayload,
@@ -79,6 +86,11 @@ from app.schemas.research import (
     ResearchSpaceRead,
     ResearchSpaceUpdate,
     ResultComparisonRead,
+    StudyChatRoomRead,
+    StudyChatMessageCreate,
+    StudyChatMessageListRead,
+    StudyChatMessageRead,
+    StudyChatReactionToggleRequest,
     WbsLinksPayload,
     WbsLinksRead,
 )
@@ -97,7 +109,65 @@ def require_bibliography_access(current_user: UserAccount = Depends(get_current_
 
 
 router = APIRouter(dependencies=[Depends(require_research_access)])
+websocket_router = APIRouter()
 bibliography_router = APIRouter(prefix="/bibliography", dependencies=[Depends(require_bibliography_access)])
+
+
+class StudyChatHub:
+    def __init__(self) -> None:
+        self._connections: dict[str, set[WebSocket]] = defaultdict(set)
+        self._presence_counts: dict[str, dict[str, int]] = defaultdict(dict)
+
+    async def connect(self, room_key: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._connections[room_key].add(websocket)
+
+    def disconnect(self, room_key: str, websocket: WebSocket) -> None:
+        if room_key in self._connections:
+            self._connections[room_key].discard(websocket)
+            if not self._connections[room_key]:
+                del self._connections[room_key]
+        if room_key in self._presence_counts and not self._presence_counts[room_key]:
+            del self._presence_counts[room_key]
+
+    def user_join(self, room_key: str, user_id: uuid.UUID) -> bool:
+        key = str(user_id)
+        room_map = self._presence_counts[room_key]
+        previous = room_map.get(key, 0)
+        room_map[key] = previous + 1
+        return previous == 0
+
+    def user_leave(self, room_key: str, user_id: uuid.UUID) -> bool:
+        key = str(user_id)
+        room_map = self._presence_counts.get(room_key, {})
+        previous = room_map.get(key, 0)
+        if previous <= 1:
+            room_map.pop(key, None)
+            if room_key in self._presence_counts and not self._presence_counts[room_key]:
+                del self._presence_counts[room_key]
+            return previous > 0
+        room_map[key] = previous - 1
+        return False
+
+    def online_user_ids(self, room_key: str) -> list[str]:
+        return sorted(self._presence_counts.get(room_key, {}).keys())
+
+    async def broadcast(self, room_key: str, payload: dict) -> None:
+        sockets = list(self._connections.get(room_key, set()))
+        if not sockets:
+            return
+        text = json.dumps(payload, ensure_ascii=True)
+        dead: list[WebSocket] = []
+        for socket in sockets:
+            try:
+                await socket.send_text(text)
+            except Exception:
+                dead.append(socket)
+        for socket in dead:
+            self.disconnect(room_key, socket)
+
+
+study_chat_hub = StudyChatHub()
 
 
 def _resolve_member_id(db: Session, user: UserAccount, project_id: uuid.UUID) -> uuid.UUID | None:
@@ -291,6 +361,191 @@ def get_collection(
         deliverable_ids=wbs["deliverable_ids"],
         meetings=[_meeting_read(item) for item in meetings],
     )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/chat-room", response_model=StudyChatRoomRead)
+def ensure_collection_chat_room(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> StudyChatRoomRead:
+    svc = ResearchService(db)
+    try:
+        room = (
+            svc.ensure_collection_chat_room_for_space(uuid.UUID(space_id), collection_id, actor_user_id=current_user.id)
+            if space_id
+            else svc.ensure_collection_chat_room(project_id, collection_id, actor_user_id=current_user.id)
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _study_chat_room_read(svc, room)
+
+
+@router.get("/{project_id}/research/collections/{collection_id}/chat/messages", response_model=StudyChatMessageListRead)
+def list_study_chat_messages(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> StudyChatMessageListRead:
+    svc = ResearchService(db)
+    try:
+        if space_id:
+            svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+        else:
+            svc.get_collection(project_id, collection_id)
+        items, total = svc.list_study_chat_messages(
+            collection_id,
+            actor_user_id=current_user.id,
+            page=page,
+            page_size=page_size,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    message_ids = [item.id for item in items]
+    reaction_map = svc.study_chat_reaction_summary_by_message(message_ids)
+    reply_lookup = svc.study_chat_message_lookup([item.reply_to_message_id for item in items if item.reply_to_message_id])
+    return StudyChatMessageListRead(
+        items=[_study_chat_message_read(svc, collection_id, item, reaction_map, reply_lookup) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/chat/messages", response_model=StudyChatMessageRead)
+async def create_study_chat_message(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    payload: StudyChatMessageCreate,
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> StudyChatMessageRead:
+    svc = ResearchService(db)
+    try:
+        if space_id:
+            svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+        else:
+            svc.get_collection(project_id, collection_id)
+        reply_to_message_id = uuid.UUID(payload.reply_to_message_id) if payload.reply_to_message_id else None
+        message = svc.create_study_chat_message(
+            collection_id,
+            actor_user_id=current_user.id,
+            content=payload.content,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid reply_to_message_id UUID.") from exc
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    reaction_map = svc.study_chat_reaction_summary_by_message([message.id])
+    reply_lookup = svc.study_chat_message_lookup([message.reply_to_message_id] if message.reply_to_message_id else [])
+    rendered = _study_chat_message_read(svc, collection_id, message, reaction_map, reply_lookup)
+    room_key = _study_chat_room_key(collection_id)
+    return_payload = rendered.model_dump(mode="json")
+    asyncio.create_task(study_chat_hub.broadcast(room_key, {"event": "message", "message": return_payload}))
+    return rendered
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/chat/messages/{message_id}/reactions", response_model=StudyChatMessageRead)
+async def toggle_study_chat_reaction(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    message_id: uuid.UUID,
+    payload: StudyChatReactionToggleRequest,
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> StudyChatMessageRead:
+    svc = ResearchService(db)
+    try:
+        if space_id:
+            svc.get_collection_for_space(uuid.UUID(space_id), collection_id)
+        else:
+            svc.get_collection(project_id, collection_id)
+        message = svc.toggle_study_chat_reaction(
+            collection_id,
+            message_id,
+            actor_user_id=current_user.id,
+            emoji=payload.emoji,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    reaction_map = svc.study_chat_reaction_summary_by_message([message.id])
+    reply_lookup = svc.study_chat_message_lookup([message.reply_to_message_id] if message.reply_to_message_id else [])
+    rendered = _study_chat_message_read(svc, collection_id, message, reaction_map, reply_lookup)
+    room_key = _study_chat_room_key(collection_id)
+    return_payload = rendered.model_dump(mode="json")
+    asyncio.create_task(study_chat_hub.broadcast(room_key, {"event": "message_update", "message": return_payload}))
+    return rendered
+
+
+@websocket_router.websocket("/{project_id}/research/collections/{collection_id}/chat/ws")
+async def websocket_study_chat(
+    websocket: WebSocket,
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+) -> None:
+    token = websocket.query_params.get("token")
+    raw_space_id = websocket.query_params.get("space_id")
+    if not token:
+        await websocket.close(code=4401, reason="Missing token")
+        return
+    try:
+        token_payload = decode_token(token, expected_type="access")
+        user_id = uuid.UUID(str(token_payload["sub"]))
+    except Exception:
+        await websocket.close(code=4401, reason="Invalid token")
+        return
+
+    with SessionLocal() as db:
+        svc = ResearchService(db)
+        try:
+            if raw_space_id:
+                svc.get_collection_for_space(uuid.UUID(raw_space_id), collection_id)
+            else:
+                svc.get_collection(project_id, collection_id)
+            if not svc.can_access_collection_chat(collection_id, user_id):
+                raise ValidationError("Forbidden")
+            user = db.get(UserAccount, user_id)
+            if not user:
+                raise NotFoundError("User not found.")
+        except Exception:
+            await websocket.close(code=4403, reason="Forbidden")
+            return
+        display_name = user.display_name
+
+    room_key = _study_chat_room_key(collection_id)
+    await study_chat_hub.connect(room_key, websocket)
+    became_online = study_chat_hub.user_join(room_key, user_id)
+    await websocket.send_text(json.dumps({"event": "presence_snapshot", "user_ids": study_chat_hub.online_user_ids(room_key)}))
+    if became_online:
+        await study_chat_hub.broadcast(
+            room_key,
+            {"event": "presence", "status": "joined", "user_id": str(user_id), "display_name": display_name},
+        )
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        study_chat_hub.disconnect(room_key, websocket)
+        became_offline = study_chat_hub.user_leave(room_key, user_id)
+        if became_offline:
+            await study_chat_hub.broadcast(
+                room_key,
+                {"event": "presence", "status": "left", "user_id": str(user_id), "display_name": display_name},
+            )
 
 
 @router.put("/{project_id}/research/collections/{collection_id}", response_model=CollectionRead)
@@ -626,11 +881,15 @@ def add_collection_member(
 ) -> CollectionMemberRead:
     svc = ResearchService(db)
     try:
+        member_uuid = uuid.UUID(payload.member_id) if payload.member_id else None
+        user_uuid = uuid.UUID(payload.user_id) if payload.user_id else None
         data = (
-            svc.add_collection_member_for_space(uuid.UUID(space_id), collection_id, member_id=uuid.UUID(payload.member_id), role=payload.role)
+            svc.add_collection_member_for_space(uuid.UUID(space_id), collection_id, member_id=member_uuid, user_id=user_uuid, role=payload.role)
             if space_id else
-            svc.add_collection_member(project_id, collection_id, member_id=uuid.UUID(payload.member_id), role=payload.role)
+            svc.add_collection_member(project_id, collection_id, member_id=member_uuid, user_id=user_uuid, role=payload.role)
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid member/user UUID.") from exc
     except (NotFoundError, ValidationError) as exc:
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -2008,6 +2267,7 @@ def create_note(
             tags=payload.tags,
             author_member_id=member_id,
             linked_reference_ids=payload.linked_reference_ids,
+            linked_file_ids=payload.linked_file_ids,
         )
         item = svc.create_note_for_space(uuid.UUID(space_id), **params) if space_id else svc.create_note(project_id, **params)
     except (NotFoundError, ValidationError) as exc:
@@ -2048,6 +2308,7 @@ def update_note(
             lane=payload.lane,
             note_type=payload.note_type,
             tags=payload.tags,
+            linked_file_ids=payload.linked_file_ids,
         )
         item = svc.update_note_for_space(uuid.UUID(space_id), note_id, **params) if space_id else svc.update_note(project_id, note_id, **params)
     except (NotFoundError, ValidationError) as exc:
@@ -2091,6 +2352,109 @@ def set_note_references(
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _note_read(svc, item)
+
+
+@router.get("/{project_id}/research/collections/{collection_id}/files", response_model=StudyFileListRead)
+def list_study_files(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> StudyFileListRead:
+    svc = ResearchService(db)
+    try:
+        items, total = (
+            svc.list_study_files_for_space_scope(uuid.UUID(space_id), collection_id, page=page, page_size=page_size)
+            if space_id else
+            svc.list_study_files(project_id, collection_id, page=page, page_size=page_size)
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StudyFileListRead(
+        items=[_study_file_read(project_id, svc, item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.post("/{project_id}/research/collections/{collection_id}/files", response_model=StudyFileRead, status_code=status.HTTP_201_CREATED)
+def upload_study_file(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    file: UploadFile = File(...),
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> StudyFileRead:
+    svc = ResearchService(db)
+    try:
+        item = (
+            svc.upload_study_file_for_space(
+                uuid.UUID(space_id),
+                collection_id,
+                actor_user_id=current_user.id,
+                file_name=file.filename or "file.bin",
+                content_type=file.content_type,
+                file_stream=file.file,
+            )
+            if space_id else
+            svc.upload_study_file(
+                project_id,
+                collection_id,
+                actor_user_id=current_user.id,
+                file_name=file.filename or "file.bin",
+                content_type=file.content_type,
+                file_stream=file.file,
+            )
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return _study_file_read(project_id, svc, item)
+
+
+@router.get("/{project_id}/research/collections/{collection_id}/files/{file_id}/download")
+def download_study_file(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    file_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    svc = ResearchService(db)
+    try:
+        item = (
+            svc.get_study_file_for_space(uuid.UUID(space_id), collection_id, file_id)
+            if space_id else
+            svc.get_study_file(project_id, collection_id, file_id)
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    file_path = Path(item.storage_uri)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Study file is missing from storage.")
+    return FileResponse(str(file_path), filename=item.original_filename, media_type=item.mime_type or "application/octet-stream")
+
+
+@router.delete("/{project_id}/research/collections/{collection_id}/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_study_file(
+    project_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    file_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> None:
+    svc = ResearchService(db)
+    try:
+        if space_id:
+            svc.delete_study_file_for_space(uuid.UUID(space_id), collection_id, file_id)
+        else:
+            svc.delete_study_file(project_id, collection_id, file_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2206,11 +2570,14 @@ def _collection_read(svc: ResearchService, item) -> CollectionRead:
 
 def _member_read(data: dict) -> CollectionMemberRead:
     cm = data["item"]
+    avatar_url = f"/auth/users/{cm.user_account_id}/avatar" if cm.user_account_id else None
     return CollectionMemberRead(
         id=str(cm.id),
-        member_id=str(cm.member_id),
+        member_id=str(cm.user_account_id or cm.member_id),
+        user_id=str(cm.user_account_id) if cm.user_account_id else None,
         member_name=data.get("member_name", ""),
         organization_short_name=data.get("organization_short_name", ""),
+        avatar_url=avatar_url,
         role=cm.role.value if hasattr(cm.role, "value") else str(cm.role),
         created_at=cm.created_at,
         updated_at=cm.updated_at,
@@ -2224,6 +2591,45 @@ def _meeting_read(item) -> CollectionMeetingRead:
         starts_at=item.starts_at,
         source_type=item.source_type.value if hasattr(item.source_type, "value") else str(item.source_type),
         summary=item.summary,
+    )
+
+
+def _study_chat_room_read(svc: ResearchService, room) -> StudyChatRoomRead:
+    member_user_ids = [
+        str(user_id)
+        for user_id in svc.db.scalars(
+            select(ProjectChatRoomMember.user_id).where(ProjectChatRoomMember.thread_id == room.id)
+        ).all()
+    ]
+    return StudyChatRoomRead(
+        project_id=str(room.project_id) if room.project_id else None,
+        room_id=str(room.id),
+        room_name=room.name,
+        member_user_ids=member_user_ids,
+    )
+
+
+def _study_chat_room_key(collection_id: uuid.UUID) -> str:
+    return f"study:{collection_id}"
+
+
+def _study_chat_message_read(
+    svc: ResearchService,
+    collection_id: uuid.UUID,
+    item,
+    reaction_map: dict[uuid.UUID, list[dict]] | None = None,
+    reply_lookup: dict[uuid.UUID, object] | None = None,
+) -> StudyChatMessageRead:
+    return StudyChatMessageRead(
+        id=str(item.id),
+        collection_id=str(collection_id),
+        **build_scoped_chat_message_payload(
+            item=item,
+            get_display_name=svc.get_user_display_name,
+            reaction_map=reaction_map,
+            reply_lookup=reply_lookup,
+            fallback_reply_lookup=svc.study_chat_message_lookup,
+        ),
     )
 
 
@@ -2372,6 +2778,24 @@ def _note_read(svc: ResearchService, item) -> NoteRead:
         note_type=item.note_type.value if hasattr(item.note_type, "value") else str(item.note_type),
         tags=item.tags or [],
         linked_reference_ids=svc.get_note_reference_ids(item.id),
+        linked_file_ids=svc.get_note_file_ids(item.id),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _study_file_read(project_id: uuid.UUID, svc: ResearchService, item) -> StudyFileRead:
+    return StudyFileRead(
+        id=str(item.id),
+        research_space_id=str(item.research_space_id) if item.research_space_id else None,
+        project_id=str(item.project_id) if item.project_id else None,
+        collection_id=str(item.collection_id),
+        uploaded_by_user_id=str(item.uploaded_by_user_id) if item.uploaded_by_user_id else None,
+        uploaded_by_name=svc.get_user_display_name(item.uploaded_by_user_id) if item.uploaded_by_user_id else None,
+        original_filename=item.original_filename,
+        mime_type=item.mime_type,
+        file_size_bytes=item.file_size_bytes,
+        download_url=f"/projects/{project_id}/research/collections/{item.collection_id}/files/{item.id}/download",
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

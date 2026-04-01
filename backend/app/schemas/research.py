@@ -5,6 +5,11 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.common import PaginatedResponse
+from app.schemas.scoped_chat import (
+    ScopedChatMessageBaseRead,
+    ScopedChatMessageCreateRequest,
+    ScopedChatMessageReactionToggleRequest,
+)
 
 
 class ResearchSpaceCreate(BaseModel):
@@ -88,6 +93,7 @@ class StudyIterationRead(BaseModel):
     end_date: date | None = None
     note_ids: list[str] = Field(default_factory=list)
     reference_ids: list[str] = Field(default_factory=list)
+    file_ids: list[str] = Field(default_factory=list)
     result_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
     what_changed: list[str] = Field(default_factory=list)
@@ -105,6 +111,7 @@ class StudyResultRead(BaseModel):
     title: str
     note_ids: list[str] = Field(default_factory=list)
     reference_ids: list[str] = Field(default_factory=list)
+    file_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
     what_changed: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
@@ -123,6 +130,47 @@ class ResultComparisonRead(BaseModel):
     likely_causes: list[str] = Field(default_factory=list)
     next_experiment_changes: list[str] = Field(default_factory=list)
     compared_result_ids: list[str] = Field(default_factory=list)
+
+
+class StudyChatRoomRead(BaseModel):
+    project_id: str | None = None
+    room_id: str
+    room_name: str
+    member_user_ids: list[str] = Field(default_factory=list)
+
+
+class StudyChatReactionRead(BaseModel):
+    emoji: str
+    count: int
+    user_ids: list[str] = Field(default_factory=list)
+
+
+class StudyChatReplyPreviewRead(BaseModel):
+    id: str
+    sender_user_id: str
+    sender_display_name: str
+    content: str
+    deleted_at: datetime | None = None
+    created_at: datetime
+
+
+class StudyChatMessageRead(ScopedChatMessageBaseRead):
+    id: str
+    collection_id: str
+    reply_to_message: StudyChatReplyPreviewRead | None = None
+    reactions: list[StudyChatReactionRead] = Field(default_factory=list)
+
+
+class StudyChatMessageListRead(PaginatedResponse):
+    items: list[StudyChatMessageRead] = Field(default_factory=list)
+
+
+class StudyChatMessageCreate(ScopedChatMessageCreateRequest):
+    pass
+
+
+class StudyChatReactionToggleRequest(ScopedChatMessageReactionToggleRequest):
+    pass
 
 
 class PaperAuthorRead(BaseModel):
@@ -145,6 +193,7 @@ class PaperClaimRead(BaseModel):
     reference_ids: list[str] = Field(default_factory=list)
     note_ids: list[str] = Field(default_factory=list)
     result_ids: list[str] = Field(default_factory=list)
+    file_ids: list[str] = Field(default_factory=list)
     status: str = "draft"
     audit_status: str | None = None
     audit_summary: str | None = None
@@ -163,6 +212,7 @@ class PaperSectionRead(BaseModel):
     reference_ids: list[str] = Field(default_factory=list)
     note_ids: list[str] = Field(default_factory=list)
     result_ids: list[str] = Field(default_factory=list)
+    file_ids: list[str] = Field(default_factory=list)
     status: str = "not_started"
 
 
@@ -215,7 +265,8 @@ class CollectionListRead(PaginatedResponse):
 # ── Collection member ─────────────────────────────────────────────────
 
 class CollectionMemberCreate(BaseModel):
-    member_id: str
+    member_id: str | None = None
+    user_id: str | None = None
     role: str = "contributor"
 
 
@@ -226,8 +277,10 @@ class CollectionMemberUpdate(BaseModel):
 class CollectionMemberRead(BaseModel):
     id: str
     member_id: str
+    user_id: str | None = None
     member_name: str = ""
     organization_short_name: str = ""
+    avatar_url: str | None = None
     role: str
     created_at: datetime
     updated_at: datetime
@@ -550,6 +603,7 @@ class NoteCreate(BaseModel):
     note_type: str = "observation"
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)
+    linked_file_ids: list[str] = Field(default_factory=list)
 
 
 class NoteUpdate(BaseModel):
@@ -559,6 +613,26 @@ class NoteUpdate(BaseModel):
     lane: str | None = None
     note_type: str | None = None
     tags: list[str] | None = None
+    linked_file_ids: list[str] | None = None
+
+
+class StudyFileRead(BaseModel):
+    id: str
+    research_space_id: str | None = None
+    project_id: str | None = None
+    collection_id: str
+    uploaded_by_user_id: str | None = None
+    uploaded_by_name: str | None = None
+    original_filename: str
+    mime_type: str | None = None
+    file_size_bytes: int = 0
+    download_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class StudyFileListRead(PaginatedResponse):
+    items: list[StudyFileRead] = Field(default_factory=list)
 
 
 class NoteRead(BaseModel):
@@ -574,6 +648,7 @@ class NoteRead(BaseModel):
     note_type: str
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)
+    linked_file_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

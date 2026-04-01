@@ -3,6 +3,11 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.common import PaginatedResponse
+from app.schemas.scoped_chat import (
+    ScopedChatMessageBaseRead,
+    ScopedChatMessageCreateRequest,
+    ScopedChatMessageReactionToggleRequest,
+)
 
 
 class ChatRoomCreateRequest(BaseModel):
@@ -33,13 +38,12 @@ class RoomMemberAddRequest(BaseModel):
     user_id: str
 
 
-class ChatMessageCreateRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=8000)
-    reply_to_message_id: str | None = None
+class ChatMessageCreateRequest(ScopedChatMessageCreateRequest):
+    pass
 
 
-class ChatMessageReactionToggleRequest(BaseModel):
-    emoji: str = Field(min_length=1, max_length=32)
+class ChatMessageReactionToggleRequest(ScopedChatMessageReactionToggleRequest):
+    pass
 
 
 class ChatMessageReactionRead(BaseModel):
@@ -57,20 +61,12 @@ class ChatMessageReplyPreview(BaseModel):
     created_at: datetime
 
 
-class ChatMessageRead(BaseModel):
+class ChatMessageRead(ScopedChatMessageBaseRead):
     id: str
     project_id: str
     room_id: str
-    sender_user_id: str
-    sender_display_name: str
-    content: str
-    reply_to_message_id: str | None = None
     reply_to_message: ChatMessageReplyPreview | None = None
     reactions: list[ChatMessageReactionRead] = Field(default_factory=list)
-    edited_at: datetime | None = None
-    deleted_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
 
 
 class ChatMessageListRead(PaginatedResponse):

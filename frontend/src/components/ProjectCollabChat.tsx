@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import FocusLock from "react-focus-lock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBullhorn, faFaceSmile, faPaperPlane, faPlus, faReply, faUsersGear } from "@fortawesome/free-solid-svg-icons";
@@ -12,6 +12,7 @@ import type {
   ProjectChatMessage,
   ProjectChatRoom,
 } from "../types";
+import { ChatThreadPanel, type ChatComposerSuggestion, type ChatParticipant, type ChatThreadMessage } from "./ChatThreadPanel";
 
 type Props = {
   selectedProjectId: string;
@@ -19,6 +20,9 @@ type Props = {
   accessToken: string;
   openRoomId?: string | null;
   onOpenRoomConsumed?: () => void;
+  singleRoomId?: string | null;
+  compact?: boolean;
+  threadTitle?: string | null;
 };
 
 type ComposerSuggestion = {
@@ -259,7 +263,127 @@ function extractMentionTokens(content: string): Set<string> {
   return tokens;
 }
 
-export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken, openRoomId, onOpenRoomConsumed }: Props) {
+function ChatPanel({
+  currentUser,
+  memberships,
+  shownUsers,
+  shownOnlineUsers,
+  messages,
+  botStreams,
+  currentUserMentionTokens,
+  draft,
+  composerRef,
+  threadEndRef,
+  replyToMessage,
+  reactionPickerMessageId,
+  showEmojiPicker,
+  assistOpen,
+  assistSuggestions,
+  assistIndex,
+  title,
+  headerActions,
+  onDraftChange,
+  onDraftCursorActivity,
+  onDraftKeyDown,
+  onDraftBlur,
+  onSend,
+  onReply,
+  onClearReply,
+  onToggleReactionPicker,
+  onToggleReaction,
+  onToggleEmojiPicker,
+  onInsertEmoji,
+  onApplySuggestion,
+}: {
+  currentUser: AuthUser;
+  memberships: MembershipWithUser[];
+  shownUsers: AuthUser[];
+  shownOnlineUsers: AuthUser[];
+  messages: ProjectChatMessage[];
+  botStreams: Record<string, string>;
+  currentUserMentionTokens: Set<string>;
+  draft: string;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  threadEndRef: RefObject<HTMLDivElement | null>;
+  replyToMessage: ProjectChatMessage | null;
+  reactionPickerMessageId: string | null;
+  showEmojiPicker: boolean;
+  assistOpen: boolean;
+  assistSuggestions: Array<{ id: string; token: string; label: string; sublabel?: string; insertText: string; prefix?: string }>;
+  assistIndex: number;
+  title: string;
+  headerActions: ReactNode;
+  onDraftChange: (value: string, cursorPosition: number) => void;
+  onDraftCursorActivity: (value: string, cursorPosition: number) => void;
+  onDraftKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onDraftBlur: () => void;
+  onSend: () => void | Promise<void>;
+  onReply: (message: ChatThreadMessage) => void;
+  onClearReply: () => void;
+  onToggleReactionPicker: (messageId: string) => void;
+  onToggleReaction: (messageId: string, emoji: string) => void | Promise<void>;
+  onToggleEmojiPicker: () => void;
+  onInsertEmoji: (emoji: string) => void;
+  onApplySuggestion: (item: ChatComposerSuggestion) => void;
+}) {
+  const participants = useMemo<ChatParticipant[]>(
+    () =>
+      shownUsers.map((user) => ({
+        id: user.id,
+        name: user.display_name,
+        subtitle: user.email,
+        avatarUrl: findAvatarUrl(user.id, memberships, currentUser),
+      })),
+    [shownUsers, memberships, currentUser],
+  );
+
+  return (
+    <ChatThreadPanel
+      title={title}
+      headerActions={headerActions}
+      currentUser={currentUser}
+      currentUserMentionTokens={currentUserMentionTokens}
+      messages={messages}
+      streamMessages={Object.entries(botStreams).map(([id, content]) => ({ id, label: "Project Bot", content }))}
+      participants={participants}
+      onlineUserIds={shownOnlineUsers.map((user) => user.id)}
+      draft={draft}
+      composerRef={composerRef}
+      threadEndRef={threadEndRef}
+      replyToMessage={replyToMessage}
+      reactionPickerMessageId={reactionPickerMessageId}
+      showEmojiPicker={showEmojiPicker}
+      assistOpen={assistOpen}
+      assistSuggestions={assistSuggestions}
+      assistIndex={assistIndex}
+      sendDisabled={!draft.trim()}
+      messageDomIdPrefix="pm-msg"
+      onDraftChange={onDraftChange}
+      onDraftCursorActivity={onDraftCursorActivity}
+      onDraftKeyDown={onDraftKeyDown}
+      onDraftBlur={onDraftBlur}
+      onSend={onSend}
+      onReply={onReply}
+      onClearReply={onClearReply}
+      onToggleReactionPicker={onToggleReactionPicker}
+      onToggleReaction={onToggleReaction}
+      onToggleEmojiPicker={onToggleEmojiPicker}
+      onInsertEmoji={onInsertEmoji}
+      onApplySuggestion={onApplySuggestion}
+    />
+  );
+}
+
+export function ProjectCollabChat({
+  selectedProjectId,
+  currentUser,
+  accessToken,
+  openRoomId,
+  onOpenRoomConsumed,
+  singleRoomId = null,
+  compact = false,
+  threadTitle = null,
+}: Props) {
   const [rooms, setRooms] = useState<ProjectChatRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
@@ -312,6 +436,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
     [memberships, currentUser.id, selectedProjectId]
   );
   const canManage = myRole === "project_owner" || myRole === "project_manager";
+  const effectiveManage = compact ? false : canManage;
 
   const uniqueUsers = useMemo(() => {
     const byId = new Map<string, MembershipWithUser["user"]>();
@@ -460,12 +585,15 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
   }, [selectedProjectId]);
 
   useEffect(() => {
-    if (!openRoomId || rooms.length === 0) return;
-    if (rooms.some((room) => room.id === openRoomId)) {
-      setSelectedRoomId(openRoomId);
+    const targetRoomId = singleRoomId || openRoomId;
+    if (!targetRoomId || rooms.length === 0) return;
+    if (rooms.some((room) => room.id === targetRoomId)) {
+      setSelectedRoomId(targetRoomId);
     }
-    onOpenRoomConsumed?.();
-  }, [openRoomId, onOpenRoomConsumed, rooms]);
+    if (!singleRoomId) {
+      onOpenRoomConsumed?.();
+    }
+  }, [openRoomId, onOpenRoomConsumed, rooms, singleRoomId]);
 
   useEffect(() => {
     if (!selectedProjectId) return;
@@ -527,20 +655,21 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
         api.listDocuments(projectId),
         api.listProjectBroadcasts(projectId, { page: 1, pageSize: 12 }),
       ]);
-      setRooms(roomsRes.items);
+      const filteredRooms = singleRoomId ? roomsRes.items.filter((room) => room.id === singleRoomId) : roomsRes.items;
+      setRooms(filteredRooms);
       setMemberships(membershipsRes.items);
       setDocuments(docsRes.items);
-      setBroadcasts(broadcastsRes.items);
+      setBroadcasts(compact ? [] : broadcastsRes.items);
       setRoomMemberUserId("");
       const latestEntries = await Promise.all(
-        roomsRes.items.map(async (room) => {
+        filteredRooms.map(async (room) => {
           const response = await api.listRoomMessages(projectId, room.id, { page: 1, pageSize: 1 });
           return [room.id, response.items[0]?.created_at ?? ""] as const;
         })
       );
       if (activeProjectIdRef.current !== projectId || contextRequestIdRef.current !== requestId) return;
       setLastMessageAtByRoom(Object.fromEntries(latestEntries.filter(([, createdAt]) => createdAt)));
-      setSelectedRoomId(roomsRes.items[0]?.id ?? "");
+      setSelectedRoomId(singleRoomId || filteredRooms[0]?.id || "");
     } catch (err) {
       if (activeProjectIdRef.current !== projectId || contextRequestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : "Failed to load project chat.");
@@ -882,8 +1011,8 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
     <section className="panel">
       {error ? <p className="error">{error}</p> : null}
 
-      <div className="pm-chat-layout">
-        <aside className="card pm-rooms">
+      <div className={`pm-chat-layout${compact ? " compact" : ""}`}>
+        {!compact ? <aside className="card pm-rooms">
           <div className="workpane-head">
             <h3>Rooms</h3>
             <span className={`socket-pill ${socketState}`}>{socketState}</span>
@@ -908,7 +1037,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
             {rooms.length === 0 ? <p className="muted-small">No rooms.</p> : null}
           </div>
 
-          {canManage ? (
+          {effectiveManage ? (
             <div className="pm-room-create">
               <input
                 value={newRoomName}
@@ -925,7 +1054,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
           <div className="pm-broadcast-panel">
             <div className="pm-broadcast-head">
               <h4>Broadcasts</h4>
-              {canManage ? (
+              {effectiveManage ? (
                 <button type="button" className="ghost icon-only" onClick={() => setBroadcastOpen(true)} aria-label="Broadcast">
                   <FontAwesomeIcon icon={faBullhorn} />
                 </button>
@@ -946,274 +1075,54 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
               {broadcasts.length === 0 ? <p className="muted-small">No broadcasts.</p> : null}
             </div>
           </div>
-        </aside>
+        </aside> : null}
 
-        <section className="card pm-thread">
-          <div className="workpane-head">
-            <h3>{selectedRoom?.name || "Room"}</h3>
-            {canManage && selectedRoom ? (
-              <button type="button" className="ghost icon-only" onClick={() => setManageRoomOpen(true)} aria-label="Manage room">
-                <FontAwesomeIcon icon={faUsersGear} />
-              </button>
-            ) : null}
-          </div>
-
-          <div className="pm-messages">
-            {messages.map((message) => {
-              const own = message.sender_user_id === currentUser.id;
-              const mentionTokens = extractMentionTokens(message.content);
-              const mentionsCurrentUser = Array.from(currentUserMentionTokens).some((token) => mentionTokens.has(token));
-              const senderName = own ? "You" : message.sender_display_name;
-              const senderAvatarUrl = findAvatarUrl(message.sender_user_id, memberships, currentUser);
-              const replyPreview = message.reply_to_message;
-              return (
-                <article
-                  id={`pm-msg-${message.id}`}
-                  key={message.id}
-                  className={`pm-message-row ${own ? "own" : "other"} ${mentionsCurrentUser ? "mentioned" : ""}`}
-                >
-                  <span className="pm-avatar-badge small">
-                    {senderAvatarUrl ? (
-                      <img src={senderAvatarUrl} alt={senderName} />
-                    ) : (
-                      initials(senderName)
-                    )}
-                  </span>
-                  <div className={`pm-message-bubble ${own ? "own" : "other"} ${mentionsCurrentUser ? "mentioned" : ""}`}>
-                    <div className="pm-message-head">
-                      <strong>{senderName}</strong>
-                      <span>{formatTimestamp(message.created_at)}</span>
-                    </div>
-                    {replyPreview ? (
-                      <button
-                        type="button"
-                        className="pm-reply-preview"
-                        onClick={() => {
-                          const index = messages.findIndex((item) => item.id === replyPreview.id);
-                          if (index >= 0) {
-                            const row = document.getElementById(`pm-msg-${replyPreview.id}`);
-                            row?.scrollIntoView({ behavior: "smooth", block: "center" });
-                          }
-                        }}
-                      >
-                        <strong>{replyPreview.sender_user_id === currentUser.id ? "You" : replyPreview.sender_display_name}</strong>
-                        <span>{excerpt(replyPreview.content)}</span>
-                      </button>
-                    ) : null}
-                    <div className="chat-markdown">{renderMarkdown(message.content, { currentUserTokens: currentUserMentionTokens })}</div>
-                    {message.reactions.length > 0 ? (
-                      <div className="pm-reactions">
-                        {message.reactions.map((reaction) => {
-                          const mine = reaction.user_ids.includes(currentUser.id);
-                          return (
-                            <button
-                              key={`${message.id}-${reaction.emoji}`}
-                              type="button"
-                              className={`pm-reaction-chip ${mine ? "mine" : ""}`}
-                              onClick={() => void handleToggleReaction(message.id, reaction.emoji)}
-                            >
-                              <span>{reaction.emoji}</span>
-                              <strong>{reaction.count}</strong>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    <div className="pm-message-actions">
-                      <button type="button" className="ghost icon-only" onClick={() => setReplyToMessage(message)} aria-label="Reply">
-                        <FontAwesomeIcon icon={faReply} />
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost icon-only"
-                        onClick={() =>
-                          setReactionPickerMessageId((prev) => (prev === message.id ? null : message.id))
-                        }
-                        aria-label="Add reaction"
-                      >
-                        <FontAwesomeIcon icon={faFaceSmile} />
-                      </button>
-                    </div>
-                    {reactionPickerMessageId === message.id ? (
-                      <div className="pm-reaction-picker">
-                        {EMOJIS.slice(0, 16).map((emoji) => (
-                          <button
-                            key={`${message.id}-reaction-${emoji}`}
-                            type="button"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              void handleToggleReaction(message.id, emoji);
-                            }}
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </article>
-              );
-            })}
-
-            {Object.entries(botStreams).map(([streamId, text]) => (
-              <article key={streamId} className="pm-message-row other">
-                <span className="pm-avatar-badge small">PB</span>
-                <div className="pm-message-bubble other bot-stream-message">
-                  <div className="pm-message-head">
-                    <strong>Project Bot</strong>
-                    <span className="bot-thinking" aria-live="polite">
-                      <span>Bot thinking</span>
-                      <span className="bot-thinking-dots" aria-hidden="true">
-                        <span>.</span>
-                        <span>.</span>
-                        <span>.</span>
-                      </span>
-                    </span>
-                  </div>
-                  <div className="chat-markdown">{renderMarkdown(text || "Thinking")}</div>
-                </div>
-              </article>
-            ))}
-
-            {messages.length === 0 ? <p className="muted-small">No messages yet.</p> : null}
-            <div ref={threadEndRef} />
-          </div>
-
-          <div className="pm-composer">
-            <div className="pm-composer-main">
-              <button
-                type="button"
-                className="ghost icon-only"
-                aria-label="Add emoji"
-                onClick={() => setShowEmojiPicker((prev) => !prev)}
-              >
-                <FontAwesomeIcon icon={faFaceSmile} />
-              </button>
-
-              <div className="composer-input-wrap">
-                {replyToMessage ? (
-                  <div className="pm-composer-reply">
-                    <div className="pm-composer-reply-meta">
-                      <strong>Replying to {replyToMessage.sender_user_id === currentUser.id ? "you" : replyToMessage.sender_display_name}</strong>
-                      <span>{excerpt(replyToMessage.content)}</span>
-                    </div>
-                    <button type="button" className="ghost icon-only" onClick={() => setReplyToMessage(null)} aria-label="Cancel reply">
-                      ×
-                    </button>
-                  </div>
-                ) : null}
-                <textarea
-                  ref={composerRef}
-                  value={draft}
-                  onChange={(event) => {
-                    const nextText = event.target.value;
-                    const cursor = event.target.selectionStart ?? nextText.length;
-                    setDraft(nextText);
-                    updateAssistState(nextText, cursor);
-                  }}
-                  onKeyDown={handleDraftKeyDown}
-                  onClick={(event) =>
-                    updateAssistState(
-                      event.currentTarget.value,
-                      event.currentTarget.selectionStart ?? event.currentTarget.value.length
-                    )
-                  }
-                  onKeyUp={(event) =>
-                    updateAssistState(
-                      event.currentTarget.value,
-                      event.currentTarget.selectionStart ?? event.currentTarget.value.length
-                    )
-                  }
-                  onBlur={() => {
-                    window.setTimeout(() => closeAssist(), 80);
-                  }}
-                  placeholder="Message"
-                />
-
-                {assistOpen && assistSuggestions.length > 0 ? (
-                  <div className="mention-autocomplete">
-                    {assistSuggestions.map((item, index) => (
-                      <button
-                        key={`${item.trigger}-${item.id}-${item.token}`}
-                        type="button"
-                        className={index === assistIndex ? "active" : ""}
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          applySuggestion(item);
-                        }}
-                      >
-                        <strong>{item.trigger}{item.token}</strong>
-                        <span>{item.label}</span>
-                        {item.sublabel ? <small>{item.sublabel}</small> : null}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-
-                {showEmojiPicker ? (
-                  <div className="pm-emoji-picker">
-                    {EMOJIS.map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          insertEmoji(emoji);
-                        }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <button type="button" className="pm-send-button" disabled={!draft.trim()} onClick={() => void handleSendMessage()}>
-              <FontAwesomeIcon icon={faPaperPlane} />
+        <ChatPanel
+          currentUser={currentUser}
+          memberships={memberships}
+          shownUsers={shownUsers}
+          shownOnlineUsers={shownOnlineUsers}
+          messages={messages}
+          botStreams={botStreams}
+          currentUserMentionTokens={currentUserMentionTokens}
+          draft={draft}
+          composerRef={composerRef}
+          threadEndRef={threadEndRef}
+          replyToMessage={replyToMessage}
+          reactionPickerMessageId={reactionPickerMessageId}
+          showEmojiPicker={showEmojiPicker}
+          assistOpen={assistOpen}
+          assistSuggestions={assistSuggestions.map((item) => ({ ...item, prefix: item.trigger }))}
+          assistIndex={assistIndex}
+          title={threadTitle || selectedRoom?.name || "Chat"}
+          headerActions={effectiveManage && selectedRoom ? (
+            <button type="button" className="ghost icon-only" onClick={() => setManageRoomOpen(true)} aria-label="Manage room">
+              <FontAwesomeIcon icon={faUsersGear} />
             </button>
-          </div>
-        </section>
-
-        <aside className="card pm-members">
-          <div className="workpane-head">
-            <h3>Participants</h3>
-          </div>
-          <div className="pm-member-list">
-              <div className="pm-member-group">
-              <h4>Online</h4>
-              {shownOnlineUsers.map((user) => (
-                <div key={user.id} className="pm-member-item">
-                  <span className="pm-avatar-badge">{initials(user.display_name)}</span>
-                  <div className="pm-member-meta">
-                    <strong>{user.id === currentUser.id ? `${user.display_name} (You)` : user.display_name}</strong>
-                    <span>{user.email}</span>
-                  </div>
-                  <span className="pm-presence-dot online" />
-                </div>
-              ))}
-              {shownOnlineUsers.length === 0 ? <p className="muted-small">No users online.</p> : null}
-            </div>
-            <div className="pm-member-group">
-              <h4>Offline</h4>
-              {shownOfflineUsers.map((user) => (
-                <div key={user.id} className="pm-member-item">
-                  <span className="pm-avatar-badge">{initials(user.display_name)}</span>
-                  <div className="pm-member-meta">
-                    <strong>{user.id === currentUser.id ? `${user.display_name} (You)` : user.display_name}</strong>
-                    <span>{user.email}</span>
-                  </div>
-                  <span className="pm-presence-dot offline" />
-                </div>
-              ))}
-              {shownOfflineUsers.length === 0 ? <p className="muted-small">No users offline.</p> : null}
-            </div>
-            {shownUsers.length === 0 ? <p className="muted-small">No participants.</p> : null}
-          </div>
-        </aside>
+          ) : null}
+          onDraftChange={(value, cursor) => {
+            setDraft(value);
+            updateAssistState(value, cursor);
+          }}
+          onDraftCursorActivity={updateAssistState}
+          onDraftKeyDown={handleDraftKeyDown}
+          onDraftBlur={() => {
+            window.setTimeout(() => closeAssist(), 80);
+          }}
+          onSend={handleSendMessage}
+          onReply={(message) => setReplyToMessage(message as ProjectChatMessage)}
+          onClearReply={() => setReplyToMessage(null)}
+          onToggleReactionPicker={(messageId) => setReactionPickerMessageId((prev) => (prev === messageId ? null : messageId))}
+          onToggleReaction={handleToggleReaction}
+          onToggleEmojiPicker={() => setShowEmojiPicker((prev) => !prev)}
+          onInsertEmoji={insertEmoji}
+          onApplySuggestion={(item) =>
+            applySuggestion({ ...item, trigger: (item.prefix || "@") as "@" | "#" })
+          }
+        />
       </div>
 
-      {manageRoomOpen && selectedRoom ? (
+      {effectiveManage && manageRoomOpen && selectedRoom ? (
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <FocusLock returnFocus>
           <div className="modal-card room-modal-card" onKeyDown={(e) => { if (e.key === "Enter" && roomMemberUserId) { e.preventDefault(); void handleAddRoomMember(); } }}>
@@ -1284,7 +1193,7 @@ export function ProjectCollabChat({ selectedProjectId, currentUser, accessToken,
         </div>
       ) : null}
 
-      {broadcastOpen ? (
+      {!compact && broadcastOpen ? (
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <FocusLock returnFocus>
             <div

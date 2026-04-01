@@ -69,6 +69,7 @@ import type {
   ResearchCollectionMember,
   ResearchResultComparison,
   ResearchSpace,
+  ResearchStudyFile,
   ResearchReference,
   ResearchNote,
   Equipment,
@@ -90,6 +91,8 @@ import type {
   TeachingProjectStudent,
   TeachingProgressReport,
   TeachingWorkspace,
+  StudyChatRoom,
+  StudyChatMessage,
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
@@ -1696,6 +1699,55 @@ export const api = {
     return request(`/projects/${projectId}/rooms/${roomId}/messages?page=${page}&page_size=${pageSize}`);
   },
 
+  ensureResearchStudyChatRoom(projectId: string, collectionId: string, spaceId?: string | null): Promise<StudyChatRoom> {
+    const query = new URLSearchParams();
+    if (spaceId) query.set("space_id", spaceId);
+    return request(`/projects/${projectId}/research/collections/${collectionId}/chat-room${query.size ? `?${query.toString()}` : ""}`, {
+      method: "POST",
+    });
+  },
+
+  listStudyChatMessages(
+    projectId: string,
+    collectionId: string,
+    options?: { page?: number; pageSize?: number; spaceId?: string | null }
+  ): Promise<Paginated<StudyChatMessage>> {
+    const query = new URLSearchParams();
+    query.set("page", String(options?.page ?? 1));
+    query.set("page_size", String(options?.pageSize ?? 100));
+    if (options?.spaceId) query.set("space_id", options.spaceId);
+    return request(`/projects/${projectId}/research/collections/${collectionId}/chat/messages?${query.toString()}`);
+  },
+
+  createStudyChatMessage(
+    projectId: string,
+    collectionId: string,
+    payload: { content: string; reply_to_message_id?: string | null },
+    spaceId?: string | null
+  ): Promise<StudyChatMessage> {
+    const query = new URLSearchParams();
+    if (spaceId) query.set("space_id", spaceId);
+    return request(`/projects/${projectId}/research/collections/${collectionId}/chat/messages${query.size ? `?${query.toString()}` : ""}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  toggleStudyChatReaction(
+    projectId: string,
+    collectionId: string,
+    messageId: string,
+    payload: { emoji: string },
+    spaceId?: string | null
+  ): Promise<StudyChatMessage> {
+    const query = new URLSearchParams();
+    if (spaceId) query.set("space_id", spaceId);
+    return request(`/projects/${projectId}/research/collections/${collectionId}/chat/messages/${messageId}/reactions${query.size ? `?${query.toString()}` : ""}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   createRoomMessage(
     projectId: string,
     roomId: string,
@@ -2249,7 +2301,7 @@ export const api = {
     const q = spaceId ? `?space_id=${spaceId}` : "";
     return request(`/projects/${projectId}/research/collections/${collectionId}/members${q}`);
   },
-  addCollectionMember(projectId: string, collectionId: string, data: { member_id: string; role?: string }, spaceId?: string): Promise<ResearchCollectionMember> {
+  addCollectionMember(projectId: string, collectionId: string, data: { member_id?: string; user_id?: string; role?: string }, spaceId?: string): Promise<ResearchCollectionMember> {
     const q = spaceId ? `?space_id=${spaceId}` : "";
     return request(`/projects/${projectId}/research/collections/${collectionId}/members${q}`, { method: "POST", body: JSON.stringify(data) });
   },
@@ -2538,6 +2590,27 @@ export const api = {
   setNoteReferences(projectId: string, noteId: string, referenceIds: string[], spaceId?: string): Promise<ResearchNote> {
     const q = spaceId ? `?space_id=${spaceId}` : "";
     return request(`/projects/${projectId}/research/notes/${noteId}/references${q}`, { method: "PUT", body: JSON.stringify({ reference_ids: referenceIds }) });
+  },
+  listStudyFiles(projectId: string, collectionId: string, opts?: { space_id?: string; page?: number; page_size?: number }): Promise<{ items: ResearchStudyFile[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.space_id) q.set("space_id", opts.space_id);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/${projectId}/research/collections/${collectionId}/files?${q}`);
+  },
+  uploadStudyFile(projectId: string, collectionId: string, file: File, spaceId?: string): Promise<ResearchStudyFile> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    const form = new FormData();
+    form.append("file", file);
+    return request(`/projects/${projectId}/research/collections/${collectionId}/files${q}`, { method: "POST", body: form });
+  },
+  deleteStudyFile(projectId: string, collectionId: string, fileId: string, spaceId?: string): Promise<void> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/collections/${collectionId}/files/${fileId}${q}`, { method: "DELETE" });
+  },
+  getStudyFile(projectId: string, collectionId: string, fileId: string, spaceId?: string): Promise<Blob> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return requestBlob(`/projects/${projectId}/research/collections/${collectionId}/files/${fileId}/download${q}`);
   },
 
   summarizeReference(projectId: string, refId: string, spaceId?: string): Promise<{ ai_summary: string; ai_summary_at: string }> {

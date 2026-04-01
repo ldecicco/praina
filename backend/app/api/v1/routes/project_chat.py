@@ -11,6 +11,7 @@ from app.agents.chat_assistant_agent import ChatAssistantAgent
 from app.core.security import decode_token, get_current_user
 from app.db.session import SessionLocal, get_db
 from app.models.auth import UserAccount
+from app.api.v1.routes.chat_serialization import build_scoped_chat_message_payload
 from app.schemas.auth import MembershipListRead, MembershipRead, MembershipUpsertRequest
 from app.schemas.project_chat import (
     ChatMessageCreateRequest,
@@ -294,7 +295,7 @@ def list_messages(
         [item.reply_to_message_id for item in items if item.reply_to_message_id]
     )
     return ChatMessageListRead(
-        items=[_message_read(service, item, reaction_map, reply_lookup) for item in items],
+        items=[_message_read(service, project_id, room_id, item, reaction_map, reply_lookup) for item in items],
         page=page,
         page_size=page_size,
         total=total,
@@ -327,7 +328,7 @@ async def create_message(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     reaction_map = service.reaction_summary_by_message([message.id])
     reply_lookup = service.message_lookup([message.reply_to_message_id] if message.reply_to_message_id else [])
-    rendered = _message_read(service, message, reaction_map, reply_lookup)
+    rendered = _message_read(service, project_id, room_id, message, reaction_map, reply_lookup)
     await hub.broadcast(_room_key(project_id, room_id), {"event": "message", "message": rendered.model_dump(mode="json")})
     asyncio.create_task(_maybe_generate_bot_reply(project_id, room_id, current_user.id, payload.content))
     return rendered
@@ -353,7 +354,7 @@ async def toggle_message_reaction(
 
     reaction_map = service.reaction_summary_by_message([fresh.id])
     reply_lookup = service.message_lookup([fresh.reply_to_message_id] if fresh.reply_to_message_id else [])
-    rendered = _message_read(service, fresh, reaction_map, reply_lookup)
+    rendered = _message_read(service, project_id, room_id, fresh, reaction_map, reply_lookup)
     await hub.broadcast(
         _room_key(project_id, room_id),
         {"event": "message_updated", "message": rendered.model_dump(mode="json")},
@@ -428,7 +429,7 @@ async def websocket_room(
                     continue
                 reaction_map = service.reaction_summary_by_message([message.id])
                 reply_lookup = service.message_lookup([message.reply_to_message_id] if message.reply_to_message_id else [])
-                rendered = _message_read(service, message, reaction_map, reply_lookup)
+                rendered = _message_read(service, project_id, room_id, message, reaction_map, reply_lookup)
             await hub.broadcast(room_key, {"event": "message", "message": rendered.model_dump(mode="json")})
             asyncio.create_task(_maybe_generate_bot_reply(project_id, room_id, user_id, content))
     except WebSocketDisconnect:
@@ -499,7 +500,7 @@ async def _maybe_generate_bot_reply(project_id: uuid.UUID, room_id: uuid.UUID, s
                 await hub.broadcast(room_key, {"event": "bot_status", "status": "stop", "stream_id": stream_id})
                 return
             reaction_map = service.reaction_summary_by_message([bot_message.id])
-            rendered = _message_read(service, bot_message, reaction_map, {})
+            rendered = _message_read(service, project_id, room_id, bot_message, reaction_map, {})
 
         await hub.broadcast(room_key, {"event": "message", "message": rendered.model_dump(mode="json")})
         await hub.broadcast(room_key, {"event": "bot_status", "status": "stop", "stream_id": stream_id})
@@ -554,42 +555,23 @@ def _room_read(service: ProjectChatService, item) -> ChatRoomRead:
 
 def _message_read(
     service: ProjectChatService,
+    project_id: uuid.UUID,
+    room_id: uuid.UUID,
     item,
     reaction_map: dict[uuid.UUID, list[dict]] | None = None,
     reply_lookup: dict[uuid.UUID, object] | None = None,
 ) -> ChatMessageRead:
-    reply_item = None
-    if item.reply_to_message_id and reply_lookup is not None:
-        reply_item = reply_lookup.get(item.reply_to_message_id)
-    if item.reply_to_message_id and reply_item is None:
-        reply_item = service.message_lookup([item.reply_to_message_id]).get(item.reply_to_message_id)
-
-    reply_payload = None
-    if reply_item:
-        reply_payload = {
-            "id": str(reply_item.id),
-            "sender_user_id": str(reply_item.sender_user_id),
-            "sender_display_name": service.get_user_display_name(reply_item.sender_user_id),
-            "content": reply_item.content,
-            "deleted_at": reply_item.deleted_at,
-            "created_at": reply_item.created_at,
-        }
-
-    reactions = (reaction_map or {}).get(item.id, [])
     return ChatMessageRead(
         id=str(item.id),
-        project_id=str(item.project_id),
-        room_id=str(item.room_id),
-        sender_user_id=str(item.sender_user_id),
-        sender_display_name=service.get_user_display_name(item.sender_user_id),
-        content=item.content,
-        reply_to_message_id=str(item.reply_to_message_id) if item.reply_to_message_id else None,
-        reply_to_message=reply_payload,
-        reactions=reactions,
-        edited_at=item.edited_at,
-        deleted_at=item.deleted_at,
-        created_at=item.created_at,
-        updated_at=item.updated_at,
+        project_id=str(project_id),
+        room_id=str(room_id),
+        **build_scoped_chat_message_payload(
+            item=item,
+            get_display_name=service.get_user_display_name,
+            reaction_map=reaction_map,
+            reply_lookup=reply_lookup,
+            fallback_reply_lookup=service.message_lookup,
+        ),
     )
 
 

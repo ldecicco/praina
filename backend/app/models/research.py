@@ -96,6 +96,13 @@ research_note_references = Table(
     Column("reference_id", UUID(as_uuid=True), ForeignKey("research_references.id", ondelete="CASCADE"), primary_key=True),
 )
 
+research_note_files = Table(
+    "research_note_files",
+    Base.metadata,
+    Column("note_id", UUID(as_uuid=True), ForeignKey("research_notes.id", ondelete="CASCADE"), primary_key=True),
+    Column("file_id", UUID(as_uuid=True), ForeignKey("research_study_files.id", ondelete="CASCADE"), primary_key=True),
+)
+
 bibliography_reference_tags = Table(
     "bibliography_reference_tags",
     Base.metadata,
@@ -179,7 +186,8 @@ class ResearchCollectionMember(Base, IdMixin, TimestampMixin):
     )
 
     collection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("research_collections.id", ondelete="CASCADE"), index=True)
-    member_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("team_members.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("team_members.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=True, index=True)
     role: Mapped[CollectionMemberRole] = mapped_column(
         Enum(CollectionMemberRole, name="collection_member_role"), default=CollectionMemberRole.contributor,
     )
@@ -326,6 +334,27 @@ class ResearchNote(Base, IdMixin, TimestampMixin):
         Enum(NoteType, name="note_type"), default=NoteType.observation, index=True,
     )
     tags: Mapped[list | None] = mapped_column(JSONB, default=list)
+
+
+class ResearchStudyFile(Base, IdMixin, TimestampMixin):
+    __tablename__ = "research_study_files"
+
+    research_space_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("research_spaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_collections.id", ondelete="CASCADE"), index=True
+    )
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    original_filename: Mapped[str] = mapped_column(String(255))
+    storage_uri: Mapped[str] = mapped_column(String(1024))
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ResearchAnnotation(Base, IdMixin, TimestampMixin):

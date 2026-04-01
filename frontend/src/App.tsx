@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { CommandPalette } from "./components/CommandPalette";
 import type { CommandItem } from "./components/CommandPalette";
@@ -142,18 +142,49 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [proposalCallBrief, setProposalCallBrief] = useState<ProposalCallBrief | null>(null);
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+  const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
+  const [shortcutHudVisible, setShortcutHudVisible] = useState(false);
+  const workspaceBrowserSearchRef = useRef<HTMLInputElement>(null);
 
   // Global keyboard shortcuts
   useEffect(() => {
+    function isEditableTarget(target: EventTarget | null) {
+      const element = target as HTMLElement | null;
+      if (!element) return false;
+      const tag = element.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || element.isContentEditable;
+    }
+
     function handleGlobalKeyDown(e: KeyboardEvent) {
+      if (e.key === "Control" || e.key === "Meta") {
+        setShortcutHudVisible(true);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.code === "Slash") {
+        if (isEditableTarget(e.target)) return;
+        e.preventDefault();
+        setWorkspaceSwitcherOpen(true);
+        return;
+      }
       // Cmd+K / Ctrl+K → open command palette
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setCmdPaletteOpen((prev) => !prev);
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        if (view === "projects-home" || view === "research-home" || view === "teaching-home") {
+          e.preventDefault();
+          workspaceBrowserSearchRef.current?.focus();
+          workspaceBrowserSearchRef.current?.select();
+          return;
+        }
+      }
       // Esc → close topmost modal overlay (if not inside an input/textarea)
       if (e.key === "Escape") {
+        if (workspaceSwitcherOpen) {
+          setWorkspaceSwitcherOpen(false);
+          return;
+        }
         if (cmdPaletteOpen) {
           setCmdPaletteOpen(false);
           return;
@@ -165,9 +196,23 @@ export default function App() {
         }
       }
     }
+    function handleGlobalKeyUp(e: KeyboardEvent) {
+      if (e.key === "Control" || e.key === "Meta") {
+        setShortcutHudVisible(false);
+      }
+    }
+    function handleWindowBlur() {
+      setShortcutHudVisible(false);
+    }
     document.addEventListener("keydown", handleGlobalKeyDown);
-    return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [cmdPaletteOpen]);
+    document.addEventListener("keyup", handleGlobalKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      document.removeEventListener("keydown", handleGlobalKeyDown);
+      document.removeEventListener("keyup", handleGlobalKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [cmdPaletteOpen, workspaceSwitcherOpen, view]);
 
   // Dynamic page title per view
   useEffect(() => {
@@ -799,6 +844,11 @@ export default function App() {
       section: section.label,
     }))
   );
+  const workspaceSwitcherItems: CommandItem[] = [
+    { id: "projects", label: "Projects", icon: faSitemap },
+    { id: "research", label: "Research", icon: faFlask },
+    { id: "teaching", label: "Teaching", icon: faGraduationCap },
+  ];
 
   function switchWorkspaceFamily(nextFamily: WorkspaceFamily) {
     if ((nextFamily === "projects" || nextFamily === "research") && !canAccessResearch) {
@@ -854,6 +904,26 @@ export default function App() {
     workspaceFamily === "research"
       ? researchLinkedProject?.code || null
       : activeProject?.code || null;
+  const shortcutHints = useMemo(() => {
+    const modifier = navigator.platform.toLowerCase().includes("mac") ? "⌘" : "Ctrl";
+    const items: Array<{ key: string; label: string }> = [
+      { key: `${modifier}+/`, label: "Switch Workspace" },
+      { key: `${modifier}+K`, label: "Command Palette" },
+    ];
+    if (view === "projects-home" || view === "research-home" || view === "teaching-home") {
+      items.push({ key: `${modifier}+F`, label: "Search" });
+    }
+    if (view === "research-home") {
+      items.push({ key: "Enter", label: "Open Space" });
+    } else if (view === "projects-home" || view === "teaching-home") {
+      items.push({ key: "Enter", label: "Open Project" });
+    }
+    if (view === "bibliography") {
+      items.push({ key: "Enter", label: "Semantic Search" });
+    }
+    items.push({ key: "Esc", label: "Close" });
+    return items;
+  }, [view]);
 
   const browserResearchSpaces = researchSpaces.filter((space) => {
     if (!workspaceBrowserQuery) return true;
@@ -949,6 +1019,10 @@ export default function App() {
     const isResearchBrowser = view === "research-home";
     const isTeachingBrowser = view === "teaching-home";
     const itemCount = isResearchBrowser ? browserResearchSpaces.length : isTeachingBrowser ? browserTeachingProjects.length : browserResearchProjects.length;
+    const openProjectFromBrowser = (projectId: string) => {
+      handleSelectProject(projectId);
+      setView(isTeachingBrowser ? "teaching" : "dashboard");
+    };
 
     return (
       <div className="workspace-browser-page">
@@ -956,32 +1030,31 @@ export default function App() {
           <div className="setup-summary-stats">
             <span>{itemCount} items</span>
           </div>
-          {isResearchBrowser && canCreateResearchSpaces ? (
-            <button
-              type="button"
-              className="meetings-new-btn"
-              onClick={openNewResearchSpaceModal}
-            >
-              + New Space
-            </button>
-          ) : null}
-          {!isResearchBrowser && canCreateProjects ? (
-            <button type="button" className="meetings-new-btn" onClick={() => setNewProjectOpen(true)}>
-              + New Project
-            </button>
-          ) : null}
-        </div>
-        <div className="meetings-toolbar workspace-browser-toolbar">
-          <div className="meetings-filter-group workspace-browser-filter-group">
+          <div className="workspace-browser-summary-actions">
             <div className="topbar-project-search workspace-browser-search">
               <FontAwesomeIcon icon={faSearch} />
               <input
+                ref={workspaceBrowserSearchRef}
                 type="text"
                 value={workspaceBrowserSearch}
                 onChange={(event) => setWorkspaceBrowserSearch(event.target.value)}
                 placeholder={isResearchBrowser ? "Search spaces" : isTeachingBrowser ? "Search teaching projects" : "Search projects"}
               />
             </div>
+            {isResearchBrowser && canCreateResearchSpaces ? (
+              <button
+                type="button"
+                className="meetings-new-btn"
+                onClick={openNewResearchSpaceModal}
+              >
+                + New Space
+              </button>
+            ) : null}
+            {!isResearchBrowser && canCreateProjects ? (
+              <button type="button" className="meetings-new-btn" onClick={() => setNewProjectOpen(true)}>
+                + New Project
+              </button>
+            ) : null}
           </div>
         </div>
         {itemCount === 0 ? (
@@ -997,6 +1070,19 @@ export default function App() {
                     <div
                       key={space.id}
                       className="workspace-browser-card research-space"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${space.title}`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleSelectResearchSpace(space.id);
+                          setView("research");
+                        } else if (event.key.toLowerCase() === "e") {
+                          event.preventDefault();
+                          openEditResearchSpaceModal(space);
+                        }
+                      }}
                     >
                       <div className="workspace-browser-card-accent" />
                       <div className="workspace-browser-card-top">
@@ -1013,11 +1099,12 @@ export default function App() {
                       <div className="workspace-browser-card-foot">
                         <span className="workspace-browser-meta">{linkedProject?.title || "No linked project"}</span>
                         <div className="workspace-browser-card-actions">
-                          <button type="button" className="ghost" onClick={() => openEditResearchSpaceModal(space)}>
+                          <button type="button" className="ghost" tabIndex={-1} onClick={() => openEditResearchSpaceModal(space)}>
                             Edit
                           </button>
                           <button
                             type="button"
+                            tabIndex={-1}
                             onClick={() => {
                               handleSelectResearchSpace(space.id);
                               setView("research");
@@ -1034,6 +1121,18 @@ export default function App() {
                   <div
                     key={project.id}
                     className={`workspace-browser-card ${isTeachingBrowser ? "teaching-project" : "funded-project"}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open ${project.title}`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openProjectFromBrowser(project.id);
+                      } else if (event.key.toLowerCase() === "e") {
+                        event.preventDefault();
+                        openProjectSettings(project.id);
+                      }
+                    }}
                   >
                     <div className="workspace-browser-card-accent" />
                     <div className="workspace-browser-card-top">
@@ -1050,15 +1149,13 @@ export default function App() {
                     <div className="workspace-browser-card-foot">
                       <span className="workspace-browser-meta">{project.status}</span>
                       <div className="workspace-browser-card-actions">
-                        <button type="button" className="ghost" onClick={() => openProjectSettings(project.id)}>
+                        <button type="button" className="ghost" tabIndex={-1} onClick={() => openProjectSettings(project.id)}>
                           Edit
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            handleSelectProject(project.id);
-                            setView(isTeachingBrowser ? "teaching" : "dashboard");
-                          }}
+                          tabIndex={-1}
+                          onClick={() => openProjectFromBrowser(project.id)}
                         >
                           Open
                         </button>
@@ -1364,6 +1461,8 @@ export default function App() {
             activeResearchSpace ? (
               <ResearchWorkspace
                 selectedProjectId={activeResearchSpace.linked_project_id || RESEARCH_ROUTE_FALLBACK_PROJECT_ID}
+                currentUser={currentUser}
+                accessToken={authTokens.access_token}
                 currentProject={researchLinkedProject}
                 researchSpaceId={activeResearchSpace.id}
                 isAdmin={isSuperAdmin}
@@ -1386,6 +1485,8 @@ export default function App() {
           {view === "bibliography" ? (
             <ResearchWorkspace
               selectedProjectId={activeResearchSpace?.linked_project_id || selectedProjectId || RESEARCH_ROUTE_FALLBACK_PROJECT_ID}
+              currentUser={currentUser}
+              accessToken={authTokens.access_token}
               currentProject={researchLinkedProject ?? activeProject}
               researchSpaceId={activeResearchSpace?.id || ""}
               bibliographyOnly
@@ -1501,6 +1602,28 @@ export default function App() {
           }}
           onClose={() => setCmdPaletteOpen(false)}
         />
+      ) : null}
+      {workspaceSwitcherOpen ? (
+        <CommandPalette
+          items={workspaceSwitcherItems}
+          onSelect={(id) => {
+            setWorkspaceSwitcherOpen(false);
+            switchWorkspaceFamily(id as WorkspaceFamily);
+          }}
+          onClose={() => setWorkspaceSwitcherOpen(false)}
+        />
+      ) : null}
+      {shortcutHudVisible ? (
+        <div className="shortcut-hud" aria-hidden="true">
+          <div className="shortcut-hud-list">
+            {shortcutHints.map((item: { key: string; label: string }) => (
+              <div key={`${item.key}-${item.label}`} className="shortcut-hud-row">
+                <span className="shortcut-hud-key">{item.key}</span>
+                <span className="shortcut-hud-label">{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : null}
       <Toaster
         position="bottom-right"

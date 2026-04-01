@@ -19,7 +19,7 @@ from app.api.v1.routes.my_work import router as my_work_router
 from app.api.v1.routes.reports import router as reports_router
 from app.api.v1.routes.reviews import router as reviews_router
 from app.api.v1.routes.projects import router as projects_router
-from app.api.v1.routes.research import bibliography_router, router as research_router
+from app.api.v1.routes.research import bibliography_router, router as research_router, websocket_router as research_websocket_router
 from app.api.v1.routes.resources import router as resources_router
 from app.api.v1.routes.search import router as search_router
 from app.api.v1.routes.todos import router as todos_router
@@ -46,6 +46,7 @@ api_router.include_router(dashboard_router, prefix="/projects", tags=["dashboard
 api_router.include_router(notifications_router, tags=["notifications"])
 api_router.include_router(todos_router, prefix="/projects", tags=["todos"])
 api_router.include_router(research_router, prefix="/projects", tags=["research"])
+api_router.include_router(research_websocket_router, prefix="/projects", tags=["research"])
 api_router.include_router(bibliography_router, tags=["bibliography"])
 api_router.include_router(resources_router, tags=["resources"])
 api_router.include_router(teaching_router, prefix="/projects", tags=["teaching"])

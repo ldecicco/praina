@@ -4,6 +4,7 @@ import {
   faArchive,
   faBookOpen,
   faCalendarDay,
+  faChevronLeft,
   faChevronRight,
   faChevronUp,
   faChevronDown,
@@ -29,6 +30,7 @@ import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { useStatusToast } from "../lib/useStatusToast";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
+import { StudyCollabChat } from "./StudyCollabChat";
 import { renderMarkdown } from "../lib/renderMarkdown";
 import { formatRelativeTime } from "../lib/formatRelativeTime";
 import { SkeletonTable, SkeletonCards } from "./Skeleton";
@@ -40,6 +42,7 @@ import type {
   BibliographyNote,
   BibliographyReference,
   BibliographyTag,
+  AuthUser,
   DocumentListItem,
   Member,
   MeetingRecord,
@@ -52,6 +55,7 @@ import type {
   ResearchPaperClaim,
   ResearchPaperQuestion,
   ResearchPaperSection,
+  ResearchStudyFile,
   ResearchStudyIteration,
   ResearchResultComparison,
   ResearchStudyResult,
@@ -69,7 +73,7 @@ const NOTE_LANE_LABELS: Record<string, string> = {
 
 const NOTE_LANE_OPTIONS = Object.entries(NOTE_LANE_LABELS);
 
-type Tab = "references" | "notes" | "paper" | "iterations" | "overview";
+type Tab = "references" | "notes" | "paper" | "iterations" | "overview" | "chat" | "files";
 type CollectionModalMode = "create" | "edit";
 type ReferenceModalMode = "create" | "edit";
 type NoteModalMode = "create" | "edit";
@@ -286,6 +290,73 @@ function formatLogDate(value: string): string {
   });
 }
 
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function uniqueLogFileIds(noteIds: string[], allNotes: ResearchNote[]): string[] {
+  return Array.from(
+    new Set(
+      allNotes
+        .filter((note) => noteIds.includes(note.id))
+        .flatMap((note) => note.linked_file_ids || [])
+        .filter(Boolean)
+    )
+  );
+}
+
+function userInitials(name: string): string {
+  const parts = (name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "");
+  return parts.join("") || "U";
+}
+
+function studyMemberAvatarUrl(member: ResearchCollectionMember): string | null {
+  const raw = (member.avatar_url || "").trim();
+  if (!raw) return null;
+  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith("data:") || raw.startsWith("blob:")) {
+    return raw;
+  }
+  return `${import.meta.env.VITE_API_BASE || ""}${raw}`;
+}
+
+function StudyHeaderAvatar({ member }: { member: ResearchCollectionMember }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const initial = userInitials(member.member_name || "");
+  const hue = [...(member.member_name || "?")].reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
+  const avatarUrl = imageFailed ? null : studyMemberAvatarUrl(member);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [member.avatar_url]);
+
+  return (
+    <span
+      className="study-avatar"
+      title={member.member_name}
+      style={{ backgroundColor: `hsl(${hue}, 55%, 45%)` }}
+    >
+      {avatarUrl ? (
+        <img src={avatarUrl} alt={member.member_name} onError={() => setImageFailed(true)} />
+      ) : (
+        initial
+      )}
+    </span>
+  );
+}
+
 function deriveLogTitle(content: string): string {
   const firstLine = content
     .split("\n")
@@ -300,6 +371,8 @@ function deriveLogTitle(content: string): string {
 export function ResearchWorkspace({
   researchSpaceId,
   selectedProjectId,
+  currentUser,
+  accessToken,
   bibliographyOnly = false,
   isAdmin = false,
   currentProject = null,
@@ -308,6 +381,8 @@ export function ResearchWorkspace({
 }: {
   researchSpaceId: string;
   selectedProjectId: string;
+  currentUser: AuthUser;
+  accessToken: string;
   bibliographyOnly?: boolean;
   isAdmin?: boolean;
   currentProject?: Project | null;
@@ -327,17 +402,19 @@ export function ResearchWorkspace({
   const [selectedBibliographyCollectionId, setSelectedBibliographyCollectionId] = useState<string | null>(null);
   const [selectedBibliographyCollectionPaperIds, setSelectedBibliographyCollectionPaperIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<ResearchNote[]>([]);
+  const [studyFiles, setStudyFiles] = useState<ResearchStudyFile[]>([]);
   const [allReferences, setAllReferences] = useState<ResearchReference[]>([]);
   const [projectDocuments, setProjectDocuments] = useState<DocumentListItem[]>([]);
   const [projectMeetings, setProjectMeetings] = useState<MeetingRecord[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [discoverableUsers, setDiscoverableUsers] = useState<AuthUser[]>([]);
   const [wps, setWps] = useState<WorkEntity[]>([]);
   const [tasks, setTasks] = useState<WorkEntity[]>([]);
   const [deliverables, setDeliverables] = useState<WorkEntity[]>([]);
 
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
-  const { error, setError, status, setStatus } = useStatusToast();
+  const { error, setError, setStatus } = useStatusToast();
   const [showArchived, setShowArchived] = useState(false);
 
   const [collectionModalOpen, setCollectionModalOpen] = useState(false);
@@ -406,10 +483,12 @@ export function ResearchWorkspace({
   const [noteCollectionId, setNoteCollectionId] = useState("");
   const [noteLane, setNoteLane] = useState("");
   const [noteReferenceIds, setNoteReferenceIds] = useState<string[]>([]);
+  const [noteFileIds, setNoteFileIds] = useState<string[]>([]);
   const [quickLogContent, setQuickLogContent] = useState("");
   const [quickLogTitle, setQuickLogTitle] = useState("");
   const [quickLogLane, setQuickLogLane] = useState("");
   const [quickLogRefIds, setQuickLogRefIds] = useState<string[]>([]);
+  const [quickLogFileIds, setQuickLogFileIds] = useState<string[]>([]);
 
   const [newMemberId, setNewMemberId] = useState("");
   const [newMemberRole, setNewMemberRole] = useState("contributor");
@@ -428,6 +507,7 @@ export function ResearchWorkspace({
   const [reviewingIterationId, setReviewingIterationId] = useState<string | null>(null);
   const [comparingResults, setComparingResults] = useState(false);
   const [expandedIterationId, setExpandedIterationId] = useState<string | null>(null);
+  const [uploadingStudyFile, setUploadingStudyFile] = useState(false);
 
   const [refSearch, setRefSearch] = useState("");
   const [bibTab, setBibTab] = useState<BibTab>("papers");
@@ -460,6 +540,7 @@ export function ResearchWorkspace({
   const [newNoteType, setNewNoteType] = useState("comment");
   const [newNoteVisibility, setNewNoteVisibility] = useState("shared");
   const [refStatusFilter, setRefStatusFilter] = useState("");
+  const [refSortKey, setRefSortKey] = useState<"created_at" | "title" | "connections">("created_at");
   const [noteLaneFilter, setNoteLaneFilter] = useState("");
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -468,6 +549,7 @@ export function ResearchWorkspace({
   const [inlineEditContent, setInlineEditContent] = useState("");
   const [inlineEditLane, setInlineEditLane] = useState("");
   const [inlineEditRefIds, setInlineEditRefIds] = useState<string[]>([]);
+  const [inlineEditFileIds, setInlineEditFileIds] = useState<string[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
@@ -506,12 +588,67 @@ export function ResearchWorkspace({
   const [bibliographyGraphOpen, setBibliographyGraphOpen] = useState(false);
   const [bibliographyGraphReferences, setBibliographyGraphReferences] = useState<BibliographyReference[]>([]);
   const quickLogInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const quickLogFileInputRef = useRef<HTMLInputElement | null>(null);
+  const inlineEditFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [studySearchQuery, setStudySearchQuery] = useState("");
 
   const activeCollections = collections.filter((item) => item.status === "active");
   const archivedCollections = collections.filter((item) => item.status !== "active");
+  const normalizedStudySearchQuery = studySearchQuery.trim().toLowerCase();
+  const filteredActiveCollections = useMemo(
+    () =>
+      activeCollections.filter((item) =>
+        !normalizedStudySearchQuery ||
+        [item.title, item.description || item.hypothesis || "", item.status]
+          .some((value) => value.toLowerCase().includes(normalizedStudySearchQuery))
+      ),
+    [activeCollections, normalizedStudySearchQuery]
+  );
+  const filteredArchivedCollections = useMemo(
+    () =>
+      archivedCollections.filter((item) =>
+        !normalizedStudySearchQuery ||
+        [item.title, item.description || item.hypothesis || "", item.status]
+          .some((value) => value.toLowerCase().includes(normalizedStudySearchQuery))
+      ),
+    [archivedCollections, normalizedStudySearchQuery]
+  );
   const readCount = references.filter((item) => item.reading_status === "read" || item.reading_status === "reviewed").length;
+  const unreadRefCount = references.filter((item) => item.reading_status === "unread").length;
+  const tabAlerts = useMemo(() => {
+    const collNotes = notes.filter((n) => n.collection_id === selectedCollectionId);
+    const unprocessedInbox = collNotes.filter(
+      (note) =>
+        !paperQuestions.some((q) => q.note_ids.includes(note.id)) &&
+        !paperClaims.some((c) => c.note_ids.includes(note.id)) &&
+        !paperSections.some((s) => s.note_ids.includes(note.id))
+    ).length;
+    const unsupportedClaims = paperClaims.filter((c) => c.reference_ids.length + c.note_ids.length + c.result_ids.length === 0).length;
+    const weakSections = paperSections.filter((s) => s.claim_ids.length + s.reference_ids.length + s.note_ids.length + s.result_ids.length === 0).length;
+    return { inboxAlert: unprocessedInbox > 0, paperAlert: unsupportedClaims > 0 || weakSections > 0, refsAlert: unreadRefCount > 0 };
+  }, [notes, selectedCollectionId, paperQuestions, paperClaims, paperSections, unreadRefCount]);
   const selectedCollection = collections.find((item) => item.id === selectedCollectionId) ?? null;
   const selectedBibliographyCollection = bibliographyCollections.find((item) => item.id === selectedBibliographyCollectionId) ?? null;
+
+  const referenceUsageMap = useMemo(() => {
+    const map = new Map<string, { claimCount: number; sectionCount: number; noteCount: number; total: number }>();
+    for (const ref of references) {
+      const claimCount = paperClaims.filter((item) => item.reference_ids.includes(ref.id)).length;
+      const sectionCount = paperSections.filter((item) => item.reference_ids.includes(ref.id)).length;
+      const noteCount = notes.filter((item) => item.linked_reference_ids.includes(ref.id)).length;
+      map.set(ref.id, { claimCount, sectionCount, noteCount, total: claimCount + sectionCount + noteCount });
+    }
+    return map;
+  }, [references, paperClaims, paperSections, notes]);
+
+  const sortedReferences = useMemo(() => {
+    const sorted = [...references];
+    if (refSortKey === "title") sorted.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    else if (refSortKey === "connections") sorted.sort((a, b) => (referenceUsageMap.get(b.id)?.total ?? 0) - (referenceUsageMap.get(a.id)?.total ?? 0));
+    else sorted.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return sorted;
+  }, [references, refSortKey, referenceUsageMap]);
+
   const availableDocuments = useMemo(
     () => projectDocuments.filter((item) => item.status === "indexed" || item.status === "uploaded"),
     [projectDocuments]
@@ -615,6 +752,30 @@ export function ResearchWorkspace({
     }
   }, [tab, bibliographyOnly, selectedCollectionId]));
 
+  // Keyboard shortcuts for study view
+  useEffect(() => {
+    if (bibliographyOnly || !selectedCollectionId) return;
+    const tabKeys: Record<string, Tab> = { "1": "overview", "2": "notes", "3": "references", "4": "paper", "5": "chat", "6": "iterations", "7": "files" };
+    function handleStudyKeys(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      const inInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable;
+      if (inInput) return;
+      if (e.key in tabKeys) {
+        e.preventDefault();
+        setTab(tabKeys[e.key]);
+        return;
+      }
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        setTab("notes");
+        setTimeout(() => quickLogInputRef.current?.focus(), 50);
+        return;
+      }
+    }
+    window.addEventListener("keydown", handleStudyKeys);
+    return () => window.removeEventListener("keydown", handleStudyKeys);
+  }, [bibliographyOnly, selectedCollectionId]);
+
   // Auto-save paper after 3s of inactivity when dirty
   useEffect(() => {
     if (!paperDirty || !selectedProjectId || !selectedCollectionId || saving) return;
@@ -651,6 +812,11 @@ export function ResearchWorkspace({
     }
     const response = await api.listMembers(projectId);
     setMembers(response.items.filter((item: Member) => item.is_active));
+  }
+
+  async function loadDiscoverableUsers() {
+    const response = await api.listUserDiscovery(1, 100);
+    setDiscoverableUsers(response.items.filter((item) => item.can_access_research));
   }
 
   async function loadSupportData(projectId = selectedProjectId) {
@@ -752,9 +918,18 @@ export function ResearchWorkspace({
     setNotes(response.items);
   }
 
+  async function loadStudyFiles(collectionId: string | null, projectId = selectedProjectId) {
+    if (!projectId || !collectionId) {
+      setStudyFiles([]);
+      return;
+    }
+    const response = await api.listStudyFiles(projectId, collectionId, { space_id: activeResearchSpaceId, page_size: 100 });
+    setStudyFiles(response.items);
+  }
+
   async function refreshWorkspace(projectId = selectedProjectId, collectionId = selectedCollectionId) {
     if (!projectId) return;
-    const tasksToRun: Promise<unknown>[] = [loadReferences(collectionId, projectId), loadNotes(collectionId, projectId)];
+    const tasksToRun: Promise<unknown>[] = [loadReferences(collectionId, projectId), loadNotes(collectionId, projectId), loadStudyFiles(collectionId, projectId)];
     if (collectionId) {
       tasksToRun.push(loadCollectionDetail(collectionId, projectId));
     } else {
@@ -786,6 +961,7 @@ export function ResearchWorkspace({
       setReferences([]);
       setBibliography([]);
       setNotes([]);
+      setStudyFiles([]);
       setAllReferences([]);
       setProjectDocuments([]);
       setProjectMeetings([]);
@@ -811,6 +987,7 @@ export function ResearchWorkspace({
       loadBibliographyTags(),
       loadReferences(null, selectedProjectId),
       loadNotes(null, selectedProjectId),
+      loadStudyFiles(null, selectedProjectId),
     ])
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Failed to load research workspace");
@@ -832,6 +1009,13 @@ export function ResearchWorkspace({
       setError(err instanceof Error ? err.message : "Failed to load bibliography");
     });
   }, [selectedProjectId, bibliographyVisibilityFilter, bibliographyOnly, semanticSearch, selectedBibliographyCollectionId]);
+
+  useEffect(() => {
+    if (!memberModalOpen || hasProjectContext) return;
+    loadDiscoverableUsers().catch((err) => {
+      setError(err instanceof Error ? err.message : "Failed to load users.");
+    });
+  }, [memberModalOpen, hasProjectContext]);
 
   useEffect(() => {
     if (semanticSearch) return; // in semantic mode, search is triggered by Enter
@@ -898,6 +1082,7 @@ export function ResearchWorkspace({
     setNoteCollectionId(collectionId || "");
     setNoteLane("");
     setNoteReferenceIds([]);
+    setNoteFileIds([]);
     setEditingNoteId(null);
   }
 
@@ -1024,6 +1209,15 @@ export function ResearchWorkspace({
     setCollectionModalOpen(true);
   }
 
+  function openEditCollectionFromCard(item: ResearchCollection) {
+    setCollectionModalMode("edit");
+    setEditingCollectionId(item.id);
+    setCollectionTitle(item.title);
+    setCollectionDescription(item.description || item.hypothesis || "");
+    setCollectionStatus(item.status);
+    setCollectionModalOpen(true);
+  }
+
   function openCreateReferenceModal(tabName: ReferenceModalTab = "manual") {
     if (!selectedCollectionId) {
       setError("Select a study first.");
@@ -1084,6 +1278,7 @@ export function ResearchWorkspace({
     setNoteCollectionId(note.collection_id || selectedCollectionId || "");
     setNoteLane(note.lane || "");
     setNoteReferenceIds(note.linked_reference_ids);
+    setNoteFileIds(note.linked_file_ids || []);
     setNoteModalOpen(true);
   }
 
@@ -1093,6 +1288,7 @@ export function ResearchWorkspace({
     setInlineEditContent(note.content);
     setInlineEditLane(note.lane || "");
     setInlineEditRefIds([...note.linked_reference_ids]);
+    setInlineEditFileIds([...(note.linked_file_ids || [])]);
   }
 
   function cancelInlineEdit() {
@@ -1101,6 +1297,7 @@ export function ResearchWorkspace({
     setInlineEditContent("");
     setInlineEditLane("");
     setInlineEditRefIds([]);
+    setInlineEditFileIds([]);
     closeMention();
   }
 
@@ -1115,6 +1312,7 @@ export function ResearchWorkspace({
         content: inlineEditContent.trim(),
         lane: inlineEditLane || null,
         note_type: existingNote?.note_type || "observation",
+        linked_file_ids: inlineEditFileIds,
       }, activeResearchSpaceId);
       await api.setNoteReferences(selectedProjectId, noteId, inlineEditRefIds, activeResearchSpaceId);
       setStatus("Log updated.");
@@ -1271,17 +1469,18 @@ export function ResearchWorkspace({
     };
   }
 
-  function newStudyIteration(): ResearchStudyIteration {
-    const today = new Date().toISOString().slice(0, 10);
-    return {
-      id: crypto.randomUUID(),
-      title: "",
-      start_date: today,
-      end_date: today,
-      note_ids: [],
-      reference_ids: [],
-      result_ids: [],
-      summary: null,
+function newStudyIteration(): ResearchStudyIteration {
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    id: crypto.randomUUID(),
+    title: "",
+    start_date: today,
+    end_date: today,
+    note_ids: [],
+    reference_ids: [],
+    file_ids: [],
+    result_ids: [],
+    summary: null,
       what_changed: [],
       improvements: [],
       regressions: [],
@@ -1292,15 +1491,16 @@ export function ResearchWorkspace({
     };
   }
 
-  function newStudyResult(): ResearchStudyResult {
-    const now = new Date().toISOString();
-    return {
-      id: crypto.randomUUID(),
-      iteration_id: null,
-      title: "",
-      note_ids: [],
-      reference_ids: [],
-      summary: null,
+function newStudyResult(): ResearchStudyResult {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    iteration_id: null,
+    title: "",
+    note_ids: [],
+    reference_ids: [],
+    file_ids: [],
+    summary: null,
       what_changed: [],
       improvements: [],
       regressions: [],
@@ -1320,6 +1520,7 @@ export function ResearchWorkspace({
       reference_ids: [],
       note_ids: [],
       result_ids: [],
+      file_ids: [],
       status: "draft",
       audit_status: null,
       audit_summary: null,
@@ -1332,7 +1533,17 @@ export function ResearchWorkspace({
   }
 
   function newPaperSection(): ResearchPaperSection {
-    return { id: crypto.randomUUID(), title: "", question_ids: [], claim_ids: [], reference_ids: [], note_ids: [], result_ids: [], status: "not_started" };
+    return {
+      id: crypto.randomUUID(),
+      title: "",
+      question_ids: [],
+      claim_ids: [],
+      reference_ids: [],
+      note_ids: [],
+      result_ids: [],
+      file_ids: [],
+      status: "not_started",
+    };
   }
 
   function notePromotionText(note: ResearchNote): string {
@@ -1356,13 +1567,14 @@ export function ResearchWorkspace({
     const now = new Date().toISOString();
     const existing = iterationResults(iteration.id)[0];
     const base = existing || newStudyResult();
-    return {
-      ...base,
-      iteration_id: iteration.id,
-      title: iteration.title || `Result ${studyResults.length + 1}`,
-      note_ids: [...iteration.note_ids],
-      reference_ids: [...iteration.reference_ids],
-      summary: iteration.summary,
+  return {
+    ...base,
+    iteration_id: iteration.id,
+    title: iteration.title || `Result ${studyResults.length + 1}`,
+    note_ids: [...iteration.note_ids],
+    reference_ids: [...iteration.reference_ids],
+    file_ids: Array.from(new Set([...(iteration.file_ids || []), ...uniqueLogFileIds(iteration.note_ids, notes)])),
+    summary: iteration.summary,
       what_changed: [...iteration.what_changed],
       improvements: [...iteration.improvements],
       regressions: [...iteration.regressions],
@@ -1457,6 +1669,7 @@ export function ResearchWorkspace({
         end_date: item.end_date,
         note_ids: item.note_ids,
         reference_ids: item.reference_ids,
+        file_ids: item.file_ids,
         result_ids: item.result_ids,
         summary: item.summary,
         what_changed: item.what_changed,
@@ -1473,6 +1686,7 @@ export function ResearchWorkspace({
         title: item.title,
         note_ids: item.note_ids,
         reference_ids: item.reference_ids,
+        file_ids: item.file_ids,
         summary: item.summary,
         what_changed: item.what_changed,
         improvements: item.improvements,
@@ -1497,6 +1711,7 @@ export function ResearchWorkspace({
         reference_ids: item.reference_ids,
         note_ids: item.note_ids,
         result_ids: item.result_ids,
+        file_ids: item.file_ids,
         status: item.status,
         audit_status: item.audit_status,
         audit_summary: item.audit_summary,
@@ -1514,6 +1729,7 @@ export function ResearchWorkspace({
         reference_ids: item.reference_ids,
         note_ids: item.note_ids,
         result_ids: item.result_ids,
+        file_ids: item.file_ids,
         status: item.status,
       })),
     };
@@ -1750,6 +1966,7 @@ export function ResearchWorkspace({
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
     if (logs.length === 0) return;
     const referenceIds = Array.from(new Set(logs.flatMap((item) => item.linked_reference_ids)));
+    const fileIds = Array.from(new Set(logs.flatMap((item) => item.linked_file_ids)));
     const iteration: ResearchStudyIteration = {
       ...newStudyIteration(),
       title: `Iteration ${studyIterations.length + 1}`,
@@ -1757,6 +1974,7 @@ export function ResearchWorkspace({
       end_date: logs[logs.length - 1].created_at.slice(0, 10),
       note_ids: logs.map((item) => item.id),
       reference_ids: referenceIds,
+      file_ids: fileIds,
       result_ids: [],
     };
     const nextIterations = [iteration, ...studyIterations];
@@ -2764,6 +2982,7 @@ export function ResearchWorkspace({
           lane: noteLane || null,
           note_type: noteType || "observation",
           linked_reference_ids: noteReferenceIds,
+          linked_file_ids: noteFileIds,
         }, activeResearchSpaceId);
         setStatus("Log added.");
       } else if (editingNoteId) {
@@ -2773,6 +2992,7 @@ export function ResearchWorkspace({
           collection_id: noteCollectionId,
           lane: noteLane || null,
           note_type: noteType || "observation",
+          linked_file_ids: noteFileIds,
         }, activeResearchSpaceId);
         await api.setNoteReferences(selectedProjectId, editingNoteId, noteReferenceIds, activeResearchSpaceId);
         setStatus("Log updated.");
@@ -2803,6 +3023,7 @@ export function ResearchWorkspace({
         collection_id: selectedCollectionId,
         note_type: "observation",
         linked_reference_ids: quickLogRefIds,
+        linked_file_ids: quickLogFileIds,
       }, activeResearchSpaceId);
       await Promise.all([loadCollections(), loadNotes(selectedCollectionId), loadSupportData()]);
       if (selectedCollectionId) {
@@ -2812,6 +3033,7 @@ export function ResearchWorkspace({
       setQuickLogTitle("");
       setQuickLogLane("");
       setQuickLogRefIds([]);
+      setQuickLogFileIds([]);
       setStatus("Log added.");
       setTimeout(() => {
         quickLogInputRef.current?.focus();
@@ -2837,15 +3059,71 @@ export function ResearchWorkspace({
     }
   }
 
+  async function handleUploadStudyFile(file: File, options?: { linkToQuickLog?: boolean; linkToInlineEdit?: boolean }) {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    setUploadingStudyFile(true);
+    setError("");
+    try {
+      const created = await api.uploadStudyFile(selectedProjectId, selectedCollectionId, file, activeResearchSpaceId);
+      setStudyFiles((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      if (options?.linkToQuickLog) {
+        setQuickLogFileIds((current) => (current.includes(created.id) ? current : [...current, created.id]));
+      }
+      if (options?.linkToInlineEdit) {
+        setInlineEditFileIds((current) => (current.includes(created.id) ? current : [...current, created.id]));
+      }
+      if (selectedCollectionId) {
+        await loadCollectionDetail(selectedCollectionId);
+      }
+      setStatus("File uploaded.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload file");
+    } finally {
+      setUploadingStudyFile(false);
+      if (quickLogFileInputRef.current) quickLogFileInputRef.current.value = "";
+      if (inlineEditFileInputRef.current) inlineEditFileInputRef.current.value = "";
+    }
+  }
+
+  async function handleOpenStudyFile(file: ResearchStudyFile) {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    try {
+      const blob = await api.getStudyFile(selectedProjectId, selectedCollectionId, file.id, activeResearchSpaceId);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to open file");
+    }
+  }
+
+  async function handleDeleteStudyFile(fileId: string) {
+    if (!selectedProjectId || !selectedCollectionId) return;
+    try {
+      await api.deleteStudyFile(selectedProjectId, selectedCollectionId, fileId, activeResearchSpaceId);
+      setStudyFiles((current) => current.filter((item) => item.id !== fileId));
+      setQuickLogFileIds((current) => current.filter((id) => id !== fileId));
+      setNoteFileIds((current) => current.filter((id) => id !== fileId));
+      setInlineEditFileIds((current) => current.filter((id) => id !== fileId));
+      setStatus("File deleted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete file");
+    }
+  }
+
   async function handleAddMember() {
     if (!selectedProjectId || !selectedCollectionId || !newMemberId) return;
     setSaving(true);
     setError("");
     try {
-      await api.addCollectionMember(selectedProjectId, selectedCollectionId, {
-        member_id: newMemberId,
-        role: newMemberRole,
-      }, activeResearchSpaceId);
+      await api.addCollectionMember(
+        selectedProjectId,
+        selectedCollectionId,
+        hasProjectContext
+          ? { member_id: newMemberId, role: newMemberRole }
+          : { user_id: newMemberId, role: newMemberRole },
+        activeResearchSpaceId,
+      );
       await Promise.all([loadCollections(), loadCollectionDetail(selectedCollectionId)]);
       setMemberModalOpen(false);
       setNewMemberId("");
@@ -2922,6 +3200,7 @@ export function ResearchWorkspace({
 
   if (!activeResearchSpaceId && !bibliographyOnly) return <p className="empty-message">Select a research space.</p>;
   if (loading) return <SkeletonTable rows={6} cols={4} />;
+  const showSpaceHome = !bibliographyOnly && !selectedCollectionId;
 
   return (
     <>
@@ -2941,151 +3220,226 @@ export function ResearchWorkspace({
         </div>
       ) : null}
 
-      {!bibliographyOnly ? (
+      {!bibliographyOnly && showSpaceHome ? (
         <div className="setup-summary-bar">
-          <div className="setup-summary-stats">
-            <span>{collections.length} studies</span>
-            <span className="setup-summary-sep" />
-            <span>{bibliography.length} papers</span>
-            <span className="setup-summary-sep" />
-            <span>{references.length} references</span>
-            <span className="setup-summary-sep" />
-            <span>{readCount} read</span>
-            <span className="setup-summary-sep" />
-            <span>{notes.length} inbox</span>
+          <div className="workspace-browser-summary-actions">
+            <div className="topbar-project-search workspace-browser-search">
+              <FontAwesomeIcon icon={faSearch} />
+              <input
+                type="text"
+                value={studySearchQuery}
+                onChange={(event) => setStudySearchQuery(event.target.value)}
+                placeholder="Search studies"
+              />
+            </div>
+            <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
+              <FontAwesomeIcon icon={faPlus} /> New Study
+            </button>
           </div>
-          <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
-            <FontAwesomeIcon icon={faPlus} /> New Study
-          </button>
         </div>
       ) : null}
 
       {error ? <p className="error">{error}</p> : null}
-      {status ? <p className="muted-small">{status}</p> : null}
 
-      {!bibliographyOnly && (selectedCollectionId || tab !== "overview") ? (
-        <nav className="breadcrumb-bar">
-          <button type="button" className="breadcrumb-link" onClick={() => { setSelectedCollectionId(null); setTab("overview"); }}>
-            {currentProject?.title || "Research"}
-          </button>
-          {selectedCollection ? (
-            <>
-              <FontAwesomeIcon icon={faChevronRight} className="breadcrumb-sep" />
-              <button type="button" className="breadcrumb-link" onClick={() => setTab("overview")}>
-                {selectedCollection.title}
-              </button>
-            </>
-          ) : null}
-          {tab !== "overview" ? (
-            <>
-              <FontAwesomeIcon icon={faChevronRight} className="breadcrumb-sep" />
-              <span className="breadcrumb-current">
-                {{ references: "References", notes: "Inbox", paper: "Paper", iterations: "Iterations", overview: "Overview" }[tab]}
-              </span>
-            </>
-          ) : null}
-        </nav>
-      ) : null}
-
-      {!bibliographyOnly ? <div className="meetings-toolbar">
-        <div className="meetings-filter-group research-collection-strip">
-          <button
-            type="button"
-            className={`chip small ${!selectedCollectionId ? "status-active" : ""}`}
-            onClick={() => setSelectedCollectionId(null)}
-          >
-            <FontAwesomeIcon icon={faBookOpen} /> All
-          </button>
-          {activeCollections.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`chip small ${selectedCollectionId === item.id ? "status-active" : ""}`}
-              onClick={() => setSelectedCollectionId(item.id)}
-              title={item.title}
-            >
-              <FontAwesomeIcon icon={faFlask} /> {item.title}
-              <span className="delivery-tab-count">{item.reference_count + item.note_count}</span>
-            </button>
-          ))}
-          {activeCollections.length === 0 ? (
-            <span className="muted-small" style={{ padding: "0 4px" }}>Create a study to start organizing your research.</span>
-          ) : null}
+      {showSpaceHome ? (
+        <div className="workspace-browser-page study-browser-page">
           {archivedCollections.length > 0 ? (
-            <button type="button" className="chip small" onClick={() => setShowArchived((value) => !value)}>
-              <FontAwesomeIcon icon={faChevronRight} className={showArchived ? "research-chevron-open" : ""} />
-              Archived ({archivedCollections.length})
-            </button>
-          ) : null}
-          {showArchived
-            ? archivedCollections.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`chip small ${selectedCollectionId === item.id ? "status-active" : ""}`}
-                  onClick={() => setSelectedCollectionId(item.id)}
-                >
-                  <FontAwesomeIcon icon={faArchive} /> {item.title}
+            <div className="meetings-toolbar workspace-browser-toolbar">
+              <div className="meetings-filter-group workspace-browser-filter-group">
+                <button type="button" className="chip small" onClick={() => setShowArchived((value) => !value)}>
+                  <FontAwesomeIcon icon={faChevronRight} className={showArchived ? "research-chevron-open" : ""} />
+                  Archived ({filteredArchivedCollections.length})
                 </button>
-              ))
-            : null}
+              </div>
+            </div>
+          ) : null}
+          {filteredActiveCollections.length === 0 && (!showArchived || filteredArchivedCollections.length === 0) ? (
+            <div className="empty-state-card">
+              <strong>No studies.</strong>
+            </div>
+          ) : (
+            <>
+              {filteredActiveCollections.length > 0 ? (
+                <div className="workspace-browser-grid">
+                  {filteredActiveCollections.map((item) => (
+                    <div
+                      key={item.id}
+                      className="workspace-browser-card study-card"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${item.title}`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedCollectionId(item.id);
+                          setTab("overview");
+                        } else if (event.key.toLowerCase() === "e") {
+                          event.preventDefault();
+                          openEditCollectionFromCard(item);
+                        }
+                      }}
+                    >
+                      <div className="workspace-browser-card-accent" />
+                      <div className="workspace-browser-card-top">
+                        <span className="workspace-browser-icon">
+                          <FontAwesomeIcon icon={faBookOpen} />
+                        </span>
+                        <span className="chip small">Study</span>
+                        <span className={`chip small ${item.status === "active" ? "status-ok" : ""}`}>{item.status}</span>
+                      </div>
+                      <div className="workspace-browser-card-body">
+                        <strong>{item.title}</strong>
+                        <p>{item.description || item.hypothesis || "No focus"}</p>
+                      </div>
+                      <div className="workspace-browser-card-foot">
+                        <div className="workspace-browser-meta-stack">
+                          <span className="workspace-browser-meta">{item.reference_count} references</span>
+                          <span className="workspace-browser-meta">{item.note_count} logs</span>
+                          <span className="workspace-browser-meta">{formatRelativeTime(item.updated_at)}</span>
+                        </div>
+                        <div className="workspace-browser-card-actions">
+                          <button type="button" className="ghost" tabIndex={-1} onClick={() => openEditCollectionFromCard(item)}>
+                            Edit
+                          </button>
+                          <button type="button" tabIndex={-1} onClick={() => { setSelectedCollectionId(item.id); setTab("overview"); }}>
+                            Open
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {showArchived && filteredArchivedCollections.length > 0 ? (
+                <div className="workspace-browser-grid study-browser-archived-grid">
+                  {filteredArchivedCollections.map((item) => (
+                    <div
+                      key={item.id}
+                      className="workspace-browser-card study-card archived"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${item.title}`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedCollectionId(item.id);
+                          setTab("overview");
+                        } else if (event.key.toLowerCase() === "e") {
+                          event.preventDefault();
+                          openEditCollectionFromCard(item);
+                        }
+                      }}
+                    >
+                      <div className="workspace-browser-card-accent" />
+                      <div className="workspace-browser-card-top">
+                        <span className="workspace-browser-icon">
+                          <FontAwesomeIcon icon={faArchive} />
+                        </span>
+                        <span className="chip small">Archived</span>
+                      </div>
+                      <div className="workspace-browser-card-body">
+                        <strong>{item.title}</strong>
+                        <p>{item.description || item.hypothesis || "No focus"}</p>
+                      </div>
+                      <div className="workspace-browser-card-foot">
+                        <div className="workspace-browser-meta-stack">
+                          <span className="workspace-browser-meta">{item.reference_count} references</span>
+                          <span className="workspace-browser-meta">{item.note_count} logs</span>
+                          <span className="workspace-browser-meta">{formatRelativeTime(item.updated_at)}</span>
+                        </div>
+                        <div className="workspace-browser-card-actions">
+                          <button type="button" className="ghost" tabIndex={-1} onClick={() => openEditCollectionFromCard(item)}>
+                            Edit
+                          </button>
+                          <button type="button" tabIndex={-1} onClick={() => { setSelectedCollectionId(item.id); setTab("overview"); }}>
+                            Open
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
-      </div> : null}
+      ) : null}
 
       {!bibliographyOnly && collectionDetail && selectedCollection ? (
-        <div className="research-collection-header">
-          <div className="research-collection-title-row">
-            <strong>{collectionDetail.title}</strong>
-            <span className={`chip small ${collectionDetail.status === "active" ? "status-ok" : ""}`}>{collectionDetail.status}</span>
-            <span className="muted-small">{collectionDetail.reference_count} references</span>
-            <span className="setup-summary-sep" />
-            <span className="muted-small">{collectionDetail.note_count} logs</span>
-            <span className="setup-summary-sep" />
-            <span className="muted-small">{collectionDetail.member_count} members</span>
+        <div className="study-header">
+          <div className="study-header-top">
+            <button type="button" className="ghost research-space-back-btn" onClick={() => { setSelectedCollectionId(null); setTab("overview"); }}>
+              <FontAwesomeIcon icon={faChevronLeft} />
+            </button>
+            <h2 className="study-header-title">{collectionDetail.title}</h2>
+            {collectionDetail.members.length > 0 && (
+              <div className="study-header-avatars">
+                {collectionDetail.members.slice(0, 5).map((member: ResearchCollectionMember) => (
+                  <StudyHeaderAvatar key={member.id} member={member} />
+                ))}
+                {collectionDetail.members.length > 5 && (
+                  <span className="study-avatar study-avatar-overflow" title={`${collectionDetail.members.length - 5} more`}>
+                    +{collectionDetail.members.length - 5}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="study-header-actions">
+              <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
+                <FontAwesomeIcon icon={faPen} />
+              </button>
+              <button type="button" className="ghost docs-action-btn" title="Link Context" onClick={openWbsModal}>
+                <FontAwesomeIcon icon={faLink} />
+              </button>
+              <button type="button" className="ghost docs-action-btn" title="Archive" onClick={() => handleArchiveCollection(selectedCollection.id)}>
+                <FontAwesomeIcon icon={faArchive} />
+              </button>
+              <button
+                type="button"
+                className={`ghost docs-action-btn danger${confirmingDeleteId === selectedCollection.id ? " confirm-pulse" : ""}`}
+                title={confirmingDeleteId === selectedCollection.id ? "Click again to confirm" : "Delete"}
+                onClick={() => requestConfirmDelete(selectedCollection.id, () => handleDeleteCollection(selectedCollection.id))}
+              >
+                {confirmingDeleteId === selectedCollection.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
+              </button>
+            </div>
           </div>
-          {collectionDetail.description || collectionDetail.hypothesis ? (
-            <p className="muted-small research-hypothesis">{collectionDetail.description || collectionDetail.hypothesis}</p>
-          ) : null}
-          <div className="research-header-actions">
-            <button type="button" className="meetings-new-btn" onClick={openCreateNoteModal}>
-              <FontAwesomeIcon icon={faPlus} /> New Log
-            </button>
-            <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
-              <FontAwesomeIcon icon={faPen} />
-            </button>
-            <button type="button" className="ghost docs-action-btn" title="Link Context" onClick={openWbsModal}>
-              <FontAwesomeIcon icon={faLink} />
-            </button>
-            <button type="button" className="ghost docs-action-btn" title="Archive" onClick={() => handleArchiveCollection(selectedCollection.id)}>
-              <FontAwesomeIcon icon={faArchive} />
-            </button>
-            <button
-              type="button"
-              className={`ghost docs-action-btn danger${confirmingDeleteId === selectedCollection.id ? " confirm-pulse" : ""}`}
-              title={confirmingDeleteId === selectedCollection.id ? "Click again to confirm" : "Delete"}
-              onClick={() => requestConfirmDelete(selectedCollection.id, () => handleDeleteCollection(selectedCollection.id))}
-            >
-              {confirmingDeleteId === selectedCollection.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
-            </button>
+          <div className="study-header-meta">
+            <span className={`chip small ${collectionDetail.status === "active" ? "status-ok" : ""}`}>{collectionDetail.status}</span>
+            <span className="study-header-stat">{collectionDetail.reference_count} refs</span>
+            <span className="study-header-stat">{collectionDetail.note_count} logs</span>
+            <span className="study-header-stat">{collectionDetail.member_count} members</span>
+            {collectionDetail.hypothesis ? (
+              <span className="study-header-hypothesis" title={collectionDetail.hypothesis}>{collectionDetail.hypothesis}</span>
+            ) : null}
           </div>
         </div>
       ) : null}
 
-      {!bibliographyOnly ? <div className="delivery-tabs">
+      {!bibliographyOnly && selectedCollectionId ? <div className="delivery-tabs">
         <button className={`delivery-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
           Overview
         </button>
         <button className={`delivery-tab inbox-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
           <FontAwesomeIcon icon={faInbox} /> Inbox <span className="delivery-tab-count">{notes.length}</span>
+          {tabAlerts.inboxAlert ? <span className="tab-alert-dot" /> : null}
         </button>
         <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
           References <span className="delivery-tab-count">{references.length}</span>
+          {tabAlerts.refsAlert ? <span className="tab-alert-dot tab-alert-info" /> : null}
         </button>
         <button className={`delivery-tab ${tab === "paper" ? "active" : ""}`} onClick={() => setTab("paper")}>
           Paper
+          {tabAlerts.paperAlert ? <span className="tab-alert-dot" /> : null}
+        </button>
+        <button className={`delivery-tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>
+          <FontAwesomeIcon icon={faComment} /> Chat
         </button>
         <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} onClick={() => setTab("iterations")}>
           Iterations <span className="delivery-tab-count">{studyIterations.length}</span>
+        </button>
+        <button className={`delivery-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
+          Files <span className="delivery-tab-count">{studyFiles.length}</span>
         </button>
         {tab === "references" ? (
           <div className="bibliography-tab-tools">
@@ -3152,12 +3506,14 @@ export function ResearchWorkspace({
       </div>
       : null}
 
-      {tab === "references" && !bibliographyOnly ? renderReferencesTab() : null}
+      {tab === "references" && !bibliographyOnly && selectedCollectionId ? renderReferencesTab() : null}
       {bibliographyOnly ? renderBibliographyTab() : null}
-      {tab === "notes" && !bibliographyOnly ? renderNotesTab() : null}
-      {tab === "paper" && !bibliographyOnly ? renderPaperTab() : null}
-      {tab === "iterations" && !bibliographyOnly ? renderIterationsTab() : null}
-      {tab === "overview" && !bibliographyOnly ? renderOverviewTab() : null}
+      {tab === "notes" && !bibliographyOnly && selectedCollectionId ? renderNotesTab() : null}
+      {tab === "paper" && !bibliographyOnly && selectedCollectionId ? renderPaperTab() : null}
+      {tab === "chat" && !bibliographyOnly && selectedCollectionId ? renderChatTab() : null}
+      {tab === "iterations" && !bibliographyOnly && selectedCollectionId ? renderIterationsTab() : null}
+      {tab === "files" && !bibliographyOnly && selectedCollectionId ? renderFilesTab() : null}
+      {tab === "overview" && !bibliographyOnly && selectedCollectionId ? renderOverviewTab() : null}
 
       {!bibliographyOnly && collectionModalOpen ? renderCollectionModal() : null}
       {!bibliographyOnly && referenceModalOpen ? renderReferenceModal() : null}
@@ -3195,12 +3551,7 @@ export function ResearchWorkspace({
       return <p className="empty-message">Select a study to import and manage references.</p>;
     }
 
-    const referenceUsage = (referenceId: string) => {
-      const claimCount = paperClaims.filter((item) => item.reference_ids.includes(referenceId)).length;
-      const sectionCount = paperSections.filter((item) => item.reference_ids.includes(referenceId)).length;
-      const noteCount = notes.filter((item) => item.linked_reference_ids.includes(referenceId)).length;
-      return { claimCount, sectionCount, noteCount };
-    };
+    const referenceUsage = (referenceId: string) => referenceUsageMap.get(referenceId) || { claimCount: 0, sectionCount: 0, noteCount: 0, total: 0 };
 
     return (
       <>
@@ -3212,6 +3563,11 @@ export function ResearchWorkspace({
               <option value="reading">Reading</option>
               <option value="read">Read</option>
               <option value="reviewed">Reviewed</option>
+            </select>
+            <select value={refSortKey} onChange={(event) => setRefSortKey(event.target.value as typeof refSortKey)}>
+              <option value="created_at">Newest</option>
+              <option value="title">Title</option>
+              <option value="connections">Connections</option>
             </select>
             <input
               className="meetings-search"
@@ -3238,7 +3594,7 @@ export function ResearchWorkspace({
                 </tr>
               </thead>
               <tbody>
-                {references.map((reference) => (
+                {sortedReferences.map((reference) => (
                   <tr key={reference.id}>
                     <td>
                       <strong>{reference.title}</strong>
@@ -3246,13 +3602,14 @@ export function ResearchWorkspace({
                       {reference.venue ? <span className="muted-small research-inline-meta">{reference.venue}</span> : null}
                       {(() => {
                         const usage = referenceUsage(reference.id);
-                        return usage.claimCount + usage.sectionCount + usage.noteCount > 0 ? (
-                          <span className="research-chip-group">
-                            {usage.claimCount ? <span className="chip small">{usage.claimCount} claims</span> : null}
-                            {usage.sectionCount ? <span className="chip small">{usage.sectionCount} sections</span> : null}
-                            {usage.noteCount ? <span className="chip small">{usage.noteCount} notes</span> : null}
+                        return (
+                          <span className="research-chip-group ref-usage-row">
+                            <span className={`chip small${usage.claimCount > 0 ? " log-chip-promoted" : ""}`}>{usage.claimCount} claims</span>
+                            <span className={`chip small${usage.sectionCount > 0 ? " log-chip-promoted" : ""}`}>{usage.sectionCount} sections</span>
+                            <span className={`chip small${usage.noteCount > 0 ? "" : ""}`}>{usage.noteCount} notes</span>
+                            {usage.total === 0 ? <span className="chip small log-chip-unprocessed">Unlinked</span> : null}
                           </span>
-                        ) : null;
+                        );
                       })()}
                       {reference.ai_summary ? (() => {
                         const summary = parseSummaryPayload(reference.ai_summary);
@@ -4087,13 +4444,26 @@ export function ResearchWorkspace({
     const visibleNotes = searchLower
       ? notes.filter((note) => note.title.toLowerCase().includes(searchLower) || note.content.toLowerCase().includes(searchLower))
       : notes;
-    const orderedNotes = [...visibleNotes].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const sortedNotes = [...visibleNotes].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const unprocessedNotes = sortedNotes.filter((n) => noteWorkflow(n).state === "Unprocessed");
+    const processedNotes = sortedNotes.filter((n) => noteWorkflow(n).state !== "Unprocessed");
+    const orderedNotes = sortedNotes;
     const unassignedLogs = notes.filter((note) => note.collection_id === selectedCollectionId && !noteIterationState(note.id).assigned);
     const allVisibleSelected = orderedNotes.length > 0 && orderedNotes.every((note) => selectedInboxLogIds.has(note.id));
+    const fileLookup = new Map(studyFiles.map((item) => [item.id, item]));
 
     return (
       <>
         <div className={`research-log-composer${composerExpanded ? " expanded" : ""}`}>
+          <input
+            ref={quickLogFileInputRef}
+            type="file"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleUploadStudyFile(file, { linkToQuickLog: true });
+            }}
+          />
           {composerExpanded ? (
             <input
               className="research-inline-title"
@@ -4128,12 +4498,34 @@ export function ResearchWorkspace({
               {renderLanePills(quickLogLane, setQuickLogLane, { className: "research-log-lane-pills" })}
               <button
                 type="button"
+                className="ghost icon-text-button small"
+                disabled={uploadingStudyFile}
+                onClick={() => quickLogFileInputRef.current?.click()}
+              >
+                <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Attach"}
+              </button>
+              <button
+                type="button"
                 className="meetings-new-btn"
                 disabled={!quickLogContent.trim() || saving}
                 onClick={() => void handleQuickLogSubmit()}
               >
                 <FontAwesomeIcon icon={faPlus} /> Log
               </button>
+            </div>
+          ) : null}
+          {composerExpanded && quickLogFileIds.length > 0 ? (
+            <div className="research-chip-group">
+              {quickLogFileIds.map((fileId) => {
+                const file = fileLookup.get(fileId);
+                if (!file) return null;
+                return (
+                  <span key={`quick-file-${fileId}`} className="chip small">
+                    {file.original_filename}
+                    <button type="button" className="ghost icon-only" onClick={() => setQuickLogFileIds((current) => current.filter((id) => id !== fileId))}>×</button>
+                  </span>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -4182,17 +4574,21 @@ export function ResearchWorkspace({
           <p className="empty-message">No logs in this study.</p>
         ) : (
           <div className="research-log-stream">
+            {unprocessedNotes.length > 0 && processedNotes.length > 0 ? (
+              <div className="log-group-label log-group-unprocessed">Needs Processing <span className="delivery-tab-count">{unprocessedNotes.length}</span></div>
+            ) : null}
             <div className="research-log-list">
-              {orderedNotes.map((note) => {
+              {(unprocessedNotes.length > 0 && processedNotes.length > 0 ? unprocessedNotes : orderedNotes).map((note) => {
                 const workflow = noteWorkflow(note);
                 const iterationState = noteIterationState(note.id);
                 const isSelected = selectedInboxLogIds.has(note.id);
                 const isEditing = inlineEditNoteId === note.id;
                 const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
+                const linkedFilesLabel = note.linked_file_ids.length === 1 ? "1 file" : `${note.linked_file_ids.length} files`;
                 return (
                   <article
                     key={note.id}
-                    className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " research-log-card-unprocessed" : ""}`}
+                    className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " log-state-unprocessed" : " log-state-promoted"}${iterationState.assigned ? " log-state-iterated" : ""}`}
                   >
                     <div className="research-log-head">
                       <label className="research-log-select">
@@ -4216,11 +4612,16 @@ export function ResearchWorkspace({
                       ) : (
                         <div className="research-chip-group">
                           {note.lane ? <span className="chip small">{NOTE_LANE_LABELS[note.lane] || note.lane}</span> : null}
-                          <span className="chip small">{workflow.state}</span>
-                          {workflow.promotedToQuestion ? <span className="chip small">Question</span> : null}
-                          {workflow.promotedToClaim ? <span className="chip small">Claim</span> : null}
-                          {workflow.promotedToSection ? <span className="chip small">Section</span> : null}
-                          {iterationState.assigned ? <span className="chip small">Iteration</span> : null}
+                          {workflow.state === "Unprocessed" ? (
+                            <span className="chip small log-chip-unprocessed">Needs processing</span>
+                          ) : (
+                            <>
+                              {workflow.promotedToQuestion ? <span className="chip small log-chip-promoted">→ Question</span> : null}
+                              {workflow.promotedToClaim ? <span className="chip small log-chip-promoted">→ Claim</span> : null}
+                              {workflow.promotedToSection ? <span className="chip small log-chip-promoted">→ Section</span> : null}
+                            </>
+                          )}
+                          {iterationState.assigned ? <span className="chip small log-chip-iterated">{iterationState.iterationTitle || "Iteration"}</span> : null}
                         </div>
                       )}
                       <span className="research-log-timestamp">{formatLogTimestamp(note.created_at)} · {formatRelativeTime(note.created_at)}</span>
@@ -4287,17 +4688,74 @@ export function ResearchWorkspace({
                           rows={4}
                           placeholder="Content (markdown, @ to cite)"
                         />
+                        <input
+                          ref={inlineEditFileInputRef}
+                          type="file"
+                          className="bib-pdf-input"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) void handleUploadStudyFile(file, { linkToInlineEdit: true });
+                          }}
+                        />
+                        <div className="research-log-composer-actions">
+                          {renderLanePills(inlineEditLane, setInlineEditLane, { className: "research-inline-lane-pills" })}
+                          <button
+                            type="button"
+                            className="ghost icon-text-button small"
+                            disabled={uploadingStudyFile}
+                            onClick={() => inlineEditFileInputRef.current?.click()}
+                          >
+                            <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Attach"}
+                          </button>
+                        </div>
+                        {inlineEditFileIds.length > 0 ? (
+                          <div className="research-chip-group">
+                            {inlineEditFileIds.map((fileId) => {
+                              const file = fileLookup.get(fileId);
+                              if (!file) return null;
+                              return (
+                                <button
+                                  key={`inline-file-${note.id}-${fileId}`}
+                                  type="button"
+                                  className="chip small"
+                                  onClick={() => void handleOpenStudyFile(file)}
+                                >
+                                  {file.original_filename}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="research-log-body">
                         <strong>{note.title}</strong>
                         <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
+                        {note.linked_file_ids.length > 0 ? (
+                          <div className="research-chip-group">
+                            {note.linked_file_ids.map((fileId) => {
+                              const file = fileLookup.get(fileId);
+                              if (!file) return null;
+                              return (
+                                <button
+                                  key={`${note.id}-file-${fileId}`}
+                                  type="button"
+                                  className="chip small"
+                                  onClick={() => void handleOpenStudyFile(file)}
+                                >
+                                  {file.original_filename}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
                     )}
                     <div className="research-log-footer">
                       <div className="research-log-meta">
                         <span>{note.author_name || "Unknown author"}</span>
                         <span>{linkedReferencesLabel}</span>
+                        {note.linked_file_ids.length > 0 ? <span>{linkedFilesLabel}</span> : null}
                         {iterationState.assigned && iterationState.iterationTitle ? <span>{iterationState.iterationTitle}</span> : null}
                       </div>
                       <div className="note-promote-actions">
@@ -4316,6 +4774,94 @@ export function ResearchWorkspace({
                 );
               })}
             </div>
+            {unprocessedNotes.length > 0 && processedNotes.length > 0 ? (
+              <>
+                <div className="log-group-label log-group-processed">Processed <span className="delivery-tab-count">{processedNotes.length}</span></div>
+                <div className="research-log-list">
+                  {processedNotes.map((note) => {
+                    const workflow = noteWorkflow(note);
+                    const iterationState = noteIterationState(note.id);
+                    const isSelected = selectedInboxLogIds.has(note.id);
+                    const isEditing = inlineEditNoteId === note.id;
+                    const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
+                    const linkedFilesLabel = note.linked_file_ids.length === 1 ? "1 file" : `${note.linked_file_ids.length} files`;
+                    return (
+                      <article
+                        key={note.id}
+                        className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""} log-state-promoted${iterationState.assigned ? " log-state-iterated" : ""}`}
+                      >
+                        <div className="research-log-head">
+                          <label className="research-log-select">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() =>
+                                setSelectedInboxLogIds((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(note.id)) next.delete(note.id);
+                                  else next.add(note.id);
+                                  return next;
+                                })
+                              }
+                            />
+                          </label>
+                          <div className="research-chip-group">
+                            {note.lane ? <span className="chip small">{NOTE_LANE_LABELS[note.lane] || note.lane}</span> : null}
+                            {workflow.promotedToQuestion ? <span className="chip small log-chip-promoted">→ Question</span> : null}
+                            {workflow.promotedToClaim ? <span className="chip small log-chip-promoted">→ Claim</span> : null}
+                            {workflow.promotedToSection ? <span className="chip small log-chip-promoted">→ Section</span> : null}
+                            {iterationState.assigned ? <span className="chip small log-chip-iterated">{iterationState.iterationTitle || "Iteration"}</span> : null}
+                          </div>
+                          <span className="research-log-timestamp">{formatRelativeTime(note.created_at)}</span>
+                          <div className="research-log-controls">
+                            <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
+                              <FontAwesomeIcon icon={faPen} />
+                            </button>
+                            <button
+                              type="button"
+                              className={`ghost docs-action-btn${confirmingDeleteId === note.id ? " danger confirm-pulse" : ""}`}
+                              title={confirmingDeleteId === note.id ? "Click again to confirm" : "Delete"}
+                              onClick={() => requestConfirmDelete(note.id, () => handleDeleteNote(note.id))}
+                            >
+                              {confirmingDeleteId === note.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="research-log-body">
+                          <strong>{note.title}</strong>
+                          <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
+                          {note.linked_file_ids.length > 0 ? (
+                            <div className="research-chip-group">
+                              {note.linked_file_ids.map((fileId) => {
+                                const file = fileLookup.get(fileId);
+                                if (!file) return null;
+                                return (
+                                  <button
+                                    key={`${note.id}-processed-file-${fileId}`}
+                                    type="button"
+                                    className="chip small"
+                                    onClick={() => void handleOpenStudyFile(file)}
+                                  >
+                                    {file.original_filename}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="research-log-footer">
+                          <div className="research-log-meta">
+                            <span>{note.author_name || "Unknown author"}</span>
+                            <span>{linkedReferencesLabel}</span>
+                            {note.linked_file_ids.length > 0 ? <span>{linkedFilesLabel}</span> : null}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
           </div>
         )}
 
@@ -4388,7 +4934,7 @@ export function ResearchWorkspace({
 
     return (
       <div className="paper-workspace">
-        <div className="meetings-detail-section">
+        <div id="paper-section-meta" className="meetings-detail-section">
           <div className="meetings-detail-head">
             <div className="meetings-detail-info">
               <strong>Paper</strong>
@@ -4484,6 +5030,15 @@ export function ResearchWorkspace({
           </div>
         </div>
 
+        {(paperExpanded || paperHasStructure) ? (
+          <nav className="paper-subnav">
+            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-meta")?.scrollIntoView({ behavior: "smooth" })}>Metadata</button>
+            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-authors")?.scrollIntoView({ behavior: "smooth" })}>Authors</button>
+            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-qc")?.scrollIntoView({ behavior: "smooth" })}>Questions & Claims</button>
+            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-sections")?.scrollIntoView({ behavior: "smooth" })}>Sections</button>
+          </nav>
+        ) : null}
+
         {!paperExpanded && !paperHasStructure ? (
           <div className="meetings-detail-section">
             <div className="paper-stack">
@@ -4518,7 +5073,7 @@ export function ResearchWorkspace({
         {paperExpanded || paperHasStructure ? (
           <>
 
-        <details className="research-inline-summary" open>
+        <details id="paper-section-authors" className="research-inline-summary" open>
           <summary>Authors <span className="delivery-tab-count">{paperAuthors.length}</span></summary>
           <div className="paper-stack">
             <div className="paper-author-add-row">
@@ -4604,7 +5159,7 @@ export function ResearchWorkspace({
           </div>
         </details>
 
-        <details className="research-inline-summary" open>
+        <details id="paper-section-qc" className="research-inline-summary" open>
           <summary>Research Questions & Claims <span className="delivery-tab-count">{paperQuestions.length + paperClaims.length}</span></summary>
         <div className="paper-columns">
           <div className="meetings-detail-section">
@@ -4636,8 +5191,8 @@ export function ResearchWorkspace({
                       setPaperQuestions((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
                     }
                   />
-                  <div className="paper-link-block">
-                    <strong>Notes</strong>
+                  <details className="paper-link-details">
+                    <summary className="paper-link-toggle">{item.note_ids.length} notes linked</summary>
                     <div className="paper-link-group">
                       {collectionNotes.map((note) => (
                         <label key={`${item.id}-question-note-${note.id}`} className="paper-link-chip">
@@ -4656,7 +5211,7 @@ export function ResearchWorkspace({
                         </label>
                       ))}
                     </div>
-                  </div>
+                  </details>
                 </div>
               ))}
             </div>
@@ -4731,95 +5286,103 @@ export function ResearchWorkspace({
                       <option value="missing_evidence">Missing evidence</option>
                     </select>
                   </label>
-                  <div className="paper-link-group">
-                    {paperQuestions.map((question) => (
-                      <label key={`${item.id}-${question.id}`} className="paper-link-chip">
-                        <input
-                          type="checkbox"
-                          checked={item.question_ids.includes(question.id)}
-                          onChange={() =>
-                            setPaperClaims((items) =>
-                              items.map((entry) =>
-                                entry.id === item.id
-                                  ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) }
-                                  : entry
-                              )
-                            )
-                          }
-                        />
-                        <span>{question.text || "Question"}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="paper-link-block">
-                    <strong>References</strong>
-                    <div className="paper-link-group">
-                      {collectionReferences.map((reference) => (
-                        <label key={`${item.id}-ref-${reference.id}`} className="paper-link-chip">
-                          <input
-                            type="checkbox"
-                            checked={item.reference_ids.includes(reference.id)}
-                            onChange={() =>
-                              setPaperClaims((items) =>
-                                items.map((entry) =>
-                                  entry.id === item.id
-                                    ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) }
-                                    : entry
+                  <details className="paper-link-details">
+                    <summary className="paper-link-toggle">
+                      {item.question_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length} evidence links
+                    </summary>
+                    <div className="paper-link-block">
+                      <strong>Questions</strong>
+                      <div className="paper-link-group">
+                        {paperQuestions.map((question) => (
+                          <label key={`${item.id}-${question.id}`} className="paper-link-chip">
+                            <input
+                              type="checkbox"
+                              checked={item.question_ids.includes(question.id)}
+                              onChange={() =>
+                                setPaperClaims((items) =>
+                                  items.map((entry) =>
+                                    entry.id === item.id
+                                      ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) }
+                                      : entry
+                                  )
                                 )
-                              )
-                            }
-                          />
-                          <span>{reference.title || "Reference"}</span>
-                        </label>
-                      ))}
+                              }
+                            />
+                            <span>{question.text || "Question"}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="paper-link-block">
-                    <strong>Notes</strong>
-                    <div className="paper-link-group">
-                      {collectionNotes.map((note) => (
-                        <label key={`${item.id}-note-${note.id}`} className="paper-link-chip">
-                          <input
-                            type="checkbox"
-                            checked={item.note_ids.includes(note.id)}
-                            onChange={() =>
-                              setPaperClaims((items) =>
-                                items.map((entry) =>
-                                  entry.id === item.id
-                                    ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) }
-                                    : entry
+                    <div className="paper-link-block">
+                      <strong>References</strong>
+                      <div className="paper-link-group">
+                        {collectionReferences.map((reference) => (
+                          <label key={`${item.id}-ref-${reference.id}`} className="paper-link-chip">
+                            <input
+                              type="checkbox"
+                              checked={item.reference_ids.includes(reference.id)}
+                              onChange={() =>
+                                setPaperClaims((items) =>
+                                  items.map((entry) =>
+                                    entry.id === item.id
+                                      ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) }
+                                      : entry
+                                  )
                                 )
-                              )
-                            }
-                        />
-                          <span>{note.title || "Note"}</span>
-                        </label>
-                      ))}
+                              }
+                            />
+                            <span>{reference.title || "Reference"}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="paper-link-block">
-                    <strong>Results</strong>
-                    <div className="paper-link-group">
-                      {collectionResults.map((result) => (
-                        <label key={`${item.id}-result-${result.id}`} className="paper-link-chip">
-                          <input
-                            type="checkbox"
-                            checked={item.result_ids.includes(result.id)}
-                            onChange={() =>
-                              setPaperClaims((items) =>
-                                items.map((entry) =>
-                                  entry.id === item.id
-                                    ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) }
-                                    : entry
+                    <div className="paper-link-block">
+                      <strong>Notes</strong>
+                      <div className="paper-link-group">
+                        {collectionNotes.map((note) => (
+                          <label key={`${item.id}-note-${note.id}`} className="paper-link-chip">
+                            <input
+                              type="checkbox"
+                              checked={item.note_ids.includes(note.id)}
+                              onChange={() =>
+                                setPaperClaims((items) =>
+                                  items.map((entry) =>
+                                    entry.id === item.id
+                                      ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) }
+                                      : entry
+                                  )
                                 )
-                              )
-                            }
-                          />
-                          <span>{result.title || "Result"}</span>
-                        </label>
-                      ))}
+                              }
+                            />
+                            <span>{note.title || "Note"}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                    <div className="paper-link-block">
+                      <strong>Results</strong>
+                      <div className="paper-link-group">
+                        {collectionResults.map((result) => (
+                          <label key={`${item.id}-result-${result.id}`} className="paper-link-chip">
+                            <input
+                              type="checkbox"
+                              checked={item.result_ids.includes(result.id)}
+                              onChange={() =>
+                                setPaperClaims((items) =>
+                                  items.map((entry) =>
+                                    entry.id === item.id
+                                      ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) }
+                                      : entry
+                                  )
+                                )
+                              }
+                            />
+                            <span>{result.title || "Result"}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
                 </div>
               ))}
             </div>
@@ -4827,7 +5390,7 @@ export function ResearchWorkspace({
         </div>
         </details>
 
-        <details className="research-inline-summary" open>
+        <details id="paper-section-sections" className="research-inline-summary" open>
           <summary>Sections <span className="delivery-tab-count">{paperSections.length}</span></summary>
           <div className="paper-section-action-row">
             <button type="button" className="meetings-new-btn" onClick={() => setPaperSections((items) => [...items, newPaperSection()])}>
@@ -4881,121 +5444,66 @@ export function ResearchWorkspace({
                     </select>
                   </label>
                 </div>
-                <div className="paper-link-block">
-                  <strong>Questions</strong>
-                  <div className="paper-link-group">
-                    {paperQuestions.map((question) => (
-                      <label key={`${item.id}-q-${question.id}`} className="paper-link-chip">
-                        <input
-                          type="checkbox"
-                          checked={item.question_ids.includes(question.id)}
-                          onChange={() =>
-                            setPaperSections((items) =>
-                              items.map((entry) =>
-                                entry.id === item.id
-                                  ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) }
-                                  : entry
-                              )
-                            )
-                          }
-                        />
-                        <span>{question.text || "Question"}</span>
-                      </label>
-                    ))}
+                <details className="paper-link-details">
+                  <summary className="paper-link-toggle">
+                    {item.question_ids.length + item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length} evidence links
+                  </summary>
+                  <div className="paper-link-block">
+                    <strong>Questions</strong>
+                    <div className="paper-link-group">
+                      {paperQuestions.map((question) => (
+                        <label key={`${item.id}-q-${question.id}`} className="paper-link-chip">
+                          <input type="checkbox" checked={item.question_ids.includes(question.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) } : entry))} />
+                          <span>{question.text || "Question"}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="paper-link-block">
-                  <strong>Claims</strong>
-                  <div className="paper-link-group">
-                    {paperClaims.map((claim) => (
-                      <label key={`${item.id}-c-${claim.id}`} className="paper-link-chip">
-                        <input
-                          type="checkbox"
-                          checked={item.claim_ids.includes(claim.id)}
-                          onChange={() =>
-                            setPaperSections((items) =>
-                              items.map((entry) =>
-                                entry.id === item.id
-                                  ? { ...entry, claim_ids: toggleId(entry.claim_ids, claim.id) }
-                                  : entry
-                              )
-                            )
-                          }
-                        />
-                        <span>{claim.text || "Claim"}</span>
-                      </label>
-                    ))}
+                  <div className="paper-link-block">
+                    <strong>Claims</strong>
+                    <div className="paper-link-group">
+                      {paperClaims.map((claim) => (
+                        <label key={`${item.id}-c-${claim.id}`} className="paper-link-chip">
+                          <input type="checkbox" checked={item.claim_ids.includes(claim.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, claim_ids: toggleId(entry.claim_ids, claim.id) } : entry))} />
+                          <span>{claim.text || "Claim"}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="paper-link-block">
-                  <strong>References</strong>
-                  <div className="paper-link-group">
-                    {collectionReferences.map((reference) => (
-                      <label key={`${item.id}-section-ref-${reference.id}`} className="paper-link-chip">
-                        <input
-                          type="checkbox"
-                          checked={item.reference_ids.includes(reference.id)}
-                          onChange={() =>
-                            setPaperSections((items) =>
-                              items.map((entry) =>
-                                entry.id === item.id
-                                  ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) }
-                                  : entry
-                              )
-                            )
-                          }
-                        />
-                        <span>{reference.title || "Reference"}</span>
-                      </label>
-                    ))}
+                  <div className="paper-link-block">
+                    <strong>References</strong>
+                    <div className="paper-link-group">
+                      {collectionReferences.map((reference) => (
+                        <label key={`${item.id}-section-ref-${reference.id}`} className="paper-link-chip">
+                          <input type="checkbox" checked={item.reference_ids.includes(reference.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) } : entry))} />
+                          <span>{reference.title || "Reference"}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="paper-link-block">
-                  <strong>Notes</strong>
-                  <div className="paper-link-group">
-                    {collectionNotes.map((note) => (
-                      <label key={`${item.id}-section-note-${note.id}`} className="paper-link-chip">
-                        <input
-                          type="checkbox"
-                          checked={item.note_ids.includes(note.id)}
-                          onChange={() =>
-                            setPaperSections((items) =>
-                              items.map((entry) =>
-                                entry.id === item.id
-                                  ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) }
-                                  : entry
-                              )
-                            )
-                          }
-                        />
-                        <span>{note.title || "Note"}</span>
-                      </label>
-                    ))}
+                  <div className="paper-link-block">
+                    <strong>Notes</strong>
+                    <div className="paper-link-group">
+                      {collectionNotes.map((note) => (
+                        <label key={`${item.id}-section-note-${note.id}`} className="paper-link-chip">
+                          <input type="checkbox" checked={item.note_ids.includes(note.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) } : entry))} />
+                          <span>{note.title || "Note"}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="paper-link-block">
-                  <strong>Results</strong>
-                  <div className="paper-link-group">
-                    {collectionResults.map((result) => (
-                      <label key={`${item.id}-section-result-${result.id}`} className="paper-link-chip">
-                        <input
-                          type="checkbox"
-                          checked={item.result_ids.includes(result.id)}
-                          onChange={() =>
-                            setPaperSections((items) =>
-                              items.map((entry) =>
-                                entry.id === item.id
-                                  ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) }
-                                  : entry
-                              )
-                            )
-                          }
-                        />
-                        <span>{result.title || "Result"}</span>
-                      </label>
-                    ))}
+                  <div className="paper-link-block">
+                    <strong>Results</strong>
+                    <div className="paper-link-group">
+                      {collectionResults.map((result) => (
+                        <label key={`${item.id}-section-result-${result.id}`} className="paper-link-chip">
+                          <input type="checkbox" checked={item.result_ids.includes(result.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) } : entry))} />
+                          <span>{result.title || "Result"}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                </details>
               </div>
             ))}
           </div>
@@ -5006,16 +5514,128 @@ export function ResearchWorkspace({
     );
   }
 
+  function renderChatTab() {
+    if (!collectionDetail || !selectedCollectionId) {
+      return null;
+    }
+    return (
+      <div className="study-chat-tab-shell">
+        <StudyCollabChat
+          key={`study-chat:${selectedProjectId}:${selectedCollectionId}:${activeResearchSpaceId}`}
+          projectId={selectedProjectId}
+          collectionId={selectedCollectionId}
+          researchSpaceId={activeResearchSpaceId || null}
+          currentUser={currentUser}
+          members={collectionDetail.members || []}
+          threadTitle={collectionDetail.title}
+        />
+      </div>
+    );
+  }
+
+  function renderFilesTab() {
+    if (!selectedCollectionId) {
+      return <p className="empty-message">Select a study to manage its files.</p>;
+    }
+    return (
+      <div className="workspace-browser-page study-files-page">
+        <div className="workspace-browser-summary">
+          <div className="workspace-browser-stats">
+            <span>{studyFiles.length} file{studyFiles.length === 1 ? "" : "s"}</span>
+          </div>
+          <div className="workspace-browser-actions">
+            <input
+              ref={quickLogFileInputRef}
+              type="file"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleUploadStudyFile(file);
+              }}
+            />
+            <button
+              type="button"
+              className="meetings-new-btn"
+              disabled={uploadingStudyFile}
+              onClick={() => quickLogFileInputRef.current?.click()}
+            >
+              <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Upload"}
+            </button>
+          </div>
+        </div>
+        {studyFiles.length === 0 ? (
+          <p className="empty-message">No files in this study.</p>
+        ) : (
+          <div className="workspace-browser-grid study-files-grid">
+            {studyFiles.map((file) => (
+              <div key={file.id} className="workspace-browser-card study-file-card">
+                <div className="workspace-browser-card-top">
+                  <span className="workspace-browser-icon">
+                    <FontAwesomeIcon icon={faFileArrowUp} />
+                  </span>
+                  <span className="chip small">{formatFileSize(file.file_size_bytes)}</span>
+                </div>
+                <div className="workspace-browser-card-body">
+                  <strong>{file.original_filename}</strong>
+                  <p>{file.uploaded_by_name || "Unknown uploader"}</p>
+                </div>
+                <div className="workspace-browser-card-foot">
+                  <div className="workspace-browser-meta-stack">
+                    <span className="workspace-browser-meta">{file.mime_type || "application/octet-stream"}</span>
+                    <span className="workspace-browser-meta">{formatRelativeTime(file.created_at)}</span>
+                  </div>
+                  <div className="workspace-browser-card-actions">
+                    <button type="button" className="ghost" onClick={() => void handleOpenStudyFile(file)}>
+                      Open
+                    </button>
+                    <button type="button" onClick={() => void handleDeleteStudyFile(file.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderIterationsTab() {
     if (!collectionDetail || !selectedCollectionId) {
       return <p className="empty-message">Select a study to manage its iterations.</p>;
     }
 
     const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
+    const collectionFiles = studyFiles.filter((item) => item.collection_id === selectedCollectionId);
+    const fileLookup = new Map(collectionFiles.map((item) => [item.id, item]));
     const orderedResults = sortedStudyResults();
 
     return (
       <div className="paper-workspace">
+        {studyIterations.length > 0 ? (
+          <div className="iteration-timeline">
+            {studyIterations.map((iter, idx) => {
+              const hasResult = iterationResults(iter.id).length > 0;
+              return (
+                <button
+                  key={iter.id}
+                  type="button"
+                  className={`iteration-step${expandedIterationId === iter.id ? " active" : ""}${iter.reviewed_at ? " reviewed" : ""}${hasResult ? " has-result" : ""}`}
+                  onClick={() => setExpandedIterationId((c) => (c === iter.id ? null : iter.id))}
+                >
+                  <span className="iteration-step-num">{idx + 1}</span>
+                  <span className="iteration-step-label">{iter.title || `Iteration ${idx + 1}`}</span>
+                  <span className="iteration-step-meta">
+                    {iter.improvements.length > 0 ? <span className="iteration-step-up">+{iter.improvements.length}</span> : null}
+                    {iter.regressions.length > 0 ? <span className="iteration-step-down">-{iter.regressions.length}</span> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
         {orderedResults.length > 0 ? (
           <div className="meetings-detail-section">
             <div className="meetings-detail-head">
@@ -5093,10 +5713,20 @@ export function ResearchWorkspace({
                     <div className="paper-evidence-strip">
                       <span className="chip small">{result.note_ids.length} logs</span>
                       <span className="chip small">{result.reference_ids.length} references</span>
+                      {result.file_ids.length ? <span className="chip small">{result.file_ids.length} files</span> : null}
                       {result.improvements.length ? <span className="chip small">{result.improvements.length} improvements</span> : null}
                       {result.regressions.length ? <span className="chip small">{result.regressions.length} regressions</span> : null}
                     </div>
                     <p>{result.summary || "No summary."}</p>
+                    {result.file_ids.length > 0 ? (
+                      <div className="research-chip-group">
+                        {result.file_ids.map((fileId) => {
+                          const file = fileLookup.get(fileId);
+                          if (!file) return null;
+                          return <span key={`${result.id}-file-${fileId}`} className="chip small">{file.original_filename}</span>;
+                        })}
+                      </div>
+                    ) : null}
                     {delta ? <span className="muted-small">{delta}</span> : null}
                   </div>
                 );
@@ -5159,11 +5789,21 @@ export function ResearchWorkspace({
             <div className="paper-stack">
               <div className="paper-evidence-strip">
                 {iteration.reviewed_at ? <span className="chip small">Reviewed</span> : <span className="chip small paper-health-alert">Review pending</span>}
+                {iteration.file_ids.length ? <span className="chip small">{iteration.file_ids.length} files</span> : null}
                 {iteration.improvements.length ? <span className="chip small">{iteration.improvements.length} improvements</span> : null}
                 {iteration.regressions.length ? <span className="chip small">{iteration.regressions.length} regressions</span> : null}
                 {iteration.next_actions.length ? <span className="chip small">{iteration.next_actions.length} next actions</span> : null}
               </div>
               <p>{iteration.summary || "No review yet."}</p>
+              {iteration.file_ids.length > 0 ? (
+                <div className="research-chip-group">
+                  {iteration.file_ids.map((fileId) => {
+                    const file = fileLookup.get(fileId);
+                    if (!file) return null;
+                    return <span key={`${iteration.id}-file-${fileId}`} className="chip small">{file.original_filename}</span>;
+                  })}
+                </div>
+              ) : null}
             </div>
             {expandedIterationId === iteration.id ? (
               <div className="paper-stack">
@@ -5342,104 +5982,124 @@ export function ResearchWorkspace({
       references.length === 0 ? "Import the first references from Bibliography." : null,
     ].filter(Boolean) as string[];
 
+    const actionTargets: Record<string, Tab> = {
+      deadline: "paper",
+      inbox: "notes",
+      result: "iterations",
+      claim: "paper",
+      section: "paper",
+      reference: "references",
+    };
+    function actionTab(text: string): Tab {
+      for (const [key, tab] of Object.entries(actionTargets)) {
+        if (text.toLowerCase().includes(key)) return tab;
+      }
+      return "overview";
+    }
+
     return (
       <div className="research-overview">
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <strong>Dashboard</strong>
-            </div>
-          </div>
-          <div className="research-overview-body">
-            <div className="research-meta-grid">
-              <span className="muted-small">{paperSubmissionDeadline ? `Deadline: ${new Date(paperSubmissionDeadline).toLocaleDateString()}` : "No deadline set"}</span>
-              <span className="muted-small">{references.length} references</span>
-              <span className="muted-small">{collectionNotes.length} inbox</span>
-              <span className="muted-small">{studyResults.length} results</span>
-              <span className="muted-small">{paperClaims.length} claims</span>
-              <span className="muted-small">{paperSections.length} sections</span>
-            </div>
-            {nextActions.length > 0 ? (
-              <div className="research-bullet-stack">
-                {nextActions.map((item) => (
-                  <span key={item} className={`chip small${item.includes("unsupported") || item.includes("weak") || item.includes("deadline") ? " paper-health-alert" : ""}`}>{item}</span>
-                ))}
-              </div>
-            ) : (
-              <p className="muted-small">Study is in a good state.</p>
-            )}
-          </div>
+        {collectionDetail.description ? (
+          <p className="study-overview-description">{collectionDetail.description}</p>
+        ) : null}
+
+        <div className="overview-stat-grid">
+          <button type="button" className={`overview-stat-box${!paperSubmissionDeadline ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>
+            <span className="overview-stat-value">{paperSubmissionDeadline ? new Date(paperSubmissionDeadline).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</span>
+            <span className="overview-stat-label">Deadline</span>
+          </button>
+          <button type="button" className="overview-stat-box" onClick={() => setTab("references")}>
+            <span className="overview-stat-value">{references.length}</span>
+            <span className="overview-stat-label">References</span>
+          </button>
+          <button type="button" className={`overview-stat-box${unprocessedInboxCount > 0 ? " stat-warn" : ""}`} onClick={() => setTab("notes")}>
+            <span className="overview-stat-value">{collectionNotes.length}</span>
+            <span className="overview-stat-label">Inbox{unprocessedInboxCount > 0 ? ` (${unprocessedInboxCount} new)` : ""}</span>
+          </button>
+          <button type="button" className="overview-stat-box" onClick={() => setTab("iterations")}>
+            <span className="overview-stat-value">{studyResults.length}</span>
+            <span className="overview-stat-label">Results</span>
+          </button>
+          <button type="button" className={`overview-stat-box${unsupportedClaims > 0 ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>
+            <span className="overview-stat-value">{paperClaims.length}</span>
+            <span className="overview-stat-label">Claims{unsupportedClaims > 0 ? ` (${unsupportedClaims} weak)` : ""}</span>
+          </button>
+          <button type="button" className={`overview-stat-box${weakSections > 0 ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>
+            <span className="overview-stat-value">{paperSections.length}</span>
+            <span className="overview-stat-label">Sections{weakSections > 0 ? ` (${weakSections} weak)` : ""}</span>
+          </button>
         </div>
 
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <strong>Study</strong>
-            </div>
-            <button type="button" className="meetings-new-btn" onClick={openEditCollectionModal}>
-              <FontAwesomeIcon icon={faPen} /> Edit
-            </button>
-          </div>
-          <div className="research-overview-body">
-            {collectionDetail.description ? <p>{collectionDetail.description}</p> : null}
-            {collectionDetail.hypothesis ? (
-              <p className="muted-small"><strong>Hypothesis:</strong> {collectionDetail.hypothesis}</p>
-            ) : null}
-            {!collectionDetail.description && !collectionDetail.hypothesis ? <p className="muted-small">No description or hypothesis set.</p> : null}
-            <div className="research-meta-grid">
-              <span className="muted-small">Status: <span className="chip small">{collectionDetail.status}</span></span>
-            </div>
-          </div>
-        </div>
-
-        <div className="paper-columns">
+        {nextActions.length > 0 ? (
           <div className="meetings-detail-section">
             <div className="meetings-detail-head">
               <div className="meetings-detail-info">
-                <strong>Recent Results</strong>
+                <strong>Next Actions</strong>
               </div>
+            </div>
+            <div className="overview-action-list">
+              {nextActions.map((item) => (
+                <button key={item} type="button" className={`overview-action-item${item.includes("unsupported") || item.includes("weak") || item.includes("deadline") ? " action-alert" : ""}`} onClick={() => setTab(actionTab(item))}>
+                  <span className="overview-action-dot" />
+                  {item}
+                  <FontAwesomeIcon icon={faChevronRight} className="overview-action-arrow" />
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="meetings-detail-section">
+            <div className="overview-action-list">
+              <p className="muted-small" style={{ padding: "8px 14px" }}>Study is in a good state.</p>
+            </div>
+          </div>
+        )}
+
+        <div className="paper-columns overview-recents">
+          <div className="meetings-detail-section">
+            <div className="meetings-detail-head">
+              <div className="meetings-detail-info"><strong>Recent Results</strong></div>
+              <button type="button" className="ghost icon-text-button small" onClick={() => setTab("iterations")}>View all</button>
             </div>
             <div className="paper-stack">
               {recentResults.length === 0 ? <p className="muted-small">No results.</p> : null}
               {recentResults.map((result) => (
-                <div key={result.id} className="paper-item-card">
+                <button key={result.id} type="button" className="paper-item-card overview-clickable" onClick={() => setTab("iterations")}>
                   <strong>{result.title}</strong>
                   <span className="muted-small">{result.summary || "No summary."}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
 
           <div className="meetings-detail-section">
             <div className="meetings-detail-head">
-              <div className="meetings-detail-info">
-                <strong>Recent References</strong>
-              </div>
+              <div className="meetings-detail-info"><strong>Recent References</strong></div>
+              <button type="button" className="ghost icon-text-button small" onClick={() => setTab("references")}>View all</button>
             </div>
             <div className="paper-stack">
               {recentReferences.length === 0 ? <p className="muted-small">No references.</p> : null}
               {recentReferences.map((reference) => (
-                <div key={reference.id} className="paper-item-card">
+                <button key={reference.id} type="button" className="paper-item-card overview-clickable" onClick={() => setTab("references")}>
                   <strong>{reference.title}</strong>
                   <span className="muted-small">{reference.authors.join(", ") || "-"}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
 
           <div className="meetings-detail-section">
             <div className="meetings-detail-head">
-              <div className="meetings-detail-info">
-                <strong>Recent Inbox</strong>
-              </div>
+              <div className="meetings-detail-info"><strong>Recent Inbox</strong></div>
+              <button type="button" className="ghost icon-text-button small" onClick={() => setTab("notes")}>View all</button>
             </div>
             <div className="paper-stack">
               {recentNotes.length === 0 ? <p className="muted-small">No inbox items.</p> : null}
               {recentNotes.map((note) => (
-                <div key={note.id} className="paper-item-card">
+                <button key={note.id} type="button" className="paper-item-card overview-clickable" onClick={() => setTab("notes")}>
                   <strong>{note.title}</strong>
                   <span className="muted-small">{formatRelativeTime(note.created_at)}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -6321,7 +6981,9 @@ export function ResearchWorkspace({
 
   function renderMemberModal() {
     const existingMemberIds = new Set(collectionDetail?.members.map((item) => item.member_id) || []);
-    const availableMembersForCollection = members.filter((item) => !existingMemberIds.has(item.id));
+    const availableMembersForCollection = hasProjectContext
+      ? members.filter((item) => !existingMemberIds.has(item.id))
+      : discoverableUsers.filter((item) => !existingMemberIds.has(item.id));
 
     return (
       <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setMemberModalOpen(false)}>
@@ -6339,7 +7001,7 @@ export function ResearchWorkspace({
                 <option value="">Select member</option>
                 {availableMembersForCollection.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.full_name}
+                    {"full_name" in item ? item.full_name : item.display_name}
                   </option>
                 ))}
               </select>

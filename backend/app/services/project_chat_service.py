@@ -28,6 +28,7 @@ from app.models.teaching import (
 from app.models.work import Deliverable, Milestone, Task, WorkPackage, deliverable_wps, milestone_wps
 from app.services.onboarding_service import ConflictError, NotFoundError, ValidationError
 from app.services.resources_service import ResourcesService
+from app.services.scoped_chat_service import ScopedChatService
 from app.services.teaching_service import TeachingService
 
 MANAGE_ROOMS_ROLES = {ProjectRole.project_owner.value, ProjectRole.project_manager.value}
@@ -53,6 +54,7 @@ DOCUMENT_REF_RE = re.compile(r"(?<!\w)#([A-Za-z0-9._-]+)")
 class ProjectChatService:
     def __init__(self, db: Session):
         self.db = db
+        self.scoped = ScopedChatService(db)
 
     def list_rooms(self, project_id: uuid.UUID, user_id: uuid.UUID) -> list[ProjectChatRoom]:
         role = self._get_user_project_role(project_id, user_id)
@@ -62,7 +64,11 @@ class ProjectChatService:
 
         rooms = self.db.scalars(
             select(ProjectChatRoom)
-            .where(ProjectChatRoom.project_id == project_id, ProjectChatRoom.is_archived.is_(False))
+            .where(
+                ProjectChatRoom.project_id == project_id,
+                ProjectChatRoom.is_archived.is_(False),
+                ProjectChatRoom.scope_type != "research_collection",
+            )
             .order_by(ProjectChatRoom.created_at.asc())
         ).all()
         return [room for room in rooms if self._can_access_room(project_id, room.id, user_id, role)]
@@ -98,7 +104,7 @@ class ProjectChatService:
         room = self._get_room(project_id, room_id)
         self._get_user_project_role(project_id, target_user_id)
 
-        rel = ProjectChatRoomMember(room_id=room.id, user_id=target_user_id)
+        rel = ProjectChatRoomMember(thread_id=room.id, user_id=target_user_id)
         self.db.add(rel)
         try:
             self.db.commit()
@@ -113,7 +119,7 @@ class ProjectChatService:
             raise ValidationError("Insufficient role to manage room members.")
         room = self._get_room(project_id, room_id)
         rel = self.db.scalar(
-            select(ProjectChatRoomMember).where(ProjectChatRoomMember.room_id == room.id, ProjectChatRoomMember.user_id == target_user_id)
+            select(ProjectChatRoomMember).where(ProjectChatRoomMember.thread_id == room.id, ProjectChatRoomMember.user_id == target_user_id)
         )
         if rel:
             self.db.delete(rel)
@@ -126,14 +132,13 @@ class ProjectChatService:
         room = self._get_room(project_id, room_id)
         if role not in READ_ROLES or not self._can_access_room(project_id, room.id, user_id, role):
             raise ValidationError("Insufficient role or membership to read room messages.")
-
-        stmt = select(ProjectChatMessage).where(
-            ProjectChatMessage.project_id == project_id,
-            ProjectChatMessage.room_id == room.id,
-        ).order_by(ProjectChatMessage.created_at.asc())
-        total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
-        rows = self.db.scalars(stmt.offset((page - 1) * page_size).limit(page_size)).all()
-        return list(rows), total
+        return self.scoped.list_messages(
+            ProjectChatMessage,
+            scope_field="thread_id",
+            scope_id=room.id,
+            page=page,
+            page_size=page_size,
+        )
 
     def get_room(self, project_id: uuid.UUID, room_id: uuid.UUID) -> ProjectChatRoom:
         return self._get_room(project_id, room_id)
@@ -150,27 +155,14 @@ class ProjectChatService:
         room = self._get_room(project_id, room_id)
         if role not in WRITE_ROLES or not self._can_access_room(project_id, room.id, user_id, role):
             raise ValidationError("Insufficient role or membership to write in this room.")
-        text = content.strip()
-        if not text:
-            raise ValidationError("Message content cannot be empty.")
-        if len(text) > 8000:
-            raise ValidationError("Message content cannot exceed 8000 characters.")
-
-        reply_to_id: uuid.UUID | None = None
-        if reply_to_message_id:
-            reply_target = self._get_message(project_id, room.id, reply_to_message_id)
-            reply_to_id = reply_target.id
-
-        message = ProjectChatMessage(
-            project_id=project_id,
-            room_id=room.id,
+        message = self.scoped.create_message(
+            ProjectChatMessage,
+            scope_field="thread_id",
+            scope_id=room.id,
             sender_user_id=user_id,
-            reply_to_message_id=reply_to_id,
-            content=text,
+            content=content,
+            reply_to_message_id=reply_to_message_id,
         )
-        self.db.add(message)
-        self.db.commit()
-        self.db.refresh(message)
         self._notify_user_mentions(project_id, room, message, sender_user_id=user_id)
         return message
 
@@ -186,29 +178,15 @@ class ProjectChatService:
         room = self._get_room(project_id, room_id)
         if role not in WRITE_ROLES or not self._can_access_room(project_id, room.id, user_id, role):
             raise ValidationError("Insufficient role or membership to react in this room.")
-
-        target = self._get_message(project_id, room.id, message_id)
-        symbol = emoji.strip()
-        if not symbol:
-            raise ValidationError("Reaction emoji cannot be empty.")
-        if len(symbol) > 32:
-            raise ValidationError("Reaction emoji is too long.")
-
-        existing = self.db.scalar(
-            select(ProjectChatMessageReaction).where(
-                ProjectChatMessageReaction.message_id == target.id,
-                ProjectChatMessageReaction.user_id == user_id,
-                ProjectChatMessageReaction.emoji == symbol,
-            )
+        return self.scoped.toggle_reaction(
+            ProjectChatMessage,
+            ProjectChatMessageReaction,
+            scope_field="thread_id",
+            scope_id=room.id,
+            message_id=message_id,
+            actor_user_id=user_id,
+            emoji=emoji,
         )
-        if existing:
-            self.db.delete(existing)
-        else:
-            self.db.add(ProjectChatMessageReaction(message_id=target.id, user_id=user_id, emoji=symbol))
-
-        self.db.commit()
-        self.db.refresh(target)
-        return target
 
     def get_message(self, project_id: uuid.UUID, room_id: uuid.UUID, user_id: uuid.UUID, message_id: uuid.UUID) -> ProjectChatMessage:
         role = self._get_user_project_role(project_id, user_id)
@@ -218,37 +196,10 @@ class ProjectChatService:
         return self._get_message(project_id, room.id, message_id)
 
     def message_lookup(self, message_ids: list[uuid.UUID]) -> dict[uuid.UUID, ProjectChatMessage]:
-        if not message_ids:
-            return {}
-        rows = self.db.scalars(select(ProjectChatMessage).where(ProjectChatMessage.id.in_(message_ids))).all()
-        return {item.id: item for item in rows}
+        return self.scoped.message_lookup(ProjectChatMessage, message_ids)
 
     def reaction_summary_by_message(self, message_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict]]:
-        if not message_ids:
-            return {}
-        rows = self.db.scalars(
-            select(ProjectChatMessageReaction)
-            .where(ProjectChatMessageReaction.message_id.in_(message_ids))
-            .order_by(ProjectChatMessageReaction.created_at.asc())
-        ).all()
-        by_message: dict[uuid.UUID, dict[str, list[uuid.UUID]]] = {}
-        for row in rows:
-            bucket = by_message.setdefault(row.message_id, {})
-            bucket.setdefault(row.emoji, []).append(row.user_id)
-
-        output: dict[uuid.UUID, list[dict]] = {}
-        for message_id, by_emoji in by_message.items():
-            summary = [
-                {
-                    "emoji": emoji,
-                    "count": len(user_ids),
-                    "user_ids": [str(user_id) for user_id in sorted(user_ids, key=str)],
-                }
-                for emoji, user_ids in by_emoji.items()
-            ]
-            summary.sort(key=lambda item: (-item["count"], item["emoji"]))
-            output[message_id] = summary
-        return output
+        return self.scoped.reaction_summary_by_message(ProjectChatMessageReaction, message_ids)
 
     def create_bot_message(self, project_id: uuid.UUID, room_id: uuid.UUID, content: str) -> ProjectChatMessage:
         room = self._get_room(project_id, room_id)
@@ -257,8 +208,7 @@ class ProjectChatService:
             raise ValidationError("Bot message content cannot be empty.")
         bot_user = self.ensure_bot_user()
         message = ProjectChatMessage(
-            project_id=project_id,
-            room_id=room.id,
+            thread_id=room.id,
             sender_user_id=bot_user.id,
             content=text[:8000],
         )
@@ -310,7 +260,7 @@ class ProjectChatService:
     def recent_messages_for_agent(self, project_id: uuid.UUID, room_id: uuid.UUID, limit: int = 12) -> list[dict[str, str]]:
         stmt = (
             select(ProjectChatMessage)
-            .where(ProjectChatMessage.project_id == project_id, ProjectChatMessage.room_id == room_id)
+            .where(ProjectChatMessage.thread_id == room_id)
             .order_by(ProjectChatMessage.created_at.desc())
             .limit(limit)
         )
@@ -378,7 +328,9 @@ class ProjectChatService:
         rooms_count = int(
             self.db.scalar(
                 select(func.count()).select_from(ProjectChatRoom).where(
-                    ProjectChatRoom.project_id == project_id, ProjectChatRoom.is_archived.is_(False)
+                    ProjectChatRoom.project_id == project_id,
+                    ProjectChatRoom.is_archived.is_(False),
+                    ProjectChatRoom.scope_type != "research_collection",
                 )
             )
             or 0
@@ -441,7 +393,9 @@ class ProjectChatService:
         rooms_count = int(
             self.db.scalar(
                 select(func.count()).select_from(ProjectChatRoom).where(
-                    ProjectChatRoom.project_id == project.id, ProjectChatRoom.is_archived.is_(False)
+                    ProjectChatRoom.project_id == project.id,
+                    ProjectChatRoom.is_archived.is_(False),
+                    ProjectChatRoom.scope_type != "research_collection",
                 )
             )
             or 0
@@ -743,7 +697,7 @@ class ProjectChatService:
 
     def room_member_ids(self, room_id: uuid.UUID) -> list[uuid.UUID]:
         rows = self.db.scalars(
-            select(ProjectChatRoomMember.user_id).where(ProjectChatRoomMember.room_id == room_id)
+            select(ProjectChatRoomMember.user_id).where(ProjectChatRoomMember.thread_id == room_id)
         ).all()
         return list(rows)
 
@@ -772,6 +726,7 @@ class ProjectChatService:
             select(ProjectChatRoom).where(
                 ProjectChatRoom.project_id == project_id,
                 func.lower(ProjectChatRoom.name) == "general",
+                ProjectChatRoom.scope_type == "project",
             )
         )
         if existing:
@@ -892,6 +847,7 @@ class ProjectChatService:
                 ProjectChatRoom.id == room_id,
                 ProjectChatRoom.project_id == project_id,
                 ProjectChatRoom.is_archived.is_(False),
+                ProjectChatRoom.scope_type != "research_collection",
             )
         )
         if not room:
@@ -902,8 +858,7 @@ class ProjectChatService:
         message = self.db.scalar(
             select(ProjectChatMessage).where(
                 ProjectChatMessage.id == message_id,
-                ProjectChatMessage.project_id == project_id,
-                ProjectChatMessage.room_id == room_id,
+                ProjectChatMessage.thread_id == room_id,
             )
         )
         if not message:

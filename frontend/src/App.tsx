@@ -1515,7 +1515,7 @@ export default function App() {
             {workspaceFamily === "research" ? (
               <button
                 type="button"
-                className="ghost topbar-tour-btn"
+                className="topbar-tour-btn"
                 onClick={startResearchTour}
               >
                 Tour

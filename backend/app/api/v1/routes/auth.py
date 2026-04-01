@@ -340,12 +340,34 @@ def create_my_suggestion(
     item = UserSuggestion(
         user_id=current_user.id,
         content=payload.content.strip(),
+        category=payload.category,
         status=UserSuggestionStatus.new.value,
     )
     db.add(item)
     db.commit()
     db.refresh(item)
     return _suggestion_read(item, current_user)
+
+
+@router.get("/me/suggestions", response_model=UserSuggestionListRead)
+def list_my_suggestions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserSuggestionListRead:
+    stmt = select(UserSuggestion).where(UserSuggestion.user_id == current_user.id)
+    if status_filter:
+        stmt = stmt.where(UserSuggestion.status == status_filter.strip().lower())
+    total = len(db.execute(stmt).all())
+    rows = db.execute(
+        stmt.order_by(UserSuggestion.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).scalars().all()
+    items = [_suggestion_read(item, current_user) for item in rows]
+    return UserSuggestionListRead(items=items, page=page, page_size=page_size, total=total)
 
 
 @router.get("/admin/suggestions", response_model=UserSuggestionListRead)
@@ -558,6 +580,7 @@ def _suggestion_read(item: UserSuggestion, user: UserAccount | None) -> UserSugg
         user_display_name=user.display_name if user else "Unknown",
         user_email=user.email if user else "unknown@example.com",
         content=item.content,
+        category=getattr(item, "category", "feature"),
         status=item.status,
         created_at=item.created_at,
         updated_at=item.updated_at,

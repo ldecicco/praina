@@ -32,6 +32,10 @@ import {
   faUsers,
   faWrench,
   faXmark,
+  faBug,
+  faPlus,
+  faArrowLeft,
+  faCircle,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { AdminPanel } from "./components/AdminPanel";
@@ -62,7 +66,7 @@ import { api, AUTH_EXPIRED_EVENT, PROJECT_DATA_CHANGED_EVENT } from "./lib/api";
 import { currentProjectMonth } from "./lib/utils";
 import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
-import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief, ResearchSpace } from "./types";
+import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrief, ResearchSpace, UserSuggestion, UserSuggestionCategory } from "./types";
 
 type View = "my-work" | "projects-home" | "research-home" | "teaching-home" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
 type WorkspaceFamily = "projects" | "research" | "teaching";
@@ -144,6 +148,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
   );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [collapsedNavGroups, setCollapsedNavGroups] = useState<Record<string, boolean>>(
     () => {
       if (typeof window === "undefined") return {};
@@ -180,9 +185,14 @@ export default function App() {
   const [shortcutHudVisible, setShortcutHudVisible] = useState(false);
   const [researchTourOpen, setResearchTourOpen] = useState(false);
   const [researchTourStepIndex, setResearchTourStepIndex] = useState(0);
-  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
+  const [suggestionPanelOpen, setSuggestionPanelOpen] = useState(false);
+  const [suggestionPanelView, setSuggestionPanelView] = useState<"list" | "create">("list");
   const [suggestionContent, setSuggestionContent] = useState("");
+  const [suggestionCategory, setSuggestionCategory] = useState<UserSuggestionCategory>("feature");
   const [savingSuggestion, setSavingSuggestion] = useState(false);
+  const [mySuggestions, setMySuggestions] = useState<UserSuggestion[]>([]);
+  const [mySuggestionsLoading, setMySuggestionsLoading] = useState(false);
+  const [suggestionStatusFilter, setSuggestionStatusFilter] = useState<string>("");
   const workspaceBrowserSearchRef = useRef<HTMLInputElement>(null);
   const navigationHistoryRef = useRef<AppNavigationSnapshot[]>([]);
   const restoringNavigationRef = useRef(false);
@@ -676,6 +686,7 @@ export default function App() {
     }
     setWorkspaceFamily(targetFamily);
     setView(targetView);
+    setMobileSidebarOpen(false);
   }
 
   function openAssistantWithPrompt(prompt: string) {
@@ -1136,15 +1147,29 @@ export default function App() {
     }
   }
 
+  async function loadMySuggestions(statusFilter?: string) {
+    try {
+      setMySuggestionsLoading(true);
+      const res = await api.listMySuggestions({ status: statusFilter || undefined });
+      setMySuggestions(res.items);
+    } catch {
+      // silent
+    } finally {
+      setMySuggestionsLoading(false);
+    }
+  }
+
   async function handleCreateSuggestion() {
     if (!suggestionContent.trim()) return;
     try {
       setSavingSuggestion(true);
       setError("");
-      await api.createMySuggestion({ content: suggestionContent.trim() });
-      setSuggestionModalOpen(false);
+      await api.createMySuggestion({ content: suggestionContent.trim(), category: suggestionCategory });
       setSuggestionContent("");
+      setSuggestionCategory("feature");
+      setSuggestionPanelView("list");
       toast.success("Suggestion sent.");
+      void loadMySuggestions(suggestionStatusFilter);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send suggestion.");
     } finally {
@@ -1369,7 +1394,8 @@ export default function App() {
 
   return (
     <div className={`app-frame ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <aside className="app-sidebar">
+      {mobileSidebarOpen ? <div className="mobile-overlay" onClick={() => setMobileSidebarOpen(false)} /> : null}
+      <aside className={`app-sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`}>
         <div className="sidebar-header">
           <button type="button" className="icon-button" onClick={toggleSidebar} aria-label="Toggle sidebar">
             {sidebarCollapsed ? (
@@ -1466,11 +1492,11 @@ export default function App() {
           <button
             type="button"
             className={`sidebar-suggestion-btn ${sidebarCollapsed ? "collapsed" : ""}`}
-            onClick={() => setSuggestionModalOpen(true)}
-            title={sidebarCollapsed ? "Suggestion" : undefined}
+            onClick={() => { setSuggestionPanelOpen(true); setSuggestionPanelView("list"); void loadMySuggestions(suggestionStatusFilter); }}
+            title={sidebarCollapsed ? "Suggestions" : undefined}
           >
             <FontAwesomeIcon icon={faLightbulb} />
-            {!sidebarCollapsed ? <span>Suggestion</span> : null}
+            {!sidebarCollapsed ? <span>Suggestions</span> : null}
           </button>
         </div>
       </aside>
@@ -1478,6 +1504,9 @@ export default function App() {
       <div className="app-main">
         <header className="topbar">
           <div className="topbar-left">
+            <button type="button" className="mobile-menu-btn" onClick={() => setMobileSidebarOpen(true)}>
+              <FontAwesomeIcon icon={faBars} />
+            </button>
             <div className="topbar-history-controls">
               <button
                 type="button"
@@ -1868,26 +1897,94 @@ export default function App() {
         onSkip={completeResearchTour}
         onFinish={completeResearchTour}
       />
-      {suggestionModalOpen ? (
-        <div className="modal-overlay" onClick={() => !savingSuggestion && setSuggestionModalOpen(false)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+      {suggestionPanelOpen ? (
+        <div className="modal-overlay" onClick={() => !savingSuggestion && setSuggestionPanelOpen(false)}>
+          <div className="modal-card suggestion-panel" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>Suggestion</h3>
-              <div className="modal-head-actions">
-                <button type="button" className="meetings-new-btn" disabled={!suggestionContent.trim() || savingSuggestion} onClick={() => void handleCreateSuggestion()}>
-                  {savingSuggestion ? "Sending..." : "Send"}
+              {suggestionPanelView === "create" ? (
+                <button type="button" className="ghost icon-only" onClick={() => setSuggestionPanelView("list")}>
+                  <FontAwesomeIcon icon={faArrowLeft} />
                 </button>
-                <button type="button" className="ghost docs-action-btn" title="Close" onClick={() => setSuggestionModalOpen(false)}>
+              ) : null}
+              <h3>{suggestionPanelView === "create" ? "New Suggestion" : "Suggestions"}</h3>
+              <div className="modal-head-actions">
+                {suggestionPanelView === "list" ? (
+                  <button type="button" className="meetings-new-btn" onClick={() => setSuggestionPanelView("create")}>
+                    <FontAwesomeIcon icon={faPlus} /> New
+                  </button>
+                ) : (
+                  <button type="button" className="meetings-new-btn" disabled={!suggestionContent.trim() || savingSuggestion} onClick={() => void handleCreateSuggestion()}>
+                    {savingSuggestion ? "Sending..." : "Submit"}
+                  </button>
+                )}
+                <button type="button" className="ghost docs-action-btn" title="Close" onClick={() => setSuggestionPanelOpen(false)}>
                   <FontAwesomeIcon icon={faXmark} />
                 </button>
               </div>
             </div>
-            <div className="form-grid">
-              <label className="full-span">
-                Suggestion
-                <textarea rows={6} value={suggestionContent} onChange={(event) => setSuggestionContent(event.target.value)} />
-              </label>
-            </div>
+
+            {suggestionPanelView === "list" ? (
+              <div className="suggestion-list-wrap">
+                <div className="suggestion-filters">
+                  {["", "new", "doing", "done", "rejected"].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`suggestion-filter-btn ${suggestionStatusFilter === s ? "active" : ""}`}
+                      onClick={() => { setSuggestionStatusFilter(s); void loadMySuggestions(s); }}
+                    >
+                      {s || "All"}
+                    </button>
+                  ))}
+                </div>
+                {mySuggestionsLoading ? (
+                  <div className="suggestion-empty">Loading...</div>
+                ) : mySuggestions.length === 0 ? (
+                  <div className="suggestion-empty">No suggestions yet. Click "New" to create one.</div>
+                ) : (
+                  <div className="suggestion-items">
+                    {mySuggestions.map((s) => (
+                      <div key={s.id} className="suggestion-item">
+                        <div className="suggestion-item-header">
+                          <span className={`suggestion-category-badge ${s.category}`}>
+                            {s.category === "bug" ? <FontAwesomeIcon icon={faBug} /> : null}
+                            {s.category}
+                          </span>
+                          <span className={`suggestion-status-badge ${s.status}`}>{s.status}</span>
+                        </div>
+                        <p className="suggestion-item-content">{s.content}</p>
+                        <span className="suggestion-item-date">{new Date(s.created_at).toLocaleDateString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="form-grid">
+                <label className="full-span">
+                  Type
+                  <div className="suggestion-category-select">
+                    {(["bug", "feature", "enhancement"] as UserSuggestionCategory[]).map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        className={`suggestion-category-option ${suggestionCategory === cat ? "active" : ""}`}
+                        onClick={() => setSuggestionCategory(cat)}
+                      >
+                        {cat === "bug" ? <FontAwesomeIcon icon={faBug} /> : null}
+                        {cat === "feature" ? <FontAwesomeIcon icon={faLightbulb} /> : null}
+                        {cat === "enhancement" ? <FontAwesomeIcon icon={faWrench} /> : null}
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </label>
+                <label className="full-span">
+                  Description
+                  <textarea rows={6} value={suggestionContent} onChange={(event) => setSuggestionContent(event.target.value)} placeholder="Describe your suggestion..." />
+                </label>
+              </div>
+            )}
           </div>
         </div>
       ) : null}

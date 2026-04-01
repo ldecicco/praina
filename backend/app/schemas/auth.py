@@ -137,6 +137,7 @@ class UserAdminCreateRequest(BaseModel):
 
 class UserSuggestionCreateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+    category: str = Field(default="feature", pattern=r"^(bug|feature|enhancement)$")
 
 
 class UserSuggestionUpdateRequest(BaseModel):
@@ -149,6 +150,7 @@ class UserSuggestionRead(BaseModel):
     user_display_name: str
     user_email: EmailStr
     content: str
+    category: str
     status: str
     created_at: datetime
     updated_at: datetime

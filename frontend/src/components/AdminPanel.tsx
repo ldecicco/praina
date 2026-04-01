@@ -792,6 +792,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                 <thead>
                   <tr>
                     <th>User</th>
+                    <th>Type</th>
                     <th>Suggestion</th>
                     <th>Date</th>
                     <th>Status</th>
@@ -804,6 +805,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                         <strong>{item.user_display_name}</strong>
                         <span className="muted-small research-inline-meta">{item.user_email}</span>
                       </td>
+                      <td><span className={`suggestion-category-badge ${item.category || "feature"}`}>{item.category || "feature"}</span></td>
                       <td>{item.content}</td>
                       <td>{new Date(item.created_at).toLocaleString()}</td>
                       <td>
@@ -817,7 +819,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
                     </tr>
                   ))}
                   {suggestions.length === 0 ? (
-                    <tr><td colSpan={4}>No suggestions found.</td></tr>
+                    <tr><td colSpan={5}>No suggestions found.</td></tr>
                   ) : null}
                 </tbody>
               </table>

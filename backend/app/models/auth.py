@@ -31,6 +31,12 @@ class UserSuggestionStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class UserSuggestionCategory(str, enum.Enum):
+    bug = "bug"
+    feature = "feature"
+    enhancement = "enhancement"
+
+
 class UserAccount(Base, IdMixin, TimestampMixin):
     __tablename__ = "user_accounts"
 
@@ -70,4 +76,5 @@ class UserSuggestion(Base, IdMixin, TimestampMixin):
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
     content: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(16), default=UserSuggestionCategory.feature.value, index=True)
     status: Mapped[str] = mapped_column(String(16), default=UserSuggestionStatus.new.value, index=True)

@@ -252,8 +252,20 @@ export const api = {
     return request("/auth/me/password", { method: "POST", body: JSON.stringify(payload) });
   },
 
-  createMySuggestion(payload: { content: string }): Promise<UserSuggestion> {
+  createMySuggestion(payload: { content: string; category?: string }): Promise<UserSuggestion> {
     return request("/auth/me/suggestions", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  listMySuggestions(params?: {
+    page?: number;
+    page_size?: number;
+    status?: string;
+  }): Promise<Paginated<UserSuggestion>> {
+    const search = new URLSearchParams();
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.page_size) search.set("page_size", String(params.page_size));
+    if (params?.status) search.set("status", params.status);
+    return request(`/auth/me/suggestions${search.toString() ? `?${search.toString()}` : ""}`);
   },
 
   listUserSuggestions(params?: {

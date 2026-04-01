@@ -546,6 +546,7 @@ export function ResearchWorkspace({
   const [referencePdfFile, setReferencePdfFile] = useState<File | null>(null);
   const [existingDocumentKey, setExistingDocumentKey] = useState("");
 
+  const [autoLinkAfterCreate, setAutoLinkAfterCreate] = useState(false);
   const [studyPaletteOpen, setStudyPaletteOpen] = useState(false);
   const [studyPaletteQuery, setStudyPaletteQuery] = useState("");
   const [studyPaletteIndex, setStudyPaletteIndex] = useState(0);
@@ -1338,6 +1339,7 @@ export function ResearchWorkspace({
 
   function openCreateBibliographyModal() {
     setBibliographyModalMode("create");
+    setAutoLinkAfterCreate(Boolean(selectedCollectionId && !bibliographyOnly));
     resetBibliographyForm();
     setBibliographyModalOpen(true);
   }
@@ -2728,7 +2730,7 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   async function persistBibliography(options?: { allowDuplicate?: boolean; reuseExistingId?: string | null }) {
-    if (!selectedProjectId || !bibliographyTitle.trim()) return;
+    if (!bibliographyTitle.trim()) return;
     setSaving(true);
     setError("");
     setStatus("");
@@ -2744,9 +2746,12 @@ function newStudyResult(): ResearchStudyResult {
           : await api.updateGlobalBibliography(editingBibliographyId!, payload);
       let finalItem = item;
       if (bibliographyAttachmentFile) {
-        if (!hasProjectContext) throw new Error("Link a project before attaching a PDF.");
         if (!item.attachment_url || options?.allowDuplicate) {
-          finalItem = await api.uploadGlobalBibliographyAttachment(item.id, selectedProjectId, bibliographyAttachmentFile);
+          finalItem = await api.uploadGlobalBibliographyAttachment(
+            item.id,
+            hasProjectContext ? selectedProjectId : null,
+            bibliographyAttachmentFile,
+          );
         }
       }
       await Promise.all([loadBibliography(), loadBibliographyTags()]);
@@ -2754,14 +2759,33 @@ function newStudyResult(): ResearchStudyResult {
       setBibliographyDuplicateModalOpen(false);
       setBibliographyDuplicateMatches([]);
       resetBibliographyForm();
-      setStatus(
-        finalItem.warning ||
-        (bibliographyModalMode === "create"
-          ? options?.reuseExistingId
-            ? "Existing paper reused."
-            : "Paper added."
-          : "Paper updated.")
-      );
+
+      // Auto-link to current study if triggered from the import picker
+      if (autoLinkAfterCreate && bibliographyModalMode === "create" && selectedCollectionId) {
+        setAutoLinkAfterCreate(false);
+        try {
+          await api.linkBibliographyReference(selectedProjectId, {
+            bibliography_reference_id: finalItem.id,
+            collection_id: selectedCollectionId,
+            reading_status: "unread",
+          }, activeResearchSpaceId || undefined);
+          await refreshResearchDataAfterReferenceChange(selectedCollectionId);
+          await loadBibliography();
+          setStatus("Paper added and linked to study.");
+        } catch {
+          setStatus("Paper added but failed to link to study.");
+        }
+      } else {
+        setAutoLinkAfterCreate(false);
+        setStatus(
+          finalItem.warning ||
+          (bibliographyModalMode === "create"
+            ? options?.reuseExistingId
+              ? "Existing paper reused."
+              : "Paper added."
+            : "Paper updated.")
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save paper");
     } finally {
@@ -2959,7 +2983,7 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   async function handleImportBibliographyBibtex() {
-    if (!selectedProjectId || !bibliographyBibtexInput.trim()) return;
+    if (!bibliographyBibtexInput.trim()) return;
     setSaving(true);
     setError("");
     setStatus("");
@@ -2967,8 +2991,11 @@ function newStudyResult(): ResearchStudyResult {
     try {
       const result = await api.importGlobalBibliographyBibtex(bibliographyBibtexInput.trim(), bibliographyVisibility);
       if (bibliographyAttachmentFile && result.created.length === 1) {
-        if (!hasProjectContext) throw new Error("Link a project before attaching a PDF.");
-        await api.uploadGlobalBibliographyAttachment(result.created[0].id, selectedProjectId, bibliographyAttachmentFile);
+        await api.uploadGlobalBibliographyAttachment(
+          result.created[0].id,
+          hasProjectContext ? selectedProjectId : null,
+          bibliographyAttachmentFile,
+        );
       }
       setBibliographyBibtexResult({ created: result.created.length, errors: result.errors });
       await loadBibliography();

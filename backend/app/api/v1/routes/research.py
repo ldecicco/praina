@@ -2022,7 +2022,7 @@ def import_global_bibliography_identifiers(
 @bibliography_router.post("/{bibliography_reference_id}/attachment", response_model=BibliographyReferenceRead)
 async def upload_global_bibliography_attachment(
     bibliography_reference_id: uuid.UUID,
-    source_project_id: uuid.UUID = Query(...),
+    source_project_id: uuid.UUID | None = Query(default=None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> BibliographyReferenceRead:

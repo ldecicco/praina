@@ -2516,10 +2516,17 @@ export const api = {
       body: JSON.stringify(data),
     });
   },
-  uploadGlobalBibliographyAttachment(bibliographyReferenceId: string, sourceProjectId: string, file: File): Promise<BibliographyReference> {
+  uploadGlobalBibliographyAttachment(
+    bibliographyReferenceId: string,
+    sourceProjectId: string | null | undefined,
+    file: File,
+  ): Promise<BibliographyReference> {
     const formData = new FormData();
     formData.append("file", file);
-    return request(`/bibliography/${bibliographyReferenceId}/attachment?source_project_id=${sourceProjectId}`, { method: "POST", body: formData });
+    const query = new URLSearchParams();
+    if (sourceProjectId) query.set("source_project_id", sourceProjectId);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request(`/bibliography/${bibliographyReferenceId}/attachment${suffix}`, { method: "POST", body: formData });
   },
   ingestGlobalBibliographyAttachment(
     bibliographyReferenceId: string,

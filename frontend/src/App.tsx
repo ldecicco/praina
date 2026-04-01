@@ -194,7 +194,11 @@ export default function App() {
     workspaceFamily,
     selectedProjectId,
     selectedResearchSpaceId,
-    research: researchNavigationState,
+    research: {
+      selectedCollectionId: researchNavigationState.selectedCollectionId,
+      tab: researchNavigationState.selectedCollectionId ? researchNavigationState.tab : "overview",
+      selectedBibliographyCollectionId: researchNavigationState.selectedBibliographyCollectionId,
+    },
   }), [view, workspaceFamily, selectedProjectId, selectedResearchSpaceId, researchNavigationState]);
 
   const researchTourSteps: GuidedTourStep[] = useMemo(() => ([
@@ -735,23 +739,16 @@ export default function App() {
   useEffect(() => {
     if (restoreTargetSnapshotRef.current) return;
     if (workspaceFamily !== "research") return;
-    if (selectedProjectId && activeResearchSpace?.linked_project_id !== selectedProjectId) {
-      const matchingSpace = researchSpaces.find((item) => item.linked_project_id === selectedProjectId);
-      if (matchingSpace && matchingSpace.id !== selectedResearchSpaceId) {
-        setSelectedResearchSpaceId(matchingSpace.id);
-        if (typeof window !== "undefined") {
-          window.sessionStorage.setItem(ACTIVE_RESEARCH_SPACE_KEY, matchingSpace.id);
-        }
-        return;
-      }
-    }
-    if (activeResearchSpace?.linked_project_id && activeResearchSpace.linked_project_id !== selectedProjectId) {
+    if (
+      activeResearchSpace?.linked_project_id &&
+      (!selectedProjectId || selectedProjectId === RESEARCH_ROUTE_FALLBACK_PROJECT_ID)
+    ) {
       setSelectedProjectId(activeResearchSpace.linked_project_id);
       if (typeof window !== "undefined") {
         window.sessionStorage.setItem(ACTIVE_PROJECT_KEY, activeResearchSpace.linked_project_id);
       }
     }
-  }, [workspaceFamily, activeResearchSpace?.linked_project_id, selectedProjectId, researchSpaces, selectedResearchSpaceId]);
+  }, [workspaceFamily, activeResearchSpace?.linked_project_id, selectedProjectId]);
 
   useEffect(() => {
     function handleProjectDataChanged(event: Event) {

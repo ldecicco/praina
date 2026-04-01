@@ -1702,7 +1702,7 @@ export default function App() {
               selectedProjectId={effectiveResearchProjectId}
               currentUser={currentUser}
               accessToken={authTokens.access_token}
-              currentProject={activeResearchSpace ? (researchLinkedProject ?? activeProject) : null}
+              currentProject={activeResearchSpace ? (researchLinkedProject ?? null) : null}
               researchSpaceId={activeResearchSpace?.id || ""}
               availableResearchSpaces={researchSpaces}
               onClearResearchSpaceFilter={() => handleSelectResearchSpace("")}
@@ -1718,7 +1718,7 @@ export default function App() {
               selectedProjectId={activeResearchSpace ? effectiveResearchProjectId : (selectedProjectId || RESEARCH_ROUTE_FALLBACK_PROJECT_ID)}
               currentUser={currentUser}
               accessToken={authTokens.access_token}
-              currentProject={researchLinkedProject ?? activeProject}
+              currentProject={activeResearchSpace ? (researchLinkedProject ?? null) : activeProject}
               researchSpaceId={activeResearchSpace?.id || ""}
               availableResearchSpaces={researchSpaces}
               onClearResearchSpaceFilter={() => handleSelectResearchSpace("")}

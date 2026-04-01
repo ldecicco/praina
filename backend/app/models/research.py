@@ -110,6 +110,13 @@ research_note_files = Table(
     Column("file_id", UUID(as_uuid=True), ForeignKey("research_study_files.id", ondelete="CASCADE"), primary_key=True),
 )
 
+research_note_reply_references = Table(
+    "research_note_reply_references",
+    Base.metadata,
+    Column("reply_id", UUID(as_uuid=True), ForeignKey("research_note_replies.id", ondelete="CASCADE"), primary_key=True),
+    Column("reference_id", UUID(as_uuid=True), ForeignKey("research_references.id", ondelete="CASCADE"), primary_key=True),
+)
+
 bibliography_reference_tags = Table(
     "bibliography_reference_tags",
     Base.metadata,
@@ -334,6 +341,9 @@ class ResearchNote(Base, IdMixin, TimestampMixin):
     author_member_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("team_members.id", ondelete="SET NULL"), nullable=True,
     )
+    user_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
     title: Mapped[str] = mapped_column(String(255))
     content: Mapped[str] = mapped_column(Text)
     lane: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
@@ -341,6 +351,18 @@ class ResearchNote(Base, IdMixin, TimestampMixin):
         Enum(NoteType, name="note_type"), default=NoteType.observation, index=True,
     )
     tags: Mapped[list | None] = mapped_column(JSONB, default=list)
+
+
+class ResearchNoteReply(Base, IdMixin, TimestampMixin):
+    __tablename__ = "research_note_replies"
+
+    note_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_notes.id", ondelete="CASCADE"), index=True
+    )
+    user_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    content: Mapped[str] = mapped_column(Text)
 
 
 class ResearchStudyFile(Base, IdMixin, TimestampMixin):

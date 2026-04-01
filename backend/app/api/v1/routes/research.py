@@ -68,6 +68,8 @@ from app.schemas.research import (
     CollectionRead,
     CollectionUpdate,
     NoteCreate,
+    NoteReplyCreate,
+    NoteReplyRead,
     StudyFileListRead,
     StudyFileRead,
     NoteListRead,
@@ -547,17 +549,19 @@ async def websocket_study_chat(
     room_key = _study_chat_room_key(collection_id)
     await study_chat_hub.connect(room_key, websocket)
     became_online = study_chat_hub.user_join(room_key, user_id)
-    await websocket.send_text(json.dumps({"event": "presence_snapshot", "user_ids": study_chat_hub.online_user_ids(room_key)}))
-    if became_online:
-        await study_chat_hub.broadcast(
-            room_key,
-            {"event": "presence", "status": "joined", "user_id": str(user_id), "display_name": display_name},
-        )
 
     try:
+        await websocket.send_text(json.dumps({"event": "presence_snapshot", "user_ids": study_chat_hub.online_user_ids(room_key)}))
+        if became_online:
+            await study_chat_hub.broadcast(
+                room_key,
+                {"event": "presence", "status": "joined", "user_id": str(user_id), "display_name": display_name},
+            )
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         study_chat_hub.disconnect(room_key, websocket)
         became_offline = study_chat_hub.user_leave(room_key, user_id)
         if became_offline:
@@ -2381,6 +2385,7 @@ def create_note(
             note_type=payload.note_type,
             tags=payload.tags,
             author_member_id=member_id,
+            user_account_id=current_user.id,
             linked_reference_ids=payload.linked_reference_ids,
             linked_file_ids=payload.linked_file_ids,
         )
@@ -2395,6 +2400,45 @@ def create_note(
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     return _note_read(svc, item)
+
+
+@router.post("/{project_id}/research/notes/{note_id}/replies", response_model=NoteReplyRead, status_code=status.HTTP_201_CREATED)
+def create_note_reply(
+    project_id: uuid.UUID,
+    note_id: uuid.UUID,
+    payload: NoteReplyCreate,
+    space_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> NoteReplyRead:
+    svc = ResearchService(db)
+    try:
+        if space_id:
+            svc.get_note_for_space(uuid.UUID(space_id), note_id)
+        elif project_id == GLOBAL_RESEARCH_PROJECT_ID:
+            svc.get_note_any(note_id)
+        else:
+            svc.get_note(project_id, note_id)
+        reply = svc.create_note_reply(
+            note_id,
+            user_account_id=current_user.id,
+            content=payload.content,
+            linked_reference_ids=payload.linked_reference_ids,
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return NoteReplyRead(
+        id=str(reply.id),
+        note_id=str(reply.note_id),
+        user_account_id=str(reply.user_account_id) if reply.user_account_id else None,
+        author_name=current_user.display_name,
+        author_avatar_url=current_user.avatar_path,
+        content=reply.content,
+        linked_reference_ids=svc.get_note_reply_reference_ids(reply.id),
+        created_at=reply.created_at,
+        updated_at=reply.updated_at,
+    )
 
 
 @router.get("/{project_id}/research/notes/{note_id}", response_model=NoteRead)
@@ -2947,13 +2991,16 @@ def _bibliography_collection_read(svc: ResearchService, item) -> BibliographyCol
 
 
 def _note_read(svc: ResearchService, item) -> NoteRead:
+    author_name, author_avatar_url, author_user_id = svc.get_note_author(item)
     return NoteRead(
         id=str(item.id),
         research_space_id=str(item.research_space_id) if item.research_space_id else None,
         project_id=str(item.project_id) if item.project_id else None,
         collection_id=str(item.collection_id) if item.collection_id else None,
         author_member_id=str(item.author_member_id) if item.author_member_id else None,
-        author_name=svc.get_author_name(item.author_member_id),
+        user_account_id=str(author_user_id) if author_user_id else None,
+        author_name=author_name,
+        author_avatar_url=author_avatar_url,
         title=item.title,
         content=item.content,
         lane=item.lane,
@@ -2961,6 +3008,20 @@ def _note_read(svc: ResearchService, item) -> NoteRead:
         tags=item.tags or [],
         linked_reference_ids=svc.get_note_reference_ids(item.id),
         linked_file_ids=svc.get_note_file_ids(item.id),
+        replies=[
+            NoteReplyRead(
+                id=str(reply.id),
+                note_id=str(reply.note_id),
+                user_account_id=str(reply.user_account_id) if reply.user_account_id else None,
+                author_name=svc.get_user_display_name(reply.user_account_id) if reply.user_account_id else None,
+                author_avatar_url=svc.get_user_avatar_url(reply.user_account_id),
+                content=reply.content,
+                linked_reference_ids=svc.get_note_reply_reference_ids(reply.id),
+                created_at=reply.created_at,
+                updated_at=reply.updated_at,
+            )
+            for reply in svc.list_note_replies(item.id)
+        ],
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

@@ -1512,7 +1512,9 @@ export type ResearchNote = {
   project_id: string | null;
   collection_id: string | null;
   author_member_id: string | null;
+  user_account_id: string | null;
   author_name: string | null;
+  author_avatar_url: string | null;
   title: string;
   content: string;
   lane: string | null;
@@ -1520,6 +1522,19 @@ export type ResearchNote = {
   tags: string[];
   linked_reference_ids: string[];
   linked_file_ids: string[];
+  replies: ResearchNoteReply[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchNoteReply = {
+  id: string;
+  note_id: string;
+  user_account_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
+  content: string;
+  linked_reference_ids: string[];
   created_at: string;
   updated_at: string;
 };

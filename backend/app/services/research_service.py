@@ -49,6 +49,7 @@ from app.models.research import (
     ResearchStudyFile,
     ResearchSpace,
     ResearchNote,
+    ResearchNoteReply,
     ResearchReference,
     bibliography_collection_references,
     bibliography_reference_concepts,
@@ -60,6 +61,7 @@ from app.models.research import (
     research_collection_wps,
     research_note_references,
     research_note_files,
+    research_note_reply_references,
 )
 from app.models.teaching import TeachingProjectBackgroundMaterial
 from app.services.onboarding_service import NotFoundError, ValidationError
@@ -121,6 +123,23 @@ class ResearchService:
     def get_user_display_name(self, user_id: uuid.UUID) -> str:
         user = self.db.get(UserAccount, user_id)
         return user.display_name if user else "Unknown"
+
+    def get_user_avatar_url(self, user_id: uuid.UUID | None) -> str | None:
+        if not user_id:
+            return None
+        user = self.db.get(UserAccount, user_id)
+        return user.avatar_path if user and user.avatar_path else None
+
+    def get_team_member_user_id(self, member_id: uuid.UUID | None) -> uuid.UUID | None:
+        if not member_id:
+            return None
+        return self.db.scalar(select(TeamMember.user_account_id).where(TeamMember.id == member_id))
+
+    def get_note_author(self, item: ResearchNote) -> tuple[str | None, str | None, uuid.UUID | None]:
+        user_id = item.user_account_id or self.get_team_member_user_id(item.author_member_id)
+        if user_id:
+            return self.get_user_display_name(user_id), self.get_user_avatar_url(user_id), user_id
+        return self.get_author_name(item.author_member_id), None, None
 
     def _space_linked_project_id(self, space_id: uuid.UUID) -> uuid.UUID | None:
         item = self.db.get(ResearchSpace, space_id)
@@ -4175,6 +4194,7 @@ class ResearchService:
         note_type: str = "observation",
         tags: list[str] | None = None,
         author_member_id: uuid.UUID | None = None,
+        user_account_id: uuid.UUID | None = None,
         linked_reference_ids: list[str] | None = None,
         linked_file_ids: list[str] | None = None,
     ) -> ResearchNote:
@@ -4188,6 +4208,7 @@ class ResearchService:
             note_type=self._note_type(note_type),
             tags=tags or [],
             author_member_id=author_member_id,
+            user_account_id=user_account_id,
         )
         self.db.add(item)
         self.db.flush()
@@ -4220,6 +4241,7 @@ class ResearchService:
                 note_type=self._note_type(kwargs.get("note_type") or "observation"),
                 tags=kwargs.get("tags") or [],
                 author_member_id=kwargs.get("author_member_id"),
+                user_account_id=kwargs.get("user_account_id"),
             )
             self.db.add(item)
             self.db.flush()
@@ -4255,6 +4277,7 @@ class ResearchService:
             note_type=self._note_type(kwargs.get("note_type") or "observation"),
             tags=kwargs.get("tags") or [],
             author_member_id=kwargs.get("author_member_id"),
+            user_account_id=kwargs.get("user_account_id"),
         )
         self.db.add(item)
         self.db.flush()
@@ -4432,6 +4455,67 @@ class ResearchService:
             select(research_note_files.c.file_id).where(research_note_files.c.note_id == note_id)
         ).all()
         return [str(r[0]) for r in rows]
+
+    def list_note_replies(self, note_id: uuid.UUID) -> list[ResearchNoteReply]:
+        return list(
+            self.db.scalars(
+                select(ResearchNoteReply)
+                .where(ResearchNoteReply.note_id == note_id)
+                .order_by(ResearchNoteReply.created_at.asc())
+            ).all()
+        )
+
+    def get_note_reply_reference_ids(self, reply_id: uuid.UUID) -> list[str]:
+        try:
+            rows = self.db.execute(
+                select(research_note_reply_references.c.reference_id).where(research_note_reply_references.c.reply_id == reply_id)
+            ).all()
+        except ProgrammingError:
+            self.db.rollback()
+            return []
+        return [str(row[0]) for row in rows]
+
+    def create_note_reply(
+        self,
+        note_id: uuid.UUID,
+        *,
+        user_account_id: uuid.UUID,
+        content: str,
+        linked_reference_ids: list[str] | None = None,
+    ) -> ResearchNoteReply:
+        item = self.get_note_any(note_id)
+        normalized_content = content.strip()
+        if not normalized_content:
+            raise ValidationError("Reply content is required.")
+        reply = ResearchNoteReply(
+            note_id=item.id,
+            user_account_id=user_account_id,
+            content=normalized_content,
+        )
+        self.db.add(reply)
+        self.db.flush()
+        allowed_reference_ids = set(self.get_note_reference_ids(item.id))
+        allowed_reference_ids.update(
+            str(reference_id)
+            for reference_id in self.db.scalars(
+                select(ResearchReference.id).where(ResearchReference.collection_id == item.collection_id)
+            ).all()
+        )
+        for raw_id in linked_reference_ids or []:
+            if raw_id not in allowed_reference_ids:
+                continue
+            try:
+                self.db.execute(
+                    insert(research_note_reply_references).values(reply_id=reply.id, reference_id=uuid.UUID(raw_id))
+                )
+            except ProgrammingError:
+                self.db.rollback()
+                self.db.add(reply)
+                self.db.flush()
+                break
+        self.db.commit()
+        self.db.refresh(reply)
+        return reply
 
     def set_note_files(
         self,

@@ -72,6 +72,7 @@ import type {
   ResearchStudyFile,
   ResearchReference,
   ResearchNote,
+  ResearchNoteReply,
   Equipment,
   EquipmentMaterial,
   EquipmentBlocker,
@@ -2606,6 +2607,10 @@ export const api = {
   updateResearchNote(projectId: string, noteId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchNote> {
     const q = spaceId ? `?space_id=${spaceId}` : "";
     return request(`/projects/${projectId}/research/notes/${noteId}${q}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+  createResearchNoteReply(projectId: string, noteId: string, data: { content: string; linked_reference_ids?: string[] }, spaceId?: string): Promise<ResearchNoteReply> {
+    const q = spaceId ? `?space_id=${spaceId}` : "";
+    return request(`/projects/${projectId}/research/notes/${noteId}/replies${q}`, { method: "POST", body: JSON.stringify(data) });
   },
   deleteResearchNote(projectId: string, noteId: string, spaceId?: string): Promise<void> {
     const q = spaceId ? `?space_id=${spaceId}` : "";

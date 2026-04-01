@@ -9631,8 +9631,35 @@ tr.row-selected {
   overflow: hidden;
 }
 
+.research-log-avatar {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  font-size: 12px;
+}
+
+.research-log-author-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.research-log-author-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.research-log-author-line strong {
+  color: var(--text-bright);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
 .research-log-timestamp {
-  margin-left: auto;
   flex: 0 0 auto;
   color: var(--text-secondary);
   font-size: 11px;
@@ -9693,6 +9720,13 @@ tr.row-selected {
   flex-wrap: wrap;
 }
 
+.research-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .research-log-meta {
   display: flex;
   flex-wrap: wrap;
@@ -9732,6 +9766,80 @@ tr.row-selected {
 
 .research-log-card.editing .note-promote-actions {
   opacity: 0;
+}
+
+.research-log-replies {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+}
+
+.research-log-reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.research-log-reply-avatar {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  font-size: 10px;
+}
+
+.research-log-reply-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+
+.research-log-reply-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.research-log-reply-head strong {
+  color: var(--text-bright);
+  font-size: 11px;
+}
+
+.research-log-reply-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.research-log-reply-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+}
+
+.research-log-reply-input {
+  min-height: 72px;
+}
+
+.research-log-reply-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .research-inline-title {
@@ -9953,7 +10061,23 @@ tr.row-selected {
   font-size: 13px;
   line-height: 1.6;
   margin: 0;
-  padding: 0 2px;
+  padding: 2px 4px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--t);
+}
+.study-overview-description:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.study-overview-description.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+.study-overview-description-input {
+  width: 100%;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 2px 4px;
 }
 .overview-stat-grid {
   display: flex;

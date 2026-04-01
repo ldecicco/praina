@@ -309,7 +309,7 @@ export function StudyCollabChat({
         { content, reply_to_message_id: replyToMessage?.id ?? null },
         researchSpaceId,
       );
-      setMessages((prev) => [...prev, created]);
+      setMessages((prev) => (prev.some((item) => item.id === created.id) ? prev : [...prev, created]));
       setDraft("");
       setReplyToMessage(null);
       setShowEmojiPicker(false);

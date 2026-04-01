@@ -51,6 +51,7 @@ import type {
   ResearchCollectionDetail,
   ResearchCollectionMember,
   ResearchNote,
+  ResearchNoteReply,
   ResearchPaperAuthor,
   ResearchPaperClaim,
   ResearchPaperQuestion,
@@ -324,13 +325,50 @@ function userInitials(name: string): string {
   return parts.join("") || "U";
 }
 
-function studyMemberAvatarUrl(member: ResearchCollectionMember): string | null {
-  const raw = (member.avatar_url || "").trim();
+function resolveAvatarUrl(rawValue: string | null | undefined): string | null {
+  const raw = (rawValue || "").trim();
   if (!raw) return null;
   if (/^(https?:)?\/\//i.test(raw) || raw.startsWith("data:") || raw.startsWith("blob:")) {
     return raw;
   }
   return `${import.meta.env.VITE_API_BASE || ""}${raw}`;
+}
+
+function studyMemberAvatarUrl(member: ResearchCollectionMember): string | null {
+  return resolveAvatarUrl(member.avatar_url);
+}
+
+function LogAvatar({
+  name,
+  avatarUrl,
+  className = "",
+}: {
+  name: string;
+  avatarUrl?: string | null;
+  className?: string;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const initial = userInitials(name);
+  const hue = [...(name || "?")].reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
+  const resolvedAvatarUrl = imageFailed ? null : resolveAvatarUrl(avatarUrl);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [avatarUrl]);
+
+  return (
+    <span
+      className={`study-avatar research-log-avatar${className ? ` ${className}` : ""}`}
+      title={name}
+      style={{ backgroundColor: `hsl(${hue}, 55%, 45%)` }}
+    >
+      {resolvedAvatarUrl ? (
+        <img src={resolvedAvatarUrl} alt={name} onError={() => setImageFailed(true)} />
+      ) : (
+        initial
+      )}
+    </span>
+  );
 }
 
 function StudyHeaderAvatar({ member }: { member: ResearchCollectionMember }) {
@@ -412,7 +450,11 @@ export function ResearchWorkspace({
 }) {
   const activeResearchSpaceId = researchSpaceId || "";
   const activeResearchSpace = availableResearchSpaces.find((item) => item.id === activeResearchSpaceId) ?? null;
-  const hasProjectContext = Boolean(currentProject?.id);
+  const hasProjectContext = Boolean(
+    currentProject?.id &&
+    currentProject.id === selectedProjectId &&
+    selectedProjectId !== "00000000-0000-0000-0000-000000000000"
+  );
   const [collections, setCollections] = useState<ResearchCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(navigationState?.selectedCollectionId ?? null);
   const [bulkResearchTargetCollectionId, setBulkResearchTargetCollectionId] = useState("");
@@ -577,13 +619,19 @@ export function ResearchWorkspace({
   const [inlineEditLane, setInlineEditLane] = useState("");
   const [inlineEditRefIds, setInlineEditRefIds] = useState<string[]>([]);
   const [inlineEditFileIds, setInlineEditFileIds] = useState<string[]>([]);
+  const [replyingNoteId, setReplyingNoteId] = useState<string | null>(null);
+  const [submittingReplyNoteId, setSubmittingReplyNoteId] = useState<string | null>(null);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [replyRefIds, setReplyRefIds] = useState<Record<string, string[]>>({});
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
-  const [mentionTarget, setMentionTarget] = useState<"composer" | "inline">("composer");
+  const [mentionTarget, setMentionTarget] = useState<"composer" | "inline" | "reply">("composer");
   const [mentionAnchor, setMentionAnchor] = useState<{ top: number; left: number } | null>(null);
   const [mentionCursorStart, setMentionCursorStart] = useState(0);
+  const [mentionReplyNoteId, setMentionReplyNoteId] = useState<string | null>(null);
   const inlineEditContentRef = useRef<HTMLTextAreaElement | null>(null);
+  const replyInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [selectedInboxLogIds, setSelectedInboxLogIds] = useState<Set<string>>(new Set());
   const [bibliographyTitle, setBibliographyTitle] = useState("");
   const [bibliographyCollectionTitle, setBibliographyCollectionTitle] = useState("");
@@ -618,8 +666,20 @@ export function ResearchWorkspace({
   const quickLogFileInputRef = useRef<HTMLInputElement | null>(null);
   const inlineEditFileInputRef = useRef<HTMLInputElement | null>(null);
   const [studySearchQuery, setStudySearchQuery] = useState("");
-  const syncingNavigationStateRef = useRef(false);
+  const pendingNavigationSyncRef = useRef<string | null>(null);
   const lastAppliedNavigationStateRef = useRef<string | null>(null);
+
+  function navigationSignatureForState(state: {
+    selectedCollectionId: string | null;
+    tab: Tab;
+    selectedBibliographyCollectionId: string | null;
+  }) {
+    return JSON.stringify({
+      selectedCollectionId: state.selectedCollectionId ?? null,
+      tab: state.selectedCollectionId ? state.tab : "overview",
+      selectedBibliographyCollectionId: state.selectedBibliographyCollectionId ?? null,
+    });
+  }
 
   const activeCollections = collections.filter((item) => item.status === "active");
   const archivedCollections = collections.filter((item) => item.status !== "active");
@@ -661,27 +721,35 @@ export function ResearchWorkspace({
 
   useEffect(() => {
     if (!navigationState) return;
-    const signature = JSON.stringify({
+    const signature = navigationSignatureForState({
       selectedCollectionId: navigationState.selectedCollectionId ?? null,
       tab: navigationState.tab,
       selectedBibliographyCollectionId: navigationState.selectedBibliographyCollectionId ?? null,
     });
     if (lastAppliedNavigationStateRef.current === signature) return;
-    lastAppliedNavigationStateRef.current = signature;
-    syncingNavigationStateRef.current = true;
+    pendingNavigationSyncRef.current = signature;
     setSelectedCollectionId(navigationState.selectedCollectionId ?? null);
-    setTab(navigationState.tab);
+    setTab((navigationState.selectedCollectionId ?? null) ? navigationState.tab : "overview");
     setSelectedBibliographyCollectionId(navigationState.selectedBibliographyCollectionId ?? null);
   }, [navigationState]);
 
   useEffect(() => {
-    if (syncingNavigationStateRef.current) {
-      syncingNavigationStateRef.current = false;
+    const currentSignature = navigationSignatureForState({
+      selectedCollectionId,
+      tab,
+      selectedBibliographyCollectionId,
+    });
+    if (pendingNavigationSyncRef.current) {
+      if (pendingNavigationSyncRef.current !== currentSignature) {
+        return;
+      }
+      lastAppliedNavigationStateRef.current = pendingNavigationSyncRef.current;
+      pendingNavigationSyncRef.current = null;
       return;
     }
     const nextState = {
       selectedCollectionId,
-      tab,
+      tab: selectedCollectionId ? tab : "overview",
       selectedBibliographyCollectionId,
     };
     if (
@@ -1524,9 +1592,10 @@ export function ResearchWorkspace({
     return { top, left };
   }
 
-  function openMention(textarea: HTMLTextAreaElement, target: "composer" | "inline") {
+  function openMention(textarea: HTMLTextAreaElement, target: "composer" | "inline" | "reply", replyNoteId?: string | null) {
     const coords = getTextareaCaretCoords(textarea);
     setMentionTarget(target);
+    setMentionReplyNoteId(target === "reply" ? (replyNoteId || null) : null);
     setMentionAnchor(coords);
     setMentionCursorStart(textarea.selectionStart);
     setMentionQuery("");
@@ -1539,6 +1608,7 @@ export function ResearchWorkspace({
     setMentionQuery("");
     setMentionActiveIndex(0);
     setMentionAnchor(null);
+    setMentionReplyNoteId(null);
   }
 
   function selectMention(ref: ResearchReference) {
@@ -1548,11 +1618,22 @@ export function ResearchWorkspace({
       const after = quickLogContent.substring(mentionCursorStart + mentionQuery.length);
       setQuickLogContent(before + label + " " + after);
       setQuickLogRefIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
-    } else {
+    } else if (mentionTarget === "inline") {
       const before = inlineEditContent.substring(0, mentionCursorStart - 1);
       const after = inlineEditContent.substring(mentionCursorStart + mentionQuery.length);
       setInlineEditContent(before + label + " " + after);
       setInlineEditRefIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
+    } else if (mentionReplyNoteId) {
+      const currentText = replyDrafts[mentionReplyNoteId] || "";
+      const before = currentText.substring(0, mentionCursorStart - 1);
+      const after = currentText.substring(mentionCursorStart + mentionQuery.length);
+      setReplyDrafts((current) => ({ ...current, [mentionReplyNoteId]: before + label + " " + after }));
+      setReplyRefIds((current) => ({
+        ...current,
+        [mentionReplyNoteId]: (current[mentionReplyNoteId] || []).includes(ref.id)
+          ? (current[mentionReplyNoteId] || [])
+          : [...(current[mentionReplyNoteId] || []), ref.id],
+      }));
     }
     closeMention();
   }
@@ -1576,11 +1657,19 @@ export function ResearchWorkspace({
     }
   }
 
-  function handleContentChange(value: string, cursorPos: number, textarea: HTMLTextAreaElement, target: "composer" | "inline") {
+  function handleContentChange(
+    value: string,
+    cursorPos: number,
+    textarea: HTMLTextAreaElement,
+    target: "composer" | "inline" | "reply",
+    options?: { replyNoteId?: string | null },
+  ) {
     if (target === "composer") {
       setQuickLogContent(value);
-    } else {
+    } else if (target === "inline") {
       setInlineEditContent(value);
+    } else if (options?.replyNoteId) {
+      setReplyDrafts((current) => ({ ...current, [options.replyNoteId!]: value }));
     }
 
     if (mentionOpen) {
@@ -1597,7 +1686,7 @@ export function ResearchWorkspace({
     if (cursorPos > 0 && value[cursorPos - 1] === "@") {
       const charBefore = cursorPos > 1 ? value[cursorPos - 2] : " ";
       if (charBefore === " " || charBefore === "\n" || cursorPos === 1) {
-        openMention(textarea, target);
+        openMention(textarea, target, options?.replyNoteId);
       }
     }
   }
@@ -2883,7 +2972,7 @@ function newStudyResult(): ResearchStudyResult {
         bibliography_reference_id: item.id,
         collection_id: selectedCollectionId,
         reading_status: "unread",
-      }, activeResearchSpaceId);
+      }, activeResearchSpaceId || undefined);
       await refreshResearchDataAfterReferenceChange(selectedCollectionId);
       await loadBibliography();
       setBibliographyPickerOpen(false);
@@ -3199,6 +3288,37 @@ function newStudyResult(): ResearchStudyResult {
       setError(err instanceof Error ? err.message : "Failed to save log");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleCreateNoteReply(noteId: string) {
+    if (!selectedProjectId) return;
+    const content = (replyDrafts[noteId] || "").trim();
+    if (!content) return;
+    setSubmittingReplyNoteId(noteId);
+    setError("");
+    try {
+      const reply = await api.createResearchNoteReply(
+        selectedProjectId,
+        noteId,
+        { content, linked_reference_ids: replyRefIds[noteId] || [] },
+        activeResearchSpaceId,
+      );
+      setNotes((current) =>
+        current.map((note) =>
+          note.id === noteId
+            ? { ...note, replies: [...(note.replies || []), reply].sort((a, b) => a.created_at.localeCompare(b.created_at)) }
+            : note
+        )
+      );
+      setReplyDrafts((current) => ({ ...current, [noteId]: "" }));
+      setReplyRefIds((current) => ({ ...current, [noteId]: [] }));
+      setReplyingNoteId(null);
+      setStatus("Reply added.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add reply");
+    } finally {
+      setSubmittingReplyNoteId(null);
     }
   }
 
@@ -3550,9 +3670,6 @@ function newStudyResult(): ResearchStudyResult {
       {!bibliographyOnly && collectionDetail && selectedCollection ? (
         <div className="study-header">
           <div className="study-header-top">
-            <button type="button" className="ghost research-space-back-btn" onClick={() => { setSelectedCollectionId(null); setTab("overview"); }}>
-              <FontAwesomeIcon icon={faChevronLeft} />
-            </button>
             <div className="study-header-title-wrap">
               {editingStudyTitle ? (
                 <input
@@ -3628,37 +3745,9 @@ function newStudyResult(): ResearchStudyResult {
               if (!space) return null;
               return <span key={`study-space-${space.id}`} className="chip small">{space.title}</span>;
             })}
-            {editingStudyFocus ? (
-              <input
-                className="study-header-focus-input"
-                value={inlineStudyFocus}
-                autoFocus
-                onChange={(event) => setInlineStudyFocus(event.target.value)}
-                onBlur={() => {
-                  setInlineStudyFocus(collectionDetail.description || collectionDetail.hypothesis || "");
-                  setEditingStudyFocus(false);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleInlineStudyHeaderSave("focus");
-                  } else if (event.key === "Escape") {
-                    event.preventDefault();
-                    setInlineStudyFocus(collectionDetail.description || collectionDetail.hypothesis || "");
-                    setEditingStudyFocus(false);
-                  }
-                }}
-              />
-            ) : (
-              <button
-                type="button"
-                className={`study-header-focus-button${inlineStudyFocus.trim() ? "" : " is-empty"}`}
-                onClick={() => setEditingStudyFocus(true)}
-                title="Edit focus"
-              >
-                {inlineStudyFocus.trim() || "No focus"}
-              </button>
-            )}
+            {collectionDetail.hypothesis ? (
+              <span className="study-header-hypothesis" title={collectionDetail.hypothesis}>{collectionDetail.hypothesis}</span>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -4574,9 +4663,35 @@ function newStudyResult(): ResearchStudyResult {
               />
             </div>
           </div>
-          {bibliography.length === 0 ? (
-            <p className="empty-message">No papers.</p>
-          ) : (
+          {(() => {
+            const searchNorm = bibliographySearch.trim().toLowerCase();
+            const visFilter = bibliographyVisibilityFilter;
+            const filtered = bibliography.filter((item) => {
+              if (visFilter && item.visibility !== visFilter) return false;
+              if (!searchNorm) return true;
+              return (
+                item.title.toLowerCase().includes(searchNorm) ||
+                item.authors.some((a) => a.toLowerCase().includes(searchNorm)) ||
+                (item.venue || "").toLowerCase().includes(searchNorm)
+              );
+            });
+            if (filtered.length === 0) return (
+              <div className="empty-message">
+                <p>{bibliography.length === 0 ? "No papers in your library yet." : "No papers match your search."}</p>
+                <button
+                  type="button"
+                  className="meetings-new-btn"
+                  style={{ marginTop: 8 }}
+                  onClick={() => {
+                    setBibliographyPickerOpen(false);
+                    openCreateBibliographyModal();
+                  }}
+                >
+                  <FontAwesomeIcon icon={faPlus} /> Add Paper
+                </button>
+              </div>
+            );
+            return (
             <div className="simple-table-wrap">
               <table className="simple-table compact-table">
                 <thead>
@@ -4588,7 +4703,7 @@ function newStudyResult(): ResearchStudyResult {
                   </tr>
                 </thead>
                 <tbody>
-                  {bibliography.map((item) => (
+                  {filtered.map((item) => (
                     <tr key={item.id}>
                       <td>
                         <strong>{item.title}</strong>
@@ -4630,7 +4745,8 @@ function newStudyResult(): ResearchStudyResult {
                 </tbody>
               </table>
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     );
@@ -4698,6 +4814,314 @@ function newStudyResult(): ResearchStudyResult {
     const unassignedLogs = notes.filter((note) => note.collection_id === selectedCollectionId && !noteIterationState(note.id).assigned);
     const allVisibleSelected = orderedNotes.length > 0 && orderedNotes.every((note) => selectedInboxLogIds.has(note.id));
     const fileLookup = new Map(studyFiles.map((item) => [item.id, item]));
+    const renderReply = (reply: ResearchNoteReply) => (
+      <div key={reply.id} className="research-log-reply">
+        <LogAvatar
+          name={reply.author_name || "Unknown user"}
+          avatarUrl={reply.author_avatar_url}
+          className="research-log-reply-avatar"
+        />
+        <div className="research-log-reply-body">
+          <div className="research-log-reply-head">
+            <strong>{reply.author_name || "Unknown user"}</strong>
+            <span>{formatLogTimestamp(reply.created_at)}</span>
+          </div>
+          <div className="research-log-text chat-markdown">{renderMarkdown(reply.content)}</div>
+          {reply.linked_reference_ids.length > 0 ? (
+            <div className="research-log-reply-meta">
+              <span>{reply.linked_reference_ids.length} {reply.linked_reference_ids.length === 1 ? "citation" : "citations"}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+    const renderNoteCard = (note: ResearchNote) => {
+      const workflow = noteWorkflow(note);
+      const iterationState = noteIterationState(note.id);
+      const isSelected = selectedInboxLogIds.has(note.id);
+      const isEditing = inlineEditNoteId === note.id;
+      const isReplying = replyingNoteId === note.id;
+      const replyDraft = replyDrafts[note.id] || "";
+      const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
+      const linkedFilesLabel = note.linked_file_ids.length === 1 ? "1 file" : `${note.linked_file_ids.length} files`;
+      return (
+        <article
+          key={note.id}
+          className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " log-state-unprocessed" : " log-state-promoted"}${iterationState.assigned ? " log-state-iterated" : ""}`}
+        >
+          <div className="research-log-head">
+            <label className="research-log-select">
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() =>
+                  setSelectedInboxLogIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(note.id)) next.delete(note.id);
+                    else next.add(note.id);
+                    return next;
+                  })
+                }
+              />
+            </label>
+            <LogAvatar
+              name={note.author_name || "Unknown author"}
+              avatarUrl={note.author_avatar_url}
+            />
+            <div className="research-log-author-block">
+              <div className="research-log-author-line">
+                <strong>{note.author_name || "Unknown author"}</strong>
+                <span className="research-log-timestamp">{formatLogTimestamp(note.created_at)} · {formatRelativeTime(note.created_at)}</span>
+              </div>
+              {!isEditing ? (
+                <div className="research-chip-group">
+                  {note.lane ? <span className="chip small">{NOTE_LANE_LABELS[note.lane] || note.lane}</span> : null}
+                  {workflow.state === "Unprocessed" ? (
+                    <span className="chip small log-chip-unprocessed">Needs processing</span>
+                  ) : (
+                    <>
+                      {workflow.promotedToQuestion ? <span className="chip small log-chip-promoted">→ Question</span> : null}
+                      {workflow.promotedToClaim ? <span className="chip small log-chip-promoted">→ Claim</span> : null}
+                      {workflow.promotedToSection ? <span className="chip small log-chip-promoted">→ Section</span> : null}
+                    </>
+                  )}
+                  {iterationState.assigned ? <span className="chip small log-chip-iterated">{iterationState.iterationTitle || "Iteration"}</span> : null}
+                </div>
+              ) : (
+                renderLanePills(inlineEditLane, setInlineEditLane, { className: "research-inline-lane-pills" })
+              )}
+            </div>
+            <div className="research-log-controls">
+              {isEditing ? (
+                <>
+                  <button
+                    type="button"
+                    className="meetings-new-btn"
+                    disabled={!inlineEditTitle.trim() || !inlineEditContent.trim() || saving}
+                    onClick={() => void handleInlineEditSave(note.id)}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                  <button type="button" className="ghost icon-text-button small" onClick={cancelInlineEdit}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
+                    <FontAwesomeIcon icon={faPen} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`ghost docs-action-btn${confirmingDeleteId === note.id ? " danger confirm-pulse" : ""}`}
+                    title={confirmingDeleteId === note.id ? "Click again to confirm" : "Delete"}
+                    onClick={() => requestConfirmDelete(note.id, () => handleDeleteNote(note.id))}
+                  >
+                    {confirmingDeleteId === note.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          {isEditing ? (
+            <div className="research-log-body">
+              <input
+                className="research-inline-title"
+                value={inlineEditTitle}
+                onChange={(event) => setInlineEditTitle(event.target.value)}
+                placeholder="Title"
+                autoFocus
+              />
+              <textarea
+                ref={inlineEditContentRef}
+                className="research-inline-content"
+                value={inlineEditContent}
+                onChange={(event) => {
+                  const textarea = event.target;
+                  handleContentChange(textarea.value, textarea.selectionStart, textarea, "inline");
+                }}
+                onKeyDown={(event) => {
+                  handleMentionKeyDown(event);
+                  if (mentionOpen) return;
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    event.preventDefault();
+                    void handleInlineEditSave(note.id);
+                  }
+                  if (event.key === "Escape") {
+                    cancelInlineEdit();
+                  }
+                }}
+                rows={4}
+                placeholder="Content (markdown, @ to cite)"
+              />
+              <input
+                ref={inlineEditFileInputRef}
+                type="file"
+                className="bib-pdf-input"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void handleUploadStudyFile(file, { linkToInlineEdit: true });
+                }}
+              />
+              <div className="research-log-composer-actions">
+                {renderLanePills(inlineEditLane, setInlineEditLane, { className: "research-inline-lane-pills" })}
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  disabled={uploadingStudyFile}
+                  onClick={() => inlineEditFileInputRef.current?.click()}
+                >
+                  <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Attach"}
+                </button>
+              </div>
+              {inlineEditFileIds.length > 0 ? (
+                <div className="research-chip-group">
+                  {inlineEditFileIds.map((fileId) => {
+                    const file = fileLookup.get(fileId);
+                    if (!file) return null;
+                    return (
+                      <button
+                        key={`inline-file-${note.id}-${fileId}`}
+                        type="button"
+                        className="chip small"
+                        onClick={() => void handleOpenStudyFile(file)}
+                      >
+                        {file.original_filename}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="research-log-body">
+              <strong>{note.title}</strong>
+              <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
+              {note.linked_file_ids.length > 0 ? (
+                <div className="research-chip-group">
+                  {note.linked_file_ids.map((fileId) => {
+                    const file = fileLookup.get(fileId);
+                    if (!file) return null;
+                    return (
+                      <button
+                        key={`${note.id}-file-${fileId}`}
+                        type="button"
+                        className="chip small"
+                        onClick={() => void handleOpenStudyFile(file)}
+                      >
+                        {file.original_filename}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {note.replies.length > 0 ? (
+                <div className="research-log-replies">
+                  {note.replies.map(renderReply)}
+                </div>
+              ) : null}
+              {isReplying ? (
+                <div className="research-log-reply-composer">
+                  <textarea
+                    className="research-inline-content research-log-reply-input"
+                    value={replyDraft}
+                    ref={replyingNoteId === note.id ? replyInputRef : null}
+                    onChange={(event) => {
+                      const textarea = event.target;
+                      handleContentChange(textarea.value, textarea.selectionStart, textarea, "reply", { replyNoteId: note.id });
+                    }}
+                    rows={2}
+                    placeholder="Reply (@ to cite)"
+                    onKeyDown={(event) => {
+                      handleMentionKeyDown(event);
+                      if (mentionOpen) return;
+                      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                        event.preventDefault();
+                        void handleCreateNoteReply(note.id);
+                      }
+                      if (event.key === "Escape") {
+                        setReplyingNoteId(null);
+                      }
+                    }}
+                  />
+                  {(replyRefIds[note.id] || []).length > 0 ? (
+                    <div className="research-chip-group">
+                      {(replyRefIds[note.id] || []).map((referenceId) => {
+                        const ref = references.find((item) => item.id === referenceId);
+                        if (!ref) return null;
+                        return (
+                          <span key={`${note.id}-reply-ref-${referenceId}`} className="chip small">
+                            {formatRefLabel(ref)}
+                            <button
+                              type="button"
+                              className="ghost icon-only"
+                              onClick={() =>
+                                setReplyRefIds((current) => ({
+                                  ...current,
+                                  [note.id]: (current[note.id] || []).filter((id) => id !== referenceId),
+                                }))
+                              }
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="research-log-reply-actions">
+                    <button
+                      type="button"
+                      className="meetings-new-btn"
+                      disabled={!replyDraft.trim() || submittingReplyNoteId === note.id}
+                      onClick={() => void handleCreateNoteReply(note.id)}
+                    >
+                      {submittingReplyNoteId === note.id ? "Replying..." : "Reply"}
+                    </button>
+                    <button type="button" className="ghost icon-text-button small" onClick={() => setReplyingNoteId(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+          <div className="research-log-footer">
+            <div className="research-log-meta">
+              <span>{linkedReferencesLabel}</span>
+              {note.linked_file_ids.length > 0 ? <span>{linkedFilesLabel}</span> : null}
+              {iterationState.assigned && iterationState.iterationTitle ? <span>{iterationState.iterationTitle}</span> : null}
+              <span>{note.replies.length} {note.replies.length === 1 ? "reply" : "replies"}</span>
+            </div>
+            <div className="research-log-actions">
+              {!isEditing ? (
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  onClick={() => {
+                    setReplyingNoteId((current) => current === note.id ? null : note.id);
+                    setReplyDrafts((current) => ({ ...current, [note.id]: current[note.id] || "" }));
+                  }}
+                >
+                  <FontAwesomeIcon icon={faComment} /> Reply
+                </button>
+              ) : null}
+              <div className="note-promote-actions">
+                <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToClaim(note)}>
+                  Claim
+                </button>
+                <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToQuestion(note)}>
+                  Question
+                </button>
+                <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToSection(note)}>
+                  Section
+                </button>
+              </div>
+            </div>
+          </div>
+        </article>
+      );
+    };
 
     return (
       <>
@@ -4825,287 +5249,13 @@ function newStudyResult(): ResearchStudyResult {
               <div className="log-group-label log-group-unprocessed">Needs Processing <span className="delivery-tab-count">{unprocessedNotes.length}</span></div>
             ) : null}
             <div className="research-log-list">
-              {(unprocessedNotes.length > 0 && processedNotes.length > 0 ? unprocessedNotes : orderedNotes).map((note) => {
-                const workflow = noteWorkflow(note);
-                const iterationState = noteIterationState(note.id);
-                const isSelected = selectedInboxLogIds.has(note.id);
-                const isEditing = inlineEditNoteId === note.id;
-                const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
-                const linkedFilesLabel = note.linked_file_ids.length === 1 ? "1 file" : `${note.linked_file_ids.length} files`;
-                return (
-                  <article
-                    key={note.id}
-                    className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " log-state-unprocessed" : " log-state-promoted"}${iterationState.assigned ? " log-state-iterated" : ""}`}
-                  >
-                    <div className="research-log-head">
-                      <label className="research-log-select">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() =>
-                            setSelectedInboxLogIds((current) => {
-                              const next = new Set(current);
-                              if (next.has(note.id)) next.delete(note.id);
-                              else next.add(note.id);
-                              return next;
-                            })
-                          }
-                        />
-                      </label>
-                      {isEditing ? (
-                        <>
-                          {renderLanePills(inlineEditLane, setInlineEditLane, { className: "research-inline-lane-pills" })}
-                        </>
-                      ) : (
-                        <div className="research-chip-group">
-                          {note.lane ? <span className="chip small">{NOTE_LANE_LABELS[note.lane] || note.lane}</span> : null}
-                          {workflow.state === "Unprocessed" ? (
-                            <span className="chip small log-chip-unprocessed">Needs processing</span>
-                          ) : (
-                            <>
-                              {workflow.promotedToQuestion ? <span className="chip small log-chip-promoted">→ Question</span> : null}
-                              {workflow.promotedToClaim ? <span className="chip small log-chip-promoted">→ Claim</span> : null}
-                              {workflow.promotedToSection ? <span className="chip small log-chip-promoted">→ Section</span> : null}
-                            </>
-                          )}
-                          {iterationState.assigned ? <span className="chip small log-chip-iterated">{iterationState.iterationTitle || "Iteration"}</span> : null}
-                        </div>
-                      )}
-                      <span className="research-log-timestamp">{formatLogTimestamp(note.created_at)} · {formatRelativeTime(note.created_at)}</span>
-                      <div className="research-log-controls">
-                        {isEditing ? (
-                          <>
-                            <button
-                              type="button"
-                              className="meetings-new-btn"
-                              disabled={!inlineEditTitle.trim() || !inlineEditContent.trim() || saving}
-                              onClick={() => void handleInlineEditSave(note.id)}
-                            >
-                              {saving ? "Saving..." : "Save"}
-                            </button>
-                            <button type="button" className="ghost icon-text-button small" onClick={cancelInlineEdit}>
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
-                              <FontAwesomeIcon icon={faPen} />
-                            </button>
-                            <button
-                              type="button"
-                              className={`ghost docs-action-btn${confirmingDeleteId === note.id ? " danger confirm-pulse" : ""}`}
-                              title={confirmingDeleteId === note.id ? "Click again to confirm" : "Delete"}
-                              onClick={() => requestConfirmDelete(note.id, () => handleDeleteNote(note.id))}
-                            >
-                              {confirmingDeleteId === note.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    {isEditing ? (
-                      <div className="research-log-body">
-                        <input
-                          className="research-inline-title"
-                          value={inlineEditTitle}
-                          onChange={(event) => setInlineEditTitle(event.target.value)}
-                          placeholder="Title"
-                          autoFocus
-                        />
-                        <textarea
-                          ref={inlineEditContentRef}
-                          className="research-inline-content"
-                          value={inlineEditContent}
-                          onChange={(event) => {
-                            const textarea = event.target;
-                            handleContentChange(textarea.value, textarea.selectionStart, textarea, "inline");
-                          }}
-                          onKeyDown={(event) => {
-                            handleMentionKeyDown(event);
-                            if (mentionOpen) return;
-                            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                              event.preventDefault();
-                              void handleInlineEditSave(note.id);
-                            }
-                            if (event.key === "Escape") {
-                              cancelInlineEdit();
-                            }
-                          }}
-                          rows={4}
-                          placeholder="Content (markdown, @ to cite)"
-                        />
-                        <input
-                          ref={inlineEditFileInputRef}
-                          type="file"
-                          className="bib-pdf-input"
-                          onChange={(event) => {
-                            const file = event.target.files?.[0];
-                            if (file) void handleUploadStudyFile(file, { linkToInlineEdit: true });
-                          }}
-                        />
-                        <div className="research-log-composer-actions">
-                          {renderLanePills(inlineEditLane, setInlineEditLane, { className: "research-inline-lane-pills" })}
-                          <button
-                            type="button"
-                            className="ghost icon-text-button small"
-                            disabled={uploadingStudyFile}
-                            onClick={() => inlineEditFileInputRef.current?.click()}
-                          >
-                            <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Attach"}
-                          </button>
-                        </div>
-                        {inlineEditFileIds.length > 0 ? (
-                          <div className="research-chip-group">
-                            {inlineEditFileIds.map((fileId) => {
-                              const file = fileLookup.get(fileId);
-                              if (!file) return null;
-                              return (
-                                <button
-                                  key={`inline-file-${note.id}-${fileId}`}
-                                  type="button"
-                                  className="chip small"
-                                  onClick={() => void handleOpenStudyFile(file)}
-                                >
-                                  {file.original_filename}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <div className="research-log-body">
-                        <strong>{note.title}</strong>
-                        <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
-                        {note.linked_file_ids.length > 0 ? (
-                          <div className="research-chip-group">
-                            {note.linked_file_ids.map((fileId) => {
-                              const file = fileLookup.get(fileId);
-                              if (!file) return null;
-                              return (
-                                <button
-                                  key={`${note.id}-file-${fileId}`}
-                                  type="button"
-                                  className="chip small"
-                                  onClick={() => void handleOpenStudyFile(file)}
-                                >
-                                  {file.original_filename}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
-                    <div className="research-log-footer">
-                      <div className="research-log-meta">
-                        <span>{note.author_name || "Unknown author"}</span>
-                        <span>{linkedReferencesLabel}</span>
-                        {note.linked_file_ids.length > 0 ? <span>{linkedFilesLabel}</span> : null}
-                        {iterationState.assigned && iterationState.iterationTitle ? <span>{iterationState.iterationTitle}</span> : null}
-                      </div>
-                      <div className="note-promote-actions">
-                        <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToClaim(note)}>
-                          Claim
-                        </button>
-                        <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToQuestion(note)}>
-                          Question
-                        </button>
-                        <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToSection(note)}>
-                          Section
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
+              {(unprocessedNotes.length > 0 && processedNotes.length > 0 ? unprocessedNotes : orderedNotes).map(renderNoteCard)}
             </div>
             {unprocessedNotes.length > 0 && processedNotes.length > 0 ? (
               <>
                 <div className="log-group-label log-group-processed">Processed <span className="delivery-tab-count">{processedNotes.length}</span></div>
                 <div className="research-log-list">
-                  {processedNotes.map((note) => {
-                    const workflow = noteWorkflow(note);
-                    const iterationState = noteIterationState(note.id);
-                    const isSelected = selectedInboxLogIds.has(note.id);
-                    const isEditing = inlineEditNoteId === note.id;
-                    const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
-                    const linkedFilesLabel = note.linked_file_ids.length === 1 ? "1 file" : `${note.linked_file_ids.length} files`;
-                    return (
-                      <article
-                        key={note.id}
-                        className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""} log-state-promoted${iterationState.assigned ? " log-state-iterated" : ""}`}
-                      >
-                        <div className="research-log-head">
-                          <label className="research-log-select">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() =>
-                                setSelectedInboxLogIds((current) => {
-                                  const next = new Set(current);
-                                  if (next.has(note.id)) next.delete(note.id);
-                                  else next.add(note.id);
-                                  return next;
-                                })
-                              }
-                            />
-                          </label>
-                          <div className="research-chip-group">
-                            {note.lane ? <span className="chip small">{NOTE_LANE_LABELS[note.lane] || note.lane}</span> : null}
-                            {workflow.promotedToQuestion ? <span className="chip small log-chip-promoted">→ Question</span> : null}
-                            {workflow.promotedToClaim ? <span className="chip small log-chip-promoted">→ Claim</span> : null}
-                            {workflow.promotedToSection ? <span className="chip small log-chip-promoted">→ Section</span> : null}
-                            {iterationState.assigned ? <span className="chip small log-chip-iterated">{iterationState.iterationTitle || "Iteration"}</span> : null}
-                          </div>
-                          <span className="research-log-timestamp">{formatRelativeTime(note.created_at)}</span>
-                          <div className="research-log-controls">
-                            <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
-                              <FontAwesomeIcon icon={faPen} />
-                            </button>
-                            <button
-                              type="button"
-                              className={`ghost docs-action-btn${confirmingDeleteId === note.id ? " danger confirm-pulse" : ""}`}
-                              title={confirmingDeleteId === note.id ? "Click again to confirm" : "Delete"}
-                              onClick={() => requestConfirmDelete(note.id, () => handleDeleteNote(note.id))}
-                            >
-                              {confirmingDeleteId === note.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
-                            </button>
-                          </div>
-                        </div>
-                        <div className="research-log-body">
-                          <strong>{note.title}</strong>
-                          <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
-                          {note.linked_file_ids.length > 0 ? (
-                            <div className="research-chip-group">
-                              {note.linked_file_ids.map((fileId) => {
-                                const file = fileLookup.get(fileId);
-                                if (!file) return null;
-                                return (
-                                  <button
-                                    key={`${note.id}-processed-file-${fileId}`}
-                                    type="button"
-                                    className="chip small"
-                                    onClick={() => void handleOpenStudyFile(file)}
-                                  >
-                                    {file.original_filename}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="research-log-footer">
-                          <div className="research-log-meta">
-                            <span>{note.author_name || "Unknown author"}</span>
-                            <span>{linkedReferencesLabel}</span>
-                            {note.linked_file_ids.length > 0 ? <span>{linkedFilesLabel}</span> : null}
-                          </div>
-                        </div>
-                      </article>
-                    );
-                  })}
+                  {processedNotes.map(renderNoteCard)}
                 </div>
               </>
             ) : null}
@@ -6246,9 +6396,37 @@ function newStudyResult(): ResearchStudyResult {
 
     return (
       <div className="research-overview">
-        {collectionDetail.description ? (
-          <p className="study-overview-description">{collectionDetail.description}</p>
-        ) : null}
+        {editingStudyFocus ? (
+          <input
+            className="study-overview-description-input"
+            value={inlineStudyFocus}
+            autoFocus
+            placeholder="Add a focus / description…"
+            onChange={(event) => setInlineStudyFocus(event.target.value)}
+            onBlur={() => {
+              setInlineStudyFocus(collectionDetail.description || collectionDetail.hypothesis || "");
+              setEditingStudyFocus(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void handleInlineStudyHeaderSave("focus");
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setInlineStudyFocus(collectionDetail.description || collectionDetail.hypothesis || "");
+                setEditingStudyFocus(false);
+              }
+            }}
+          />
+        ) : (
+          <p
+            className={`study-overview-description${inlineStudyFocus.trim() ? "" : " is-empty"}`}
+            onClick={() => setEditingStudyFocus(true)}
+            title="Click to edit"
+          >
+            {inlineStudyFocus.trim() || "Click to add a focus / description…"}
+          </p>
+        )}
 
         <div className="overview-stat-grid">
           <button type="button" className={`overview-stat-box${!paperSubmissionDeadline ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>

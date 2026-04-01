@@ -619,6 +619,23 @@ class NoteUpdate(BaseModel):
     linked_file_ids: list[str] | None = None
 
 
+class NoteReplyCreate(BaseModel):
+    content: str
+    linked_reference_ids: list[str] = Field(default_factory=list)
+
+
+class NoteReplyRead(BaseModel):
+    id: str
+    note_id: str
+    user_account_id: str | None = None
+    author_name: str | None = None
+    author_avatar_url: str | None = None
+    content: str
+    linked_reference_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
 class StudyFileRead(BaseModel):
     id: str
     research_space_id: str | None = None
@@ -644,7 +661,9 @@ class NoteRead(BaseModel):
     project_id: str | None = None
     collection_id: str | None = None
     author_member_id: str | None = None
+    user_account_id: str | None = None
     author_name: str | None = None
+    author_avatar_url: str | None = None
     title: str
     content: str
     lane: str | None = None
@@ -652,6 +671,7 @@ class NoteRead(BaseModel):
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)
     linked_file_ids: list[str] = Field(default_factory=list)
+    replies: list[NoteReplyRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

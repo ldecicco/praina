@@ -38,6 +38,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-prod}
       API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
       ROOT_PATH: ${ROOT_PATH:-}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
       POSTGRES_HOST: postgres

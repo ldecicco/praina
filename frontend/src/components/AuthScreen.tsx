@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import type { AuthTokens, MeResponse } from "../types";
@@ -17,6 +17,11 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    api.publicConfig().then((cfg) => setRegistrationEnabled(cfg.registration_enabled)).catch(() => setRegistrationEnabled(true));
+  }, []);
 
   async function handleSubmit() {
     if (!email || !password || (mode === "register" && !displayName)) return;
@@ -47,17 +52,19 @@ export function AuthScreen({ onAuthenticated }: Props) {
     <div className="auth-screen">
       <section className="auth-card">
         <img src={prainaFullWhite} alt="Praina" style={{ height: 48, display: 'block', margin: '0 auto 16px' }} />
-        <div className="auth-tabs">
-          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
-            Sign in
-          </button>
-          <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>
-            Register
-          </button>
-        </div>
+        {registrationEnabled ? (
+          <div className="auth-tabs">
+            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
+              Sign in
+            </button>
+            <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>
+              Register
+            </button>
+          </div>
+        ) : null}
 
         <div className="auth-form">
-          {mode === "register" ? (
+          {mode === "register" && registrationEnabled ? (
             <label>
               Name
               <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Jane Doe" />

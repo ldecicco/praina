@@ -219,6 +219,10 @@ export const api = {
     return authToken;
   },
 
+  publicConfig(): Promise<{ registration_enabled: boolean }> {
+    return request("/auth/public-config");
+  },
+
   register(payload: { email: string; password: string; display_name: string }): Promise<AuthUser> {
     return request("/auth/register", { method: "POST", body: JSON.stringify(payload) });
   },

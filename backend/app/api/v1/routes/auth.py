@@ -46,8 +46,16 @@ STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", "storage"))
 router = APIRouter()
 
 
+@router.get("/public-config")
+def public_config() -> dict:
+    """Public (unauthenticated) app configuration."""
+    return {"registration_enabled": settings.registration_enabled}
+
+
 @router.post("/register", response_model=UserRead)
 def register(payload: UserRegisterRequest, db: Session = Depends(get_db)) -> UserRead:
+    if not settings.registration_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Public registration is disabled.")
     service = AuthService(db)
     try:
         user = service.register(payload.email, payload.password, payload.display_name)

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     environment: str = "dev"
     api_v1_prefix: str = "/api/v1"
     root_path: str = ""
+    registration_enabled: bool = True
     app_host: str | None = None
     app_port: int | None = None
     postgres_host: str | None = None

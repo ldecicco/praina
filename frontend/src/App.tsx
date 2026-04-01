@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { CommandPalette } from "./components/CommandPalette";
 import type { CommandItem } from "./components/CommandPalette";
+import { GuidedTour } from "./components/GuidedTour";
+import type { GuidedTourStep } from "./components/GuidedTour";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBars,
@@ -19,6 +21,7 @@ import {
   faPen,
   faRightFromBracket,
   faSearch,
+  faLightbulb,
   faSitemap,
   faSquareCheck,
   faUserShield,
@@ -27,6 +30,7 @@ import {
   faGraduationCap,
   faUsers,
   faWrench,
+  faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { AdminPanel } from "./components/AdminPanel";
@@ -71,6 +75,8 @@ const NAV_GROUPS_KEY = "nav_groups_collapsed";
 const ACCESS_TOKEN_KEY = "auth_access_token";
 const REFRESH_TOKEN_KEY = "auth_refresh_token";
 const RESEARCH_ROUTE_FALLBACK_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
+const RESEARCH_TOUR_KEY = "research_tour_version";
+const RESEARCH_TOUR_VERSION = "2026-04-research-v1";
 
 const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   deliverable: "delivery",
@@ -144,7 +150,22 @@ export default function App() {
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
   const [shortcutHudVisible, setShortcutHudVisible] = useState(false);
+  const [researchTourOpen, setResearchTourOpen] = useState(false);
+  const [researchTourStepIndex, setResearchTourStepIndex] = useState(0);
+  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
+  const [suggestionContent, setSuggestionContent] = useState("");
+  const [savingSuggestion, setSavingSuggestion] = useState(false);
   const workspaceBrowserSearchRef = useRef<HTMLInputElement>(null);
+
+  const researchTourSteps: GuidedTourStep[] = useMemo(() => ([
+    { id: "spaces", target: "research-space-grid", title: "Spaces", text: "Spaces group studies around a broad topic." },
+    { id: "studies", target: "research-study-grid", title: "Studies", text: "Studies are the focused units where research work happens." },
+    { id: "inbox", target: "study-inbox-tab", title: "Inbox", text: "Use Inbox as the research log." },
+    { id: "references", target: "study-references-tab", title: "References", text: "Keep the literature tied to the study here." },
+    { id: "paper", target: "study-paper-tab", title: "Paper", text: "Turn logs and references into questions, claims, and structure here." },
+    { id: "iterations", target: "study-iterations-tab", title: "Iterations", text: "Review periods of work and turn them into results here." },
+  ]), []);
+  const currentResearchTourStep = researchTourSteps[researchTourStepIndex] ?? null;
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -959,6 +980,74 @@ export default function App() {
     }
   }, [currentUser?.id, workspaceFamily, canAccessResearch, canAccessTeaching]);
 
+  useEffect(() => {
+    if (!canAccessResearch || researchTourOpen) return;
+    if (workspaceFamily !== "research") return;
+    if (researchSpaces.length === 0) return;
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(RESEARCH_TOUR_KEY);
+    if (stored === RESEARCH_TOUR_VERSION) return;
+    setResearchTourStepIndex(0);
+    setResearchTourOpen(true);
+  }, [canAccessResearch, workspaceFamily, researchSpaces.length, researchTourOpen]);
+
+  useEffect(() => {
+    if (!researchTourOpen || !currentResearchTourStep) return;
+    if (workspaceFamily !== "research") {
+      switchWorkspaceFamily("research");
+      return;
+    }
+    if (currentResearchTourStep.target === "research-space-grid") {
+      if (view !== "research-home") setView("research-home");
+      return;
+    }
+    if (!selectedResearchSpaceId && researchSpaces[0]) {
+      handleSelectResearchSpace(researchSpaces[0].id);
+    }
+    if (view !== "research") setView("research");
+  }, [
+    researchTourOpen,
+    currentResearchTourStep,
+    workspaceFamily,
+    view,
+    selectedResearchSpaceId,
+    researchSpaces,
+  ]);
+
+  function startResearchTour() {
+    if (!canAccessResearch) return;
+    setResearchTourStepIndex(0);
+    setResearchTourOpen(true);
+    if (workspaceFamily !== "research") {
+      switchWorkspaceFamily("research");
+    } else {
+      setView("research-home");
+    }
+  }
+
+  function completeResearchTour() {
+    setResearchTourOpen(false);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(RESEARCH_TOUR_KEY, RESEARCH_TOUR_VERSION);
+    }
+  }
+
+  async function handleCreateSuggestion() {
+    if (!suggestionContent.trim()) return;
+    try {
+      setSavingSuggestion(true);
+      setError("");
+      await api.createMySuggestion({ content: suggestionContent.trim() });
+      setSuggestionModalOpen(false);
+      setSuggestionContent("");
+      toast.success("Suggestion sent.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send suggestion.");
+    } finally {
+      setSavingSuggestion(false);
+    }
+  }
+
   if (!currentUser || !authTokens) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
@@ -1062,7 +1151,7 @@ export default function App() {
             <strong>{isResearchBrowser ? "No spaces." : "No projects."}</strong>
           </div>
         ) : (
-          <div className="workspace-browser-grid">
+          <div className="workspace-browser-grid" data-tour-id={isResearchBrowser ? "research-space-grid" : undefined}>
             {isResearchBrowser
               ? browserResearchSpaces.map((space) => {
                   const linkedProject = projects.find((project) => project.id === space.linked_project_id) ?? null;
@@ -1264,7 +1353,17 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="sidebar-footer" />
+        <div className="sidebar-footer">
+          <button
+            type="button"
+            className={`sidebar-suggestion-btn ${sidebarCollapsed ? "collapsed" : ""}`}
+            onClick={() => setSuggestionModalOpen(true)}
+            title={sidebarCollapsed ? "Suggestion" : undefined}
+          >
+            <FontAwesomeIcon icon={faLightbulb} />
+            {!sidebarCollapsed ? <span>Suggestion</span> : null}
+          </button>
+        </div>
       </aside>
 
       <div className="app-main">
@@ -1284,6 +1383,15 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
+            {workspaceFamily === "research" ? (
+              <button
+                type="button"
+                className="ghost topbar-tour-btn"
+                onClick={startResearchTour}
+              >
+                Tour
+              </button>
+            ) : null}
             <div className="notif-dropdown-wrapper" ref={notifDropdownRef}>
               <button
                 type="button"
@@ -1466,6 +1574,8 @@ export default function App() {
                 currentProject={researchLinkedProject}
                 researchSpaceId={activeResearchSpace.id}
                 isAdmin={isSuperAdmin}
+                researchTourActive={researchTourOpen}
+                researchTourStepId={currentResearchTourStep?.target || null}
               />
             ) : (
               <div className="empty-state-card research-space-empty-state">
@@ -1496,6 +1606,8 @@ export default function App() {
                 setPendingBibliographyReferenceId(null);
                 clearPermalinkSearch();
               }}
+              researchTourActive={researchTourOpen}
+              researchTourStepId={currentResearchTourStep?.target || null}
             />
           ) : null}
           {view === "resources" ? (
@@ -1622,6 +1734,38 @@ export default function App() {
                 <span className="shortcut-hud-label">{item.label}</span>
               </div>
             ))}
+          </div>
+        </div>
+      ) : null}
+      <GuidedTour
+        open={researchTourOpen}
+        steps={researchTourSteps}
+        stepIndex={researchTourStepIndex}
+        onBack={() => setResearchTourStepIndex((current) => Math.max(0, current - 1))}
+        onNext={() => setResearchTourStepIndex((current) => Math.min(researchTourSteps.length - 1, current + 1))}
+        onSkip={completeResearchTour}
+        onFinish={completeResearchTour}
+      />
+      {suggestionModalOpen ? (
+        <div className="modal-overlay" onClick={() => !savingSuggestion && setSuggestionModalOpen(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>Suggestion</h3>
+              <div className="modal-head-actions">
+                <button type="button" className="meetings-new-btn" disabled={!suggestionContent.trim() || savingSuggestion} onClick={() => void handleCreateSuggestion()}>
+                  {savingSuggestion ? "Sending..." : "Send"}
+                </button>
+                <button type="button" className="ghost docs-action-btn" title="Close" onClick={() => setSuggestionModalOpen(false)}>
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            </div>
+            <div className="form-grid">
+              <label className="full-span">
+                Suggestion
+                <textarea rows={6} value={suggestionContent} onChange={(event) => setSuggestionContent(event.target.value)} />
+              </label>
+            </div>
           </div>
         </div>
       ) : null}

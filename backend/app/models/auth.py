@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -22,6 +22,13 @@ class ProjectRole(str, enum.Enum):
     partner_member = "partner_member"
     reviewer = "reviewer"
     viewer = "viewer"
+
+
+class UserSuggestionStatus(str, enum.Enum):
+    new = "new"
+    doing = "doing"
+    done = "done"
+    rejected = "rejected"
 
 
 class UserAccount(Base, IdMixin, TimestampMixin):
@@ -56,3 +63,11 @@ class ProjectMembership(Base, IdMixin, TimestampMixin):
     role: Mapped[str] = mapped_column(String(32), default=ProjectRole.viewer.value, index=True)
 
     __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_membership"),)
+
+
+class UserSuggestion(Base, IdMixin, TimestampMixin):
+    __tablename__ = "user_suggestions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default=UserSuggestionStatus.new.value, index=True)

@@ -378,6 +378,8 @@ export function ResearchWorkspace({
   currentProject = null,
   openBibliographyReferenceId = null,
   onOpenBibliographyReferenceConsumed,
+  researchTourActive = false,
+  researchTourStepId = null,
 }: {
   researchSpaceId: string;
   selectedProjectId: string;
@@ -388,6 +390,8 @@ export function ResearchWorkspace({
   currentProject?: Project | null;
   openBibliographyReferenceId?: string | null;
   onOpenBibliographyReferenceConsumed?: () => void;
+  researchTourActive?: boolean;
+  researchTourStepId?: string | null;
 }) {
   const activeResearchSpaceId = researchSpaceId || "";
   const hasProjectContext = Boolean(currentProject?.id);
@@ -738,6 +742,38 @@ export function ResearchWorkspace({
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [paperDirty]);
+
+  useEffect(() => {
+    if (bibliographyOnly || !researchTourActive || !researchTourStepId) return;
+    if (researchTourStepId === "research-study-grid") {
+      if (selectedCollectionId) {
+        setSelectedCollectionId(null);
+        setTab("overview");
+      }
+      return;
+    }
+    if (["study-inbox-tab", "study-references-tab", "study-paper-tab", "study-iterations-tab"].includes(researchTourStepId)) {
+      if (!selectedCollectionId) {
+        const firstStudy = filteredActiveCollections[0] ?? filteredArchivedCollections[0] ?? null;
+        if (firstStudy) {
+          setSelectedCollectionId(firstStudy.id);
+          setTab("overview");
+        }
+        return;
+      }
+      if (researchTourStepId === "study-inbox-tab") setTab("notes");
+      if (researchTourStepId === "study-references-tab") setTab("references");
+      if (researchTourStepId === "study-paper-tab") setTab("paper");
+      if (researchTourStepId === "study-iterations-tab") setTab("iterations");
+    }
+  }, [
+    bibliographyOnly,
+    researchTourActive,
+    researchTourStepId,
+    selectedCollectionId,
+    filteredActiveCollections,
+    filteredArchivedCollections,
+  ]);
 
   // Ctrl+F / Cmd+F → quick search piped into active list filter
   const quickSearch = useQuickSearch(useCallback((q: string) => {
@@ -3221,7 +3257,7 @@ function newStudyResult(): ResearchStudyResult {
       ) : null}
 
       {!bibliographyOnly && showSpaceHome ? (
-        <div className="setup-summary-bar">
+        <div className="setup-summary-bar" data-tour-id="research-study-home">
           <div className="workspace-browser-summary-actions">
             <div className="topbar-project-search workspace-browser-search">
               <FontAwesomeIcon icon={faSearch} />
@@ -3260,7 +3296,7 @@ function newStudyResult(): ResearchStudyResult {
           ) : (
             <>
               {filteredActiveCollections.length > 0 ? (
-                <div className="workspace-browser-grid">
+                <div className="workspace-browser-grid" data-tour-id="research-study-grid">
                   {filteredActiveCollections.map((item) => (
                     <div
                       key={item.id}
@@ -3417,25 +3453,25 @@ function newStudyResult(): ResearchStudyResult {
       ) : null}
 
       {!bibliographyOnly && selectedCollectionId ? <div className="delivery-tabs">
-        <button className={`delivery-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
+        <button className={`delivery-tab ${tab === "overview" ? "active" : ""}`} data-tour-id="study-overview-tab" onClick={() => setTab("overview")}>
           Overview
         </button>
-        <button className={`delivery-tab inbox-tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>
+        <button className={`delivery-tab inbox-tab ${tab === "notes" ? "active" : ""}`} data-tour-id="study-inbox-tab" onClick={() => setTab("notes")}>
           <FontAwesomeIcon icon={faInbox} /> Inbox <span className="delivery-tab-count">{notes.length}</span>
           {tabAlerts.inboxAlert ? <span className="tab-alert-dot" /> : null}
         </button>
-        <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} onClick={() => setTab("references")}>
+        <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} data-tour-id="study-references-tab" onClick={() => setTab("references")}>
           References <span className="delivery-tab-count">{references.length}</span>
           {tabAlerts.refsAlert ? <span className="tab-alert-dot tab-alert-info" /> : null}
         </button>
-        <button className={`delivery-tab ${tab === "paper" ? "active" : ""}`} onClick={() => setTab("paper")}>
+        <button className={`delivery-tab ${tab === "paper" ? "active" : ""}`} data-tour-id="study-paper-tab" onClick={() => setTab("paper")}>
           Paper
           {tabAlerts.paperAlert ? <span className="tab-alert-dot" /> : null}
         </button>
         <button className={`delivery-tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>
           <FontAwesomeIcon icon={faComment} /> Chat
         </button>
-        <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} onClick={() => setTab("iterations")}>
+        <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} data-tour-id="study-iterations-tab" onClick={() => setTab("iterations")}>
           Iterations <span className="delivery-tab-count">{studyIterations.length}</span>
         </button>
         <button className={`delivery-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>

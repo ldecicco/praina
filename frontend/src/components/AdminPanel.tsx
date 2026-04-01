@@ -4,7 +4,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBoxArchive, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../lib/api";
-import type { AuthUser, Course, MembershipWithUser, Project, ProposalCallLibraryEntry } from "../types";
+import type { AuthUser, Course, MembershipWithUser, Project, ProposalCallLibraryEntry, UserSuggestion } from "../types";
 import { useStatusToast } from "../lib/useStatusToast";
 
 type Props = {
@@ -14,7 +14,7 @@ type Props = {
 
 const PLATFORM_ROLES = ["super_admin", "project_creator", "user"];
 const PROJECT_ROLES = ["project_owner", "project_manager", "partner_lead", "partner_member", "reviewer", "viewer"];
-type AdminTab = "projects" | "courses" | "calls" | "users" | "memberships";
+type AdminTab = "projects" | "courses" | "calls" | "users" | "memberships" | "suggestions";
 
 export function AdminPanel({ selectedProjectId, currentUser }: Props) {
   const [tab, setTab] = useState<AdminTab>("projects");
@@ -22,11 +22,14 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [calls, setCalls] = useState<ProposalCallLibraryEntry[]>([]);
   const [users, setUsers] = useState<AuthUser[]>([]);
+  const [suggestions, setSuggestions] = useState<UserSuggestion[]>([]);
   const [memberships, setMemberships] = useState<MembershipWithUser[]>([]);
   const [search, setSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [courseSearch, setCourseSearch] = useState("");
   const [callSearch, setCallSearch] = useState("");
+  const [suggestionSearch, setSuggestionSearch] = useState("");
+  const [suggestionStatusFilter, setSuggestionStatusFilter] = useState("");
   const [assignUserId, setAssignUserId] = useState("");
   const [assignRole, setAssignRole] = useState("viewer");
   const [createUserOpen, setCreateUserOpen] = useState(false);
@@ -66,6 +69,7 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
     void loadCourses();
     void loadCalls();
     void loadUsers();
+    void loadSuggestions();
   }, [isSuperAdmin]);
 
   useEffect(() => {
@@ -144,6 +148,24 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
       setMemberships(response.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load project memberships.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadSuggestions(currentSearch = suggestionSearch, currentStatus = suggestionStatusFilter) {
+    try {
+      setBusy(true);
+      setError("");
+      const response = await api.listUserSuggestions({
+        page: 1,
+        page_size: 100,
+        search: currentSearch || undefined,
+        status: currentStatus || undefined,
+      });
+      setSuggestions(response.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load suggestions.");
     } finally {
       setBusy(false);
     }
@@ -338,6 +360,17 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
     }
   }
 
+  async function handleSuggestionStatus(suggestionId: string, status: string) {
+    try {
+      setError("");
+      const updated = await api.updateUserSuggestion(suggestionId, { status });
+      setSuggestions((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setStatus("Suggestion updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update suggestion.");
+    }
+  }
+
   if (!isSuperAdmin) {
     return (
       <section className="panel">
@@ -358,6 +391,8 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
           <span>{courses.length} courses</span>
           <span className="setup-summary-sep" />
           <span>{users.length} users</span>
+          <span className="setup-summary-sep" />
+          <span>{suggestions.length} suggestions</span>
           <span className="setup-summary-sep" />
           <span>{selectedProject ? selectedProject.code : "No project"}</span>
         </div>
@@ -383,6 +418,10 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
         <button type="button" className={`delivery-tab ${tab === "memberships" ? "active" : ""}`} onClick={() => setTab("memberships")}>
           Memberships
           <span className="delivery-tab-count">{memberships.length}</span>
+        </button>
+        <button type="button" className={`delivery-tab ${tab === "suggestions" ? "active" : ""}`} onClick={() => setTab("suggestions")}>
+          Suggestions
+          <span className="delivery-tab-count">{suggestions.length}</span>
         </button>
       </div>
 
@@ -727,6 +766,62 @@ export function AdminPanel({ selectedProjectId, currentUser }: Props) {
             ) : (
               <div className="card-slab">Select a project.</div>
             )}
+          </div>
+        ) : null}
+
+        {tab === "suggestions" ? (
+          <div className="card">
+            <div className="meetings-toolbar">
+              <div className="meetings-filter-group">
+                <select value={suggestionStatusFilter} onChange={(event) => setSuggestionStatusFilter(event.target.value)}>
+                  <option value="">All statuses</option>
+                  <option value="new">New</option>
+                  <option value="doing">Doing</option>
+                  <option value="done">Done</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+                <input value={suggestionSearch} onChange={(event) => setSuggestionSearch(event.target.value)} placeholder="Search suggestion" className="meetings-search" />
+                <button type="button" className="ghost" disabled={busy} onClick={() => void loadSuggestions()}>
+                  Search
+                </button>
+              </div>
+            </div>
+
+            <div className="simple-table-wrap">
+              <table className="simple-table compact-table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Suggestion</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {suggestions.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.user_display_name}</strong>
+                        <span className="muted-small research-inline-meta">{item.user_email}</span>
+                      </td>
+                      <td>{item.content}</td>
+                      <td>{new Date(item.created_at).toLocaleString()}</td>
+                      <td>
+                        <select value={item.status} onChange={(event) => void handleSuggestionStatus(item.id, event.target.value)}>
+                          <option value="new">New</option>
+                          <option value="doing">Doing</option>
+                          <option value="done">Done</option>
+                          <option value="rejected">Rejected</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                  {suggestions.length === 0 ? (
+                    <tr><td colSpan={4}>No suggestions found.</td></tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : null}
       </div>

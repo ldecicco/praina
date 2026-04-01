@@ -4,12 +4,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import decode_token, get_current_user
 from app.db.session import get_db
-from app.models.auth import UserAccount
+from app.models.auth import UserAccount, UserSuggestion, UserSuggestionStatus
 from app.schemas.auth import (
     AuthTokenRead,
     MeRead,
@@ -23,6 +24,10 @@ from app.schemas.auth import (
     TokenRefreshRequest,
     UserAdminCreateRequest,
     UserAdminUpdateRequest,
+    UserSuggestionCreateRequest,
+    UserSuggestionListRead,
+    UserSuggestionRead,
+    UserSuggestionUpdateRequest,
     UserListRead,
     UserLoginRequest,
     UserProfileUpdateRequest,
@@ -318,6 +323,78 @@ def upload_my_avatar(
     return {"avatar_url": avatar_url}
 
 
+@router.post("/me/suggestions", response_model=UserSuggestionRead)
+def create_my_suggestion(
+    payload: UserSuggestionCreateRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserSuggestionRead:
+    item = UserSuggestion(
+        user_id=current_user.id,
+        content=payload.content.strip(),
+        status=UserSuggestionStatus.new.value,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return _suggestion_read(item, current_user)
+
+
+@router.get("/admin/suggestions", response_model=UserSuggestionListRead)
+def list_user_suggestions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserSuggestionListRead:
+    if current_user.platform_role != "super_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Restricted to administrators.")
+    stmt = select(UserSuggestion, UserAccount).join(UserAccount, UserAccount.id == UserSuggestion.user_id)
+    if status_filter:
+        stmt = stmt.where(UserSuggestion.status == status_filter.strip().lower())
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(
+            UserSuggestion.content.ilike(like)
+            | UserAccount.display_name.ilike(like)
+            | UserAccount.email.ilike(like)
+        )
+    total = len(db.execute(stmt).all())
+    rows = db.execute(
+        stmt.order_by(UserSuggestion.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    items = [_suggestion_read(item, user) for item, user in rows]
+    return UserSuggestionListRead(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.patch("/admin/suggestions/{suggestion_id}", response_model=UserSuggestionRead)
+def update_user_suggestion(
+    suggestion_id: uuid.UUID,
+    payload: UserSuggestionUpdateRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserSuggestionRead:
+    if current_user.platform_role != "super_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Restricted to administrators.")
+    item = db.get(UserSuggestion, suggestion_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found.")
+    normalized = payload.status.strip().lower()
+    try:
+        UserSuggestionStatus(normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid suggestion status.") from exc
+    item.status = normalized
+    db.commit()
+    db.refresh(item)
+    user = db.get(UserAccount, item.user_id)
+    return _suggestion_read(item, user)
+
+
 @router.get("/users/{user_id}/avatar")
 def get_user_avatar(
     user_id: uuid.UUID,
@@ -461,6 +538,19 @@ def _membership_read(item) -> MembershipRead:
         project_id=str(item.project_id),
         user_id=str(item.user_id),
         role=item.role,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _suggestion_read(item: UserSuggestion, user: UserAccount | None) -> UserSuggestionRead:
+    return UserSuggestionRead(
+        id=str(item.id),
+        user_id=str(item.user_id),
+        user_display_name=user.display_name if user else "Unknown",
+        user_email=user.email if user else "unknown@example.com",
+        content=item.content,
+        status=item.status,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

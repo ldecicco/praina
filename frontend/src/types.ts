@@ -750,6 +750,17 @@ export type AuthUser = {
   updated_at: string;
 };
 
+export type UserSuggestion = {
+  id: string;
+  user_id: string;
+  user_display_name: string;
+  user_email: string;
+  content: string;
+  status: "new" | "doing" | "done" | "rejected" | string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TelegramLinkState = {
   linked: boolean;
   notifications_enabled: boolean;

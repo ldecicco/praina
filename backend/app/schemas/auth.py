@@ -133,3 +133,26 @@ class UserAdminCreateRequest(BaseModel):
     is_active: bool = True
     can_access_research: bool = True
     can_access_teaching: bool = True
+
+
+class UserSuggestionCreateRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class UserSuggestionUpdateRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=16)
+
+
+class UserSuggestionRead(BaseModel):
+    id: str
+    user_id: str
+    user_display_name: str
+    user_email: EmailStr
+    content: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserSuggestionListRead(PaginatedResponse):
+    items: list[UserSuggestionRead]

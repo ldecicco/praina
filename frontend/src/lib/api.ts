@@ -91,6 +91,7 @@ import type {
   TeachingProjectStudent,
   TeachingProgressReport,
   TeachingWorkspace,
+  UserSuggestion,
   StudyChatRoom,
   StudyChatMessage,
 } from "../types";
@@ -244,6 +245,28 @@ export const api = {
 
   changeMyPassword(payload: { current_password: string; new_password: string }): Promise<{ ok: boolean }> {
     return request("/auth/me/password", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  createMySuggestion(payload: { content: string }): Promise<UserSuggestion> {
+    return request("/auth/me/suggestions", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  listUserSuggestions(params?: {
+    page?: number;
+    page_size?: number;
+    status?: string;
+    search?: string;
+  }): Promise<Paginated<UserSuggestion>> {
+    const search = new URLSearchParams();
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.page_size) search.set("page_size", String(params.page_size));
+    if (params?.status) search.set("status", params.status);
+    if (params?.search) search.set("search", params.search);
+    return request(`/auth/admin/suggestions${search.toString() ? `?${search.toString()}` : ""}`);
+  },
+
+  updateUserSuggestion(suggestionId: string, payload: { status: string }): Promise<UserSuggestion> {
+    return request(`/auth/admin/suggestions/${suggestionId}`, { method: "PATCH", body: JSON.stringify(payload) });
   },
 
   getMyTelegramState(): Promise<TelegramLinkState> {

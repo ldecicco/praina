@@ -10,9 +10,9 @@ const DEFAULT_FIELD = "default";
 
 function wsBaseUrl(): string {
   const apiBase = import.meta.env.VITE_API_BASE as string;
-  if (apiBase.startsWith("https://")) return apiBase.replace("https://", "wss://");
-  if (apiBase.startsWith("http://")) return apiBase.replace("http://", "ws://");
-  return apiBase;
+  const resolved = new URL(apiBase, window.location.origin);
+  resolved.protocol = resolved.protocol === "https:" ? "wss:" : "ws:";
+  return resolved.toString().replace(/\/$/, "");
 }
 
 function frameMessage(type: number, payload: Uint8Array): Uint8Array {

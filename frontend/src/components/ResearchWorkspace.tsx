@@ -546,6 +546,11 @@ export function ResearchWorkspace({
   const [referencePdfFile, setReferencePdfFile] = useState<File | null>(null);
   const [existingDocumentKey, setExistingDocumentKey] = useState("");
 
+  const [studyPaletteOpen, setStudyPaletteOpen] = useState(false);
+  const [studyPaletteQuery, setStudyPaletteQuery] = useState("");
+  const [studyPaletteIndex, setStudyPaletteIndex] = useState(0);
+  const studyPaletteInputRef = useRef<HTMLInputElement | null>(null);
+
   const [noteTitle, setNoteTitle] = useState("");
   const [noteContent, setNoteContent] = useState("");
   const [noteType, setNoteType] = useState("observation");
@@ -907,6 +912,27 @@ export function ResearchWorkspace({
     filteredActiveCollections,
     filteredArchivedCollections,
   ]);
+
+  // Ctrl+F on the studies grid → open study command palette
+  const showSpaceHome = !bibliographyOnly && !selectedCollectionId;
+  useEffect(() => {
+    function handleStudyPaletteKey(e: KeyboardEvent) {
+      if (!showSpaceHome) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setStudyPaletteOpen(true);
+        setStudyPaletteQuery("");
+        setStudyPaletteIndex(0);
+      }
+    }
+    window.addEventListener("keydown", handleStudyPaletteKey, true);
+    return () => window.removeEventListener("keydown", handleStudyPaletteKey, true);
+  }, [showSpaceHome]);
+
+  useEffect(() => {
+    if (studyPaletteOpen) studyPaletteInputRef.current?.focus();
+  }, [studyPaletteOpen]);
 
   // Ctrl+F / Cmd+F → quick search piped into active list filter
   const quickSearch = useQuickSearch(useCallback((q: string) => {
@@ -3476,7 +3502,6 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   if (loading) return <SkeletonTable rows={6} cols={4} />;
-  const showSpaceHome = !bibliographyOnly && !selectedCollectionId;
 
   return (
     <>
@@ -3495,6 +3520,72 @@ function newStudyResult(): ResearchStudyResult {
           <kbd className="cmd-palette-kbd">esc</kbd>
         </div>
       ) : null}
+
+      {studyPaletteOpen ? (() => {
+        const norm = studyPaletteQuery.trim().toLowerCase();
+        const allStudies = [...activeCollections, ...archivedCollections];
+        const filtered = norm
+          ? allStudies.filter((s) =>
+              s.title.toLowerCase().includes(norm) ||
+              (s.description || "").toLowerCase().includes(norm) ||
+              (s.hypothesis || "").toLowerCase().includes(norm) ||
+              s.status.toLowerCase().includes(norm)
+            )
+          : allStudies;
+        const clampedIndex = Math.min(studyPaletteIndex, Math.max(filtered.length - 1, 0));
+        return (
+          <div className="cmd-palette-overlay" onClick={() => setStudyPaletteOpen(false)}>
+            <div className="cmd-palette" onClick={(e) => e.stopPropagation()}>
+              <div className="cmd-palette-input-row">
+                <FontAwesomeIcon icon={faSearch} className="cmd-palette-search-icon" />
+                <input
+                  ref={studyPaletteInputRef}
+                  type="text"
+                  className="cmd-palette-input"
+                  placeholder="Search studies…"
+                  value={studyPaletteQuery}
+                  onChange={(e) => { setStudyPaletteQuery(e.target.value); setStudyPaletteIndex(0); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") { setStudyPaletteOpen(false); return; }
+                    if (e.key === "ArrowDown") { e.preventDefault(); setStudyPaletteIndex((i) => Math.min(i + 1, filtered.length - 1)); return; }
+                    if (e.key === "ArrowUp") { e.preventDefault(); setStudyPaletteIndex((i) => Math.max(i - 1, 0)); return; }
+                    if (e.key === "Enter" && filtered.length > 0) {
+                      e.preventDefault();
+                      const selected = filtered[clampedIndex];
+                      setSelectedCollectionId(selected.id);
+                      setTab("overview");
+                      setStudyPaletteOpen(false);
+                    }
+                  }}
+                />
+                <kbd className="cmd-palette-kbd">esc</kbd>
+              </div>
+              <div className="cmd-palette-list">
+                {filtered.length === 0 ? (
+                  <p className="cmd-palette-empty">No studies found.</p>
+                ) : filtered.map((study, i) => (
+                  <button
+                    key={study.id}
+                    type="button"
+                    className={`cmd-palette-item${i === clampedIndex ? " active" : ""}`}
+                    ref={i === clampedIndex ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
+                    onMouseEnter={() => setStudyPaletteIndex(i)}
+                    onClick={() => {
+                      setSelectedCollectionId(study.id);
+                      setTab("overview");
+                      setStudyPaletteOpen(false);
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faBookOpen} className="cmd-palette-item-icon" />
+                    <span>{study.title}</span>
+                    <span className="cmd-palette-item-section">{study.status}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
 
       {!bibliographyOnly && showSpaceHome ? (
         <div className="setup-summary-bar" data-tour-id="research-study-home">
@@ -3890,7 +3981,7 @@ function newStudyResult(): ResearchStudyResult {
     const referenceUsage = (referenceId: string) => referenceUsageMap.get(referenceId) || { claimCount: 0, sectionCount: 0, noteCount: 0, total: 0 };
 
     return (
-      <>
+      <div className="references-tab-fill">
         <div className="meetings-toolbar">
           <div className="meetings-filter-group">
             <select value={refStatusFilter} onChange={(event) => setRefStatusFilter(event.target.value)}>
@@ -4016,7 +4107,7 @@ function newStudyResult(): ResearchStudyResult {
             </table>
           </div>
         )}
-      </>
+      </div>
     );
   }
 

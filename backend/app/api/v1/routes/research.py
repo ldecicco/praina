@@ -1433,17 +1433,27 @@ def link_bibliography_reference(
     current_user: UserAccount = Depends(get_current_user),
 ) -> ReferenceRead:
     svc = ResearchService(db)
-    member_id = svc._space_member_id(uuid.UUID(space_id), current_user.id) if space_id else _resolve_member_id(db, current_user, project_id)
+    use_space = space_id or project_id == GLOBAL_RESEARCH_PROJECT_ID
+    if use_space:
+        resolved_space_id = uuid.UUID(space_id) if space_id else None
+        if not resolved_space_id and payload.collection_id:
+            resolved_space_id = next(iter(svc.collection_space_ids(uuid.UUID(payload.collection_id))), None)
+        if not resolved_space_id:
+            raise HTTPException(status_code=400, detail="Cannot determine research space.")
+        member_id = svc._space_member_id(resolved_space_id, current_user.id)
+    else:
+        resolved_space_id = None
+        member_id = _resolve_member_id(db, current_user, project_id)
     try:
         item = (
             svc.link_bibliography_reference_for_space(
-                uuid.UUID(space_id),
+                resolved_space_id,
                 bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),
                 collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
                 reading_status=payload.reading_status,
                 added_by_member_id=member_id,
             )
-            if space_id else
+            if use_space else
             svc.link_bibliography_reference(
                 project_id,
                 bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),

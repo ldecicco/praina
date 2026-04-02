@@ -315,7 +315,7 @@ class ResearchService:
         if not collection:
             raise NotFoundError("Study not found.")
         room = self._ensure_collection_chat_room(collection.project_id, collection, actor_user_id=actor_user_id)
-        return self.scoped.create_message(
+        message = self.scoped.create_message(
             ResearchStudyChatMessage,
             scope_field="thread_id",
             scope_id=room.id,
@@ -323,6 +323,96 @@ class ResearchService:
             content=content,
             reply_to_message_id=reply_to_message_id,
         )
+        self._notify_study_chat_mentions(collection_id, collection, message, sender_user_id=actor_user_id)
+        return message
+
+    # ------------------------------------------------------------------
+    # Study chat mention notifications
+    # ------------------------------------------------------------------
+
+    _USER_MENTION_RE = re.compile(r"(?<![A-Za-z0-9._:-])@([A-Za-z0-9._:-]+)")
+
+    def _notify_study_chat_mentions(
+        self,
+        collection_id: uuid.UUID,
+        collection: ResearchCollection,
+        message: ResearchStudyChatMessage,
+        *,
+        sender_user_id: uuid.UUID,
+    ) -> None:
+        tokens = [
+            t.strip().lower()
+            for t in self._USER_MENTION_RE.findall(message.content or "")
+            if t.strip().lower()
+        ]
+        if not tokens:
+            return
+
+        from app.services.notification_service import NotificationService
+
+        token_map = self._study_member_token_map(collection_id)
+        sender = self.db.get(UserAccount, sender_user_id)
+        sender_name = (sender.display_name if sender else None) or "Someone"
+        content_preview = " ".join((message.content or "").split()).strip()
+        if len(content_preview) > 220:
+            content_preview = content_preview[:219].rstrip() + "…"
+        study_title = (collection.title or "study chat")[:80]
+
+        notification_service = NotificationService(self.db)
+        notified: set[uuid.UUID] = set()
+
+        for token in tokens:
+            target = token_map.get(token)
+            if not target or target.id == sender_user_id or target.id in notified:
+                continue
+            notification_service.notify(
+                target.id,
+                project_id=None,
+                title=f"Mentioned in {study_title}",
+                body=f"{sender_name}: {content_preview}",
+                link_type="study_chat_mention",
+                link_id=collection_id,
+            )
+            notified.add(target.id)
+
+    @staticmethod
+    def _to_user_token(raw: str) -> str:
+        token = re.sub(r"[^a-z0-9._-]+", "_", (raw or "").strip().lower()).strip("_")
+        return token or "user"
+
+    def _study_member_token_map(self, collection_id: uuid.UUID) -> dict[str, UserAccount]:
+        """Build @mention-token → UserAccount map for study members."""
+        members = list(
+            self.db.scalars(
+                select(ResearchCollectionMember).where(
+                    ResearchCollectionMember.collection_id == collection_id
+                )
+            ).all()
+        )
+        user_ids: set[uuid.UUID] = set()
+        for m in members:
+            if m.user_account_id:
+                user_ids.add(m.user_account_id)
+            if m.member_id:
+                tm = self.db.get(TeamMember, m.member_id)
+                if tm and tm.user_account_id:
+                    user_ids.add(tm.user_account_id)
+        if not user_ids:
+            return {}
+        users = list(self.db.scalars(select(UserAccount).where(UserAccount.id.in_(user_ids))).all())
+        users.sort(key=lambda u: (u.display_name or "", u.email or ""))
+        token_map: dict[str, UserAccount] = {}
+        seen: set[str] = set()
+        for user in users:
+            base = self._to_user_token(user.display_name or user.email.split("@")[0] or "user")
+            token = base
+            suffix = 2
+            while token in seen:
+                token = f"{base}{suffix}"
+                suffix += 1
+            seen.add(token)
+            token_map[token] = user
+        return token_map
 
     def toggle_study_chat_reaction(
         self,

@@ -119,6 +119,7 @@ const LINK_TYPE_VIEW_MAP: Record<string, View> = {
   bibliography_reference: "bibliography",
   project_broadcast: "project-chat",
   project_chat_mention: "project-chat",
+  study_chat_mention: "research",
   lab_broadcast: "resources",
 };
 
@@ -684,6 +685,13 @@ export default function App() {
     }
     if (targetView === "research") {
       handleSelectResearchSpace("");
+      if (entityId) {
+        setResearchNavigationState({
+          selectedCollectionId: entityId,
+          tab: "chat",
+          selectedBibliographyCollectionId: null,
+        });
+      }
     }
     setWorkspaceFamily(targetFamily);
     setView(targetView);

@@ -2481,6 +2481,7 @@ button.resources-schedule-block {
 .page-content {
   padding: 16px;
   flex: 1;
+  min-width: 0;
 }
 
 .dashboard-panel {
@@ -3833,6 +3834,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .setup-section-content {
   display: grid;
   gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .setup-summary-bar {
@@ -11765,7 +11767,6 @@ button.danger:hover:not(:disabled) {
 
 .admin-panel-shell {
   position: relative;
-  overflow: hidden;
 }
 
 .admin-panel-shell::before {
@@ -11778,6 +11779,7 @@ button.danger:hover:not(:disabled) {
     radial-gradient(circle at center, rgba(58, 175, 168, 0.18), transparent 68%);
   pointer-events: none;
   transform: translate(18%, -28%);
+  clip-path: inset(0 0 0 0);
 }
 
 .admin-summary-bar {

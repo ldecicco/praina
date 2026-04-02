@@ -52,6 +52,7 @@ type ChatStreamMessage = {
 type Props = {
   title?: string | null;
   showHeader?: boolean;
+  hideParticipants?: boolean;
   headerActions?: ReactNode;
   error?: string;
   loading?: boolean;
@@ -306,6 +307,7 @@ function ChatAvatar({ name, avatarUrl, small = false }: { name: string; avatarUr
 export function ChatThreadPanel({
   title = "Chat",
   showHeader = true,
+  hideParticipants = false,
   headerActions = null,
   error = "",
   loading = false,
@@ -548,42 +550,44 @@ export function ChatThreadPanel({
         </div>
       </section>
 
-      <aside className="card pm-members study-chat-members">
-        <div className="workpane-head">
-          <h3>Participants</h3>
-        </div>
-        <div className="pm-member-list">
-          <div className="pm-member-group">
-            <h4>Online</h4>
-            {onlineParticipants.map((participant) => (
-              <div key={`online-${participant.id}`} className="pm-member-item">
-                <ChatAvatar name={participant.name} avatarUrl={participant.avatarUrl} small />
-                <div className="pm-member-meta">
-                  <strong>{participant.id === currentUser.id ? `${participant.name} (You)` : participant.name}</strong>
-                  <span>{participant.subtitle || ""}</span>
-                </div>
-                <span className="pm-presence-dot online" />
-              </div>
-            ))}
-            {onlineParticipants.length === 0 ? <p className="muted-small">No users online.</p> : null}
+      {!hideParticipants ? (
+        <aside className="card pm-members study-chat-members">
+          <div className="workpane-head">
+            <h3>Participants</h3>
           </div>
-          <div className="pm-member-group">
-            <h4>Offline</h4>
-            {offlineParticipants.map((participant) => (
-              <div key={`offline-${participant.id}`} className="pm-member-item">
-                <ChatAvatar name={participant.name} avatarUrl={participant.avatarUrl} small />
-                <div className="pm-member-meta">
-                  <strong>{participant.id === currentUser.id ? `${participant.name} (You)` : participant.name}</strong>
-                  <span>{participant.subtitle || ""}</span>
+          <div className="pm-member-list">
+            <div className="pm-member-group">
+              <h4>Online</h4>
+              {onlineParticipants.map((participant) => (
+                <div key={`online-${participant.id}`} className="pm-member-item">
+                  <ChatAvatar name={participant.name} avatarUrl={participant.avatarUrl} small />
+                  <div className="pm-member-meta">
+                    <strong>{participant.id === currentUser.id ? `${participant.name} (You)` : participant.name}</strong>
+                    <span>{participant.subtitle || ""}</span>
+                  </div>
+                  <span className="pm-presence-dot online" />
                 </div>
-                <span className="pm-presence-dot offline" />
-              </div>
-            ))}
-            {offlineParticipants.length === 0 ? <p className="muted-small">No users offline.</p> : null}
+              ))}
+              {onlineParticipants.length === 0 ? <p className="muted-small">No users online.</p> : null}
+            </div>
+            <div className="pm-member-group">
+              <h4>Offline</h4>
+              {offlineParticipants.map((participant) => (
+                <div key={`offline-${participant.id}`} className="pm-member-item">
+                  <ChatAvatar name={participant.name} avatarUrl={participant.avatarUrl} small />
+                  <div className="pm-member-meta">
+                    <strong>{participant.id === currentUser.id ? `${participant.name} (You)` : participant.name}</strong>
+                    <span>{participant.subtitle || ""}</span>
+                  </div>
+                  <span className="pm-presence-dot offline" />
+                </div>
+              ))}
+              {offlineParticipants.length === 0 ? <p className="muted-small">No users offline.</p> : null}
+            </div>
+            {participants.length === 0 ? <p className="muted-small">No participants.</p> : null}
           </div>
-          {participants.length === 0 ? <p className="muted-small">No participants.</p> : null}
-        </div>
-      </aside>
+        </aside>
+      ) : null}
     </div>
   );
 }

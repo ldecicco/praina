@@ -9230,7 +9230,8 @@ tr.row-selected {
   border: 2px solid var(--bg-primary, #1e1e2e);
   cursor: default;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
 }
 .study-avatar:first-child {
   margin-left: 0;
@@ -9240,6 +9241,20 @@ tr.row-selected {
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 50%;
+}
+.study-avatar-presence-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-primary, #1e1e2e);
+  background: #666;
+}
+.study-avatar-presence-dot.online {
+  background: #22c55e;
 }
 .study-avatar-overflow {
   background: var(--bg-tertiary, #444) !important;
@@ -12954,7 +12969,12 @@ button.danger:hover:not(:disabled) {
   }
 
   .topbar-history-controls {
-    display: none;
+    display: inline-flex;
+  }
+
+  .topbar-history-controls > button {
+    width: 28px;
+    height: 28px;
   }
 
   .topbar-context-link {

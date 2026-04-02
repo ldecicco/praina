@@ -11,6 +11,8 @@ type Props = {
   currentUser: AuthUser;
   members: ResearchCollectionMember[];
   threadTitle?: string | null;
+  hideParticipants?: boolean;
+  onOnlineUsersChange?: (userIds: string[]) => void;
 };
 
 function wsBaseUrl(): string {
@@ -55,6 +57,8 @@ export function StudyCollabChat({
   researchSpaceId = null,
   currentUser,
   members,
+  hideParticipants = false,
+  onOnlineUsersChange,
 }: Props) {
   const [messages, setMessages] = useState<StudyChatMessage[]>([]);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
@@ -213,6 +217,10 @@ export function StudyCollabChat({
   }, [projectId, collectionId, researchSpaceId]);
 
   useEffect(() => {
+    onOnlineUsersChange?.(onlineUserIds);
+  }, [onlineUserIds]);
+
+  useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
@@ -335,6 +343,7 @@ export function StudyCollabChat({
   return (
     <ChatThreadPanel
       showHeader={false}
+      hideParticipants={hideParticipants}
       error={error}
       loading={loading}
       emptyMessage="No messages yet."

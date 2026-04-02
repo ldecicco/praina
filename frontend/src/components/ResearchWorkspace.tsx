@@ -371,7 +371,7 @@ function LogAvatar({
   );
 }
 
-function StudyHeaderAvatar({ member }: { member: ResearchCollectionMember }) {
+function StudyHeaderAvatar({ member, isOnline }: { member: ResearchCollectionMember; isOnline?: boolean }) {
   const [imageFailed, setImageFailed] = useState(false);
   const initial = userInitials(member.member_name || "");
   const hue = [...(member.member_name || "?")].reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
@@ -392,6 +392,7 @@ function StudyHeaderAvatar({ member }: { member: ResearchCollectionMember }) {
       ) : (
         initial
       )}
+      <span className={`study-avatar-presence-dot ${isOnline ? "online" : "offline"}`} />
     </span>
   );
 }
@@ -479,6 +480,7 @@ export function ResearchWorkspace({
   const [deliverables, setDeliverables] = useState<WorkEntity[]>([]);
 
   const [tab, setTab] = useState<Tab>(navigationState?.tab ?? "overview");
+  const [studyOnlineUserIds, setStudyOnlineUserIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const { error, setError, setStatus } = useStatusToast();
   const [showArchived, setShowArchived] = useState(false);
@@ -3828,7 +3830,7 @@ function newStudyResult(): ResearchStudyResult {
             {collectionDetail.members.length > 0 && (
               <div className="study-header-avatars">
                 {collectionDetail.members.slice(0, 5).map((member: ResearchCollectionMember) => (
-                  <StudyHeaderAvatar key={member.id} member={member} />
+                  <StudyHeaderAvatar key={member.id} member={member} isOnline={studyOnlineUserIds.includes(member.user_id || "")} />
                 ))}
                 {collectionDetail.members.length > 5 && (
                   <span className="study-avatar study-avatar-overflow" title={`${collectionDetail.members.length - 5} more`}>
@@ -3970,7 +3972,9 @@ function newStudyResult(): ResearchStudyResult {
       {bibliographyOnly ? renderBibliographyTab() : null}
       {tab === "notes" && !bibliographyOnly && selectedCollectionId ? renderNotesTab() : null}
       {tab === "paper" && !bibliographyOnly && selectedCollectionId ? renderPaperTab() : null}
-      {tab === "chat" && !bibliographyOnly && selectedCollectionId ? renderChatTab() : null}
+      {!bibliographyOnly && selectedCollectionId ? (
+        <div style={tab === "chat" ? undefined : { display: "none" }}>{renderChatTab()}</div>
+      ) : null}
       {tab === "iterations" && !bibliographyOnly && selectedCollectionId ? renderIterationsTab() : null}
       {tab === "files" && !bibliographyOnly && selectedCollectionId ? renderFilesTab() : null}
       {tab === "overview" && !bibliographyOnly && selectedCollectionId ? renderOverviewTab() : null}
@@ -4426,6 +4430,16 @@ function newStudyResult(): ResearchStudyResult {
                           >
                             <FontAwesomeIcon icon={faLink} />
                           </button>
+                          {!isStudent ? (
+                            <button
+                              type="button"
+                              className={`ghost docs-action-btn${confirmingDeleteId === item.id ? " danger confirm-pulse" : ""}`}
+                              title={confirmingDeleteId === item.id ? "Click again to confirm" : "Delete paper"}
+                              onClick={() => requestConfirmDelete(item.id, () => void handleDeleteBibliography(item.id))}
+                            >
+                              {confirmingDeleteId === item.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                       {!bibliographyOnly ? (
@@ -6085,6 +6099,8 @@ function newStudyResult(): ResearchStudyResult {
           currentUser={currentUser}
           members={collectionDetail.members || []}
           threadTitle={collectionDetail.title}
+          hideParticipants
+          onOnlineUsersChange={setStudyOnlineUserIds}
         />
       </div>
     );

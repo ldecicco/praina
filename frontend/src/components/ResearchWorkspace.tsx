@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Editor } from "@tiptap/react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArchive,
@@ -31,6 +32,7 @@ import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { useStatusToast } from "../lib/useStatusToast";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import { StudyCollabChat } from "./StudyCollabChat";
+import { StudyLogRichEditor } from "./StudyLogRichEditor";
 import { renderMarkdown } from "../lib/renderMarkdown";
 import { formatRelativeTime } from "../lib/formatRelativeTime";
 import { SkeletonTable, SkeletonCards } from "./Skeleton";
@@ -315,6 +317,26 @@ function uniqueLogFileIds(noteIds: string[], allNotes: ResearchNote[]): string[]
   );
 }
 
+function extractMarkdownFileLabels(content: string): string[] {
+  const labels = new Map<string, string>();
+  for (const match of content.matchAll(/!\[([^\]]+)\]/g)) {
+    const label = (match[1] || "").trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (!labels.has(key)) labels.set(key, label);
+  }
+  return Array.from(labels.values());
+}
+
+function isImageMime(mimeType: string | null | undefined): boolean {
+  return (mimeType || "").toLowerCase().startsWith("image/");
+}
+
+function isCsvMime(mimeType: string | null | undefined, filename: string): boolean {
+  const mime = (mimeType || "").toLowerCase();
+  return mime.includes("csv") || filename.toLowerCase().endsWith(".csv");
+}
+
 function userInitials(name: string): string {
   const parts = (name || "")
     .trim()
@@ -369,6 +391,90 @@ function LogAvatar({
       )}
     </span>
   );
+}
+
+function ResearchFilePreviewCard({
+  file,
+  projectId,
+  collectionId,
+  spaceId,
+}: {
+  file: ResearchStudyFile;
+  projectId: string | null;
+  collectionId: string | null;
+  spaceId?: string;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [csvRows, setCsvRows] = useState<string[][]>([]);
+
+  useEffect(() => {
+    let revokedUrl: string | null = null;
+    let cancelled = false;
+
+    async function loadPreview() {
+      if (!projectId || !collectionId) return;
+      if (!isImageMime(file.mime_type) && !isCsvMime(file.mime_type, file.original_filename)) return;
+      try {
+        const blob = await api.getStudyFile(projectId, collectionId, file.id, spaceId || undefined);
+        if (cancelled) return;
+        if (isImageMime(file.mime_type)) {
+          const nextUrl = URL.createObjectURL(blob);
+          revokedUrl = nextUrl;
+          setObjectUrl(nextUrl);
+          return;
+        }
+        const text = await blob.text();
+        if (cancelled) return;
+        const rows = text
+          .trim()
+          .split(/\r?\n/)
+          .slice(0, 8)
+          .map((line) => line.split(",").slice(0, 6).map((cell) => cell.trim()));
+        setCsvRows(rows);
+      } catch {
+        if (!cancelled) {
+          setObjectUrl(null);
+          setCsvRows([]);
+        }
+      }
+    }
+
+    void loadPreview();
+    return () => {
+      cancelled = true;
+      if (revokedUrl) URL.revokeObjectURL(revokedUrl);
+    };
+  }, [collectionId, file, projectId, spaceId]);
+
+  if (isImageMime(file.mime_type) && objectUrl) {
+    return (
+      <div className="research-file-preview">
+        <img src={objectUrl} alt={file.original_filename} className="research-file-preview-image" />
+      </div>
+    );
+  }
+
+  if (isCsvMime(file.mime_type, file.original_filename) && csvRows.length > 0) {
+    return (
+      <div className="research-file-preview research-file-preview-table">
+        <div className="research-file-preview-scroll">
+          <table className="markdown-table">
+            <tbody>
+              {csvRows.map((row, rowIndex) => (
+                <tr key={`${file.id}-csv-row-${rowIndex}`}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`${file.id}-csv-cell-${rowIndex}-${cellIndex}`}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function StudyHeaderAvatar({ member, isOnline }: { member: ResearchCollectionMember; isOnline?: boolean }) {
@@ -636,7 +742,7 @@ export function ResearchWorkspace({
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
-  const [mentionTarget, setMentionTarget] = useState<"composer" | "inline" | "reply">("composer");
+  const [mentionTarget, setMentionTarget] = useState<"composer" | "inline" | "reply" | "modal">("composer");
   const [mentionAnchor, setMentionAnchor] = useState<{ top: number; left: number } | null>(null);
   const [mentionCursorStart, setMentionCursorStart] = useState(0);
   const [mentionReplyNoteId, setMentionReplyNoteId] = useState<string | null>(null);
@@ -656,6 +762,7 @@ export function ResearchWorkspace({
   const [bibliographyTags, setBibliographyTags] = useState<string[]>([]);
   const [bibliographyTagInput, setBibliographyTagInput] = useState("");
   const [bibliographyTagOptions, setBibliographyTagOptions] = useState<BibliographyTag[]>([]);
+  const [noteTagOptions, setNoteTagOptions] = useState<string[]>([]);
   const [bibliographyTagMenuOpen, setBibliographyTagMenuOpen] = useState(false);
   const [bibliographyTagActiveIndex, setBibliographyTagActiveIndex] = useState(0);
   const [bibliographyVisibility, setBibliographyVisibility] = useState("shared");
@@ -675,6 +782,8 @@ export function ResearchWorkspace({
   const quickLogInputRef = useRef<HTMLTextAreaElement | null>(null);
   const quickLogFileInputRef = useRef<HTMLInputElement | null>(null);
   const inlineEditFileInputRef = useRef<HTMLInputElement | null>(null);
+  const noteEditorRef = useRef<Editor | null>(null);
+  const noteModalFileInputRef = useRef<HTMLInputElement | null>(null);
   const [studySearchQuery, setStudySearchQuery] = useState("");
   const pendingNavigationSyncRef = useRef<string | null>(null);
   const lastAppliedNavigationStateRef = useRef<string | null>(null);
@@ -1020,7 +1129,8 @@ export function ResearchWorkspace({
   }
 
   async function loadSupportData(projectId = selectedProjectId) {
-    if (!projectId || !hasProjectContext) {
+    if (!projectId) {
+      setAllReferences([]);
       setProjectDocuments([]);
       setProjectMeetings([]);
       setWps([]);
@@ -1028,16 +1138,24 @@ export function ResearchWorkspace({
       setDeliverables([]);
       return;
     }
-    const [docsRes, refsRes, meetingsRes, wpsRes, tasksRes, deliverablesRes] = await Promise.all([
+    const refsRes = await api.listResearchReferences(projectId, { space_id: activeResearchSpaceId, page_size: 100 });
+    setAllReferences(refsRes.items);
+    if (!hasProjectContext) {
+      setProjectDocuments([]);
+      setProjectMeetings([]);
+      setWps([]);
+      setTasks([]);
+      setDeliverables([]);
+      return;
+    }
+    const [docsRes, meetingsRes, wpsRes, tasksRes, deliverablesRes] = await Promise.all([
       api.listDocuments(projectId),
-      api.listResearchReferences(projectId, { space_id: activeResearchSpaceId, page_size: 100 }),
       api.listMeetings(projectId),
       api.listWorkPackages(projectId),
       api.listTasks(projectId),
       api.listDeliverables(projectId),
     ]);
     setProjectDocuments(docsRes.items);
-    setAllReferences(refsRes.items);
     setProjectMeetings(meetingsRes.items);
     setWps(wpsRes.items);
     setTasks(tasksRes.items);
@@ -1116,6 +1234,18 @@ export function ResearchWorkspace({
     if (noteLaneFilter !== "") opts.lane = noteLaneFilter === "__none__" ? "" : noteLaneFilter;
     const response = await api.listResearchNotes(projectId, { ...opts, space_id: activeResearchSpaceId, page_size: 100 });
     setNotes(response.items);
+  }
+
+  async function loadNoteTags(projectId = selectedProjectId, collectionId = noteCollectionId || selectedCollectionId) {
+    if (!projectId) {
+      setNoteTagOptions([]);
+      return;
+    }
+    const response = await api.listResearchNoteTags(projectId, {
+      space_id: activeResearchSpaceId || undefined,
+      collection_id: collectionId || undefined,
+    });
+    setNoteTagOptions(response.items);
   }
 
   async function loadStudyFiles(collectionId: string | null, projectId = selectedProjectId) {
@@ -1226,6 +1356,13 @@ export function ResearchWorkspace({
       setError(err instanceof Error ? err.message : "Failed to load bibliography");
     });
   }, [selectedProjectId, bibliographyVisibilityFilter, bibliographyOnly, semanticSearch, selectedBibliographyCollectionId]);
+
+  useEffect(() => {
+    if (!noteModalOpen) return;
+    loadNoteTags().catch((err) => {
+      console.error(err);
+    });
+  }, [noteModalOpen, selectedProjectId, activeResearchSpaceId, noteCollectionId, selectedCollectionId]);
 
   useEffect(() => {
     if (!memberModalOpen || hasProjectContext) return;
@@ -1513,15 +1650,21 @@ export function ResearchWorkspace({
     setReferenceModalOpen(true);
   }
 
-  function openCreateNoteModal() {
+  function openCreateNoteModal(options?: { seedFromQuickLog?: boolean }) {
     if (!selectedCollectionId) {
       setError("Select a study first.");
       return;
     }
-    setTab("notes");
-    setTimeout(() => {
-      quickLogInputRef.current?.focus();
-    }, 0);
+    setNoteModalMode("create");
+    setEditingNoteId(null);
+    setNoteCollectionId(selectedCollectionId);
+    setNoteTitle(options?.seedFromQuickLog ? (quickLogTitle.trim() || deriveLogTitle(quickLogContent)) : "");
+    setNoteContent(options?.seedFromQuickLog ? quickLogContent : "");
+    setNoteLane(options?.seedFromQuickLog ? quickLogLane : "");
+    setNoteType("observation");
+    setNoteReferenceIds(options?.seedFromQuickLog ? [...quickLogRefIds] : []);
+    setNoteFileIds(options?.seedFromQuickLog ? [...quickLogFileIds] : []);
+    setNoteModalOpen(true);
   }
 
   function openEditNoteModal(note: ResearchNote) {
@@ -1586,6 +1729,63 @@ export function ResearchWorkspace({
     return ref.year ? `${firstAuthor} ${ref.year}` : `${firstAuthor}`;
   }
 
+  function deriveMarkdownTags(content: string): string[] {
+    const scrubbed = content
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`\n]*`/g, " ");
+    const tags = new Map<string, string>();
+    for (const match of scrubbed.matchAll(/(^|[\s(>])#([A-Za-z0-9][A-Za-z0-9_/-]*)/g)) {
+      const label = (match[2] || "").trim();
+      if (!label) continue;
+      const key = label.toLowerCase();
+      if (!tags.has(key)) tags.set(key, label);
+    }
+    return Array.from(tags.values());
+  }
+
+  function handleOpenLinkedReference(referenceId: string) {
+    const ref = references.find((item) => item.id === referenceId);
+    if (!ref) return;
+    setTab("references");
+    setRefSearch(ref.title);
+    openEditReferenceModal(ref);
+  }
+
+  function handleOpenReferenceByLabel(label: string, referenceIds: string[]) {
+    const ref = references.find((item) => referenceIds.includes(item.id) && formatRefLabel(item) === label)
+      || references.find((item) => referenceIds.includes(item.id));
+    if (!ref) return;
+    handleOpenLinkedReference(ref.id);
+  }
+
+  function resolveLinkedFileByLabel(label: string, fileIds: string[]): ResearchStudyFile | null {
+    const normalized = label.trim().toLowerCase();
+    return studyFiles.find((item) => fileIds.includes(item.id) && item.original_filename.trim().toLowerCase() === normalized)
+      || studyFiles.find((item) => fileIds.includes(item.id))
+      || null;
+  }
+
+  function handleOpenLinkedFileByLabel(label: string, fileIds: string[]) {
+    const file = resolveLinkedFileByLabel(label, fileIds);
+    if (!file) return;
+    void handleOpenStudyFile(file);
+  }
+
+  function handleFilterByTag(tag: string) {
+    setTab("notes");
+    setNoteSearchQuery(`#${tag}`);
+  }
+
+  function insertReferenceIntoNoteEditor(ref: ResearchReference) {
+    const token = `@[${formatRefLabel(ref)}] `;
+    if (noteEditorRef.current) {
+      noteEditorRef.current.chain().focus().insertContent(token).run();
+    } else {
+      setNoteContent((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}${token}`);
+    }
+    setNoteReferenceIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
+  }
+
   const mentionResults = useMemo(() => {
     if (!mentionOpen || !mentionQuery) return references.slice(0, 6);
     const q = mentionQuery.toLowerCase();
@@ -1624,7 +1824,7 @@ export function ResearchWorkspace({
     return { top, left };
   }
 
-  function openMention(textarea: HTMLTextAreaElement, target: "composer" | "inline" | "reply", replyNoteId?: string | null) {
+  function openMention(textarea: HTMLTextAreaElement, target: "composer" | "inline" | "reply" | "modal", replyNoteId?: string | null) {
     const coords = getTextareaCaretCoords(textarea);
     setMentionTarget(target);
     setMentionReplyNoteId(target === "reply" ? (replyNoteId || null) : null);
@@ -1655,6 +1855,11 @@ export function ResearchWorkspace({
       const after = inlineEditContent.substring(mentionCursorStart + mentionQuery.length);
       setInlineEditContent(before + label + " " + after);
       setInlineEditRefIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
+    } else if (mentionTarget === "modal") {
+      const before = noteContent.substring(0, mentionCursorStart - 1);
+      const after = noteContent.substring(mentionCursorStart + mentionQuery.length);
+      setNoteContent(before + label + " " + after);
+      setNoteReferenceIds((current) => current.includes(ref.id) ? current : [...current, ref.id]);
     } else if (mentionReplyNoteId) {
       const currentText = replyDrafts[mentionReplyNoteId] || "";
       const before = currentText.substring(0, mentionCursorStart - 1);
@@ -1693,13 +1898,15 @@ export function ResearchWorkspace({
     value: string,
     cursorPos: number,
     textarea: HTMLTextAreaElement,
-    target: "composer" | "inline" | "reply",
+    target: "composer" | "inline" | "reply" | "modal",
     options?: { replyNoteId?: string | null },
   ) {
     if (target === "composer") {
       setQuickLogContent(value);
     } else if (target === "inline") {
       setInlineEditContent(value);
+    } else if (target === "modal") {
+      setNoteContent(value);
     } else if (options?.replyNoteId) {
       setReplyDrafts((current) => ({ ...current, [options.replyNoteId!]: value }));
     }
@@ -3272,14 +3479,15 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   async function handleSaveNote() {
-    if (!selectedProjectId || !noteTitle.trim() || !noteContent.trim() || !noteCollectionId) return;
+    if (!selectedProjectId || !noteContent.trim() || !noteCollectionId) return;
     setSaving(true);
     setError("");
     setStatus("");
     try {
+      const resolvedTitle = noteTitle.trim() || deriveLogTitle(noteContent);
       if (noteModalMode === "create") {
         await api.createResearchNote(selectedProjectId, {
-          title: noteTitle.trim(),
+          title: resolvedTitle,
           content: noteContent.trim(),
           collection_id: noteCollectionId,
           lane: noteLane || null,
@@ -3290,7 +3498,7 @@ function newStudyResult(): ResearchStudyResult {
         setStatus("Log added.");
       } else if (editingNoteId) {
         await api.updateResearchNote(selectedProjectId, editingNoteId, {
-          title: noteTitle.trim(),
+          title: resolvedTitle,
           content: noteContent.trim(),
           collection_id: noteCollectionId,
           lane: noteLane || null,
@@ -3393,7 +3601,7 @@ function newStudyResult(): ResearchStudyResult {
     }
   }
 
-  async function handleUploadStudyFile(file: File, options?: { linkToQuickLog?: boolean; linkToInlineEdit?: boolean }) {
+  async function handleUploadStudyFile(file: File, options?: { linkToQuickLog?: boolean; linkToInlineEdit?: boolean; linkToNoteModal?: boolean }) {
     if (!selectedProjectId || !selectedCollectionId) return;
     setUploadingStudyFile(true);
     setError("");
@@ -3406,6 +3614,9 @@ function newStudyResult(): ResearchStudyResult {
       if (options?.linkToInlineEdit) {
         setInlineEditFileIds((current) => (current.includes(created.id) ? current : [...current, created.id]));
       }
+      if (options?.linkToNoteModal) {
+        setNoteFileIds((current) => (current.includes(created.id) ? current : [...current, created.id]));
+      }
       if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
       }
@@ -3416,6 +3627,7 @@ function newStudyResult(): ResearchStudyResult {
       setUploadingStudyFile(false);
       if (quickLogFileInputRef.current) quickLogFileInputRef.current.value = "";
       if (inlineEditFileInputRef.current) inlineEditFileInputRef.current.value = "";
+      if (noteModalFileInputRef.current) noteModalFileInputRef.current.value = "";
     }
   }
 
@@ -3939,7 +4151,7 @@ function newStudyResult(): ResearchStudyResult {
             <button
               type="button"
               className="meetings-new-btn delivery-tab-action"
-              onClick={openCreateNoteModal}
+              onClick={() => openCreateNoteModal()}
               disabled={!selectedCollectionId}
             >
               <FontAwesomeIcon icon={faPlus} /> New Log
@@ -4967,9 +5179,18 @@ function newStudyResult(): ResearchStudyResult {
         promotedToSection,
       };
     };
-    const searchLower = noteSearchQuery.toLowerCase();
+    const searchLower = noteSearchQuery.trim().toLowerCase();
     const visibleNotes = searchLower
-      ? notes.filter((note) => note.title.toLowerCase().includes(searchLower) || note.content.toLowerCase().includes(searchLower))
+      ? notes.filter((note) => {
+        if (searchLower.startsWith("#")) {
+          return note.tags.some((tag) => tag.toLowerCase().includes(searchLower.slice(1)));
+        }
+        return (
+          note.title.toLowerCase().includes(searchLower) ||
+          note.content.toLowerCase().includes(searchLower) ||
+          note.tags.some((tag) => tag.toLowerCase().includes(searchLower))
+        );
+      })
       : notes;
     const sortedNotes = [...visibleNotes].sort((a, b) => b.created_at.localeCompare(a.created_at));
     const unprocessedNotes = sortedNotes.filter((n) => noteWorkflow(n).state === "Unprocessed");
@@ -4978,6 +5199,30 @@ function newStudyResult(): ResearchStudyResult {
     const unassignedLogs = notes.filter((note) => note.collection_id === selectedCollectionId && !noteIterationState(note.id).assigned);
     const allVisibleSelected = orderedNotes.length > 0 && orderedNotes.every((note) => selectedInboxLogIds.has(note.id));
     const fileLookup = new Map(studyFiles.map((item) => [item.id, item]));
+
+    function renderReferencedFilePreviews(content: string, fileIds: string[]) {
+      const files = extractMarkdownFileLabels(content)
+        .map((label) => resolveLinkedFileByLabel(label, fileIds))
+        .filter((item): item is ResearchStudyFile => Boolean(item))
+        .filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index)
+        .filter((item) => isImageMime(item.mime_type) || isCsvMime(item.mime_type, item.original_filename));
+
+      if (files.length === 0) return null;
+      return (
+        <div className="research-file-preview-list">
+          {files.map((file) => (
+            <ResearchFilePreviewCard
+              key={`file-preview-${file.id}`}
+              file={file}
+              projectId={selectedProjectId}
+              collectionId={selectedCollectionId}
+              spaceId={activeResearchSpaceId || undefined}
+            />
+          ))}
+        </div>
+      );
+    }
+
     const renderReply = (reply: ResearchNoteReply) => (
       <div key={reply.id} className="research-log-reply">
         <LogAvatar
@@ -4990,10 +5235,29 @@ function newStudyResult(): ResearchStudyResult {
             <strong>{reply.author_name || "Unknown user"}</strong>
             <span>{formatLogTimestamp(reply.created_at)}</span>
           </div>
-          <div className="research-log-text chat-markdown">{renderMarkdown(reply.content)}</div>
+          <div className="research-log-text chat-markdown">
+            {renderMarkdown(reply.content, {
+              onReferenceClick: (label) => handleOpenReferenceByLabel(label, reply.linked_reference_ids),
+              onTagClick: handleFilterByTag,
+              onFileClick: (label) => handleOpenLinkedFileByLabel(label, []),
+            })}
+          </div>
           {reply.linked_reference_ids.length > 0 ? (
             <div className="research-log-reply-meta">
-              <span>{reply.linked_reference_ids.length} {reply.linked_reference_ids.length === 1 ? "citation" : "citations"}</span>
+              {reply.linked_reference_ids.map((referenceId) => {
+                const ref = references.find((item) => item.id === referenceId);
+                if (!ref) return null;
+                return (
+                  <button
+                    key={`${reply.id}-ref-${referenceId}`}
+                    type="button"
+                    className="chip small"
+                    onClick={() => handleOpenLinkedReference(referenceId)}
+                  >
+                    {formatRefLabel(ref)}
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -5074,6 +5338,9 @@ function newStudyResult(): ResearchStudyResult {
                 <>
                   <button type="button" className="ghost docs-action-btn" title="Edit" onClick={() => startInlineEdit(note)}>
                     <FontAwesomeIcon icon={faPen} />
+                  </button>
+                  <button type="button" className="ghost docs-action-btn" title="Editor" onClick={() => openEditNoteModal(note)}>
+                    <FontAwesomeIcon icon={faBookOpen} />
                   </button>
                   <button
                     type="button"
@@ -5160,7 +5427,41 @@ function newStudyResult(): ResearchStudyResult {
           ) : (
             <div className="research-log-body">
               <strong>{note.title}</strong>
-              <div className="research-log-text chat-markdown">{renderMarkdown(note.content)}</div>
+              <div className="research-log-text chat-markdown">
+                {renderMarkdown(note.content, {
+                  onReferenceClick: (label) => handleOpenReferenceByLabel(label, note.linked_reference_ids),
+                  onTagClick: handleFilterByTag,
+                  onFileClick: (label) => handleOpenLinkedFileByLabel(label, note.linked_file_ids),
+                })}
+              </div>
+              {renderReferencedFilePreviews(note.content, note.linked_file_ids)}
+              {note.tags.length > 0 ? (
+                <div className="research-chip-group">
+                  {note.tags.map((tag) => (
+                    <button key={`${note.id}-tag-${tag}`} type="button" className="chip small" onClick={() => handleFilterByTag(tag)}>
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {note.linked_reference_ids.length > 0 ? (
+                <div className="research-chip-group">
+                  {note.linked_reference_ids.map((referenceId) => {
+                    const ref = references.find((item) => item.id === referenceId);
+                    if (!ref) return null;
+                    return (
+                      <button
+                        key={`${note.id}-ref-${referenceId}`}
+                        type="button"
+                        className="chip small"
+                        onClick={() => handleOpenLinkedReference(referenceId)}
+                      >
+                        {formatRefLabel(ref)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
               {note.linked_file_ids.length > 0 ? (
                 <div className="research-chip-group">
                   {note.linked_file_ids.map((fileId) => {
@@ -5342,6 +5643,13 @@ function newStudyResult(): ResearchStudyResult {
                 onClick={() => quickLogFileInputRef.current?.click()}
               >
                 <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Attach"}
+              </button>
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                onClick={() => openCreateNoteModal({ seedFromQuickLog: true })}
+              >
+                <FontAwesomeIcon icon={faBookOpen} /> Editor
               </button>
               <button
                 type="button"
@@ -7554,62 +7862,142 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   function renderNoteModal() {
-    const linkableReferences = allReferences.filter((item) => !noteCollectionId || item.collection_id === noteCollectionId);
+    const linkableReferences = Array.from(
+      new Map(
+        [...references, ...allReferences]
+          .filter((item) => !noteCollectionId || item.collection_id === noteCollectionId)
+          .map((item) => [item.id, item]),
+      ).values(),
+    );
+    const linkableReferenceMap = new Map(linkableReferences.map((item) => [item.id, item]));
+    const derivedTags = deriveMarkdownTags(noteContent);
+    const editorReferenceSuggestions = linkableReferences.map((item) => ({
+      id: item.id,
+      label: formatRefLabel(item),
+      meta: item.authors.join(", "),
+    }));
+    const editorFileSuggestions = studyFiles
+      .filter((item) => item.collection_id === noteCollectionId)
+      .map((item) => ({
+        id: item.id,
+        label: item.original_filename,
+        meta: item.mime_type || undefined,
+      }));
+    const citedPreviewFiles = extractMarkdownFileLabels(noteContent)
+      .map((label) => resolveLinkedFileByLabel(label, noteFileIds))
+      .filter((item): item is ResearchStudyFile => Boolean(item))
+      .filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
 
     return (
       <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setNoteModalOpen(false)}>
-        <div className="modal-card settings-modal-card" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-card settings-modal-card research-editor-modal" onClick={(event) => event.stopPropagation()}>
           <div className="modal-head">
             <h3>{noteModalMode === "create" ? "New Log" : "Edit Log"}</h3>
-            <button type="button" className="ghost docs-action-btn" onClick={() => setNoteModalOpen(false)} title="Close">
-              <FontAwesomeIcon icon={faXmark} />
-            </button>
-          </div>
-          <div className="form-grid">
-            <label className="full-span">
-              Study *
-              <select value={noteCollectionId} onChange={(event) => setNoteCollectionId(event.target.value)}>
-                <option value="">Select study</option>
-                {activeCollections.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="full-span">
-              Title *
-              <input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} autoFocus />
-            </label>
-            <label>
-              Lane
-              {renderLanePills(noteLane, setNoteLane)}
-            </label>
-            <label className="full-span">
-              Content *
-              <textarea value={noteContent} onChange={(event) => setNoteContent(event.target.value)} rows={8} />
-            </label>
-            <div className="full-span">
-              <strong>References</strong>
-              <div className="research-checkbox-list">
-                {linkableReferences.length === 0 ? <span className="muted-small">No references.</span> : null}
-                {linkableReferences.map((item) => (
-                  <label key={item.id} className="research-check-item">
-                    <input
-                      type="checkbox"
-                      checked={noteReferenceIds.includes(item.id)}
-                      onChange={() => setNoteReferenceIds((current) => toggleListValue(current, item.id))}
-                    />
-                    <span>{item.title}</span>
-                  </label>
-                ))}
-              </div>
+            <div className="modal-head-actions">
+              <button type="button" disabled={!noteCollectionId || !noteContent.trim() || saving} onClick={handleSaveNote}>
+                {saving ? "Saving..." : noteModalMode === "create" ? "Add Log" : "Save Log"}
+              </button>
+              <button type="button" className="ghost docs-action-btn" onClick={() => setNoteModalOpen(false)} title="Close">
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
             </div>
           </div>
-          <div className="row-actions">
-            <button type="button" disabled={!noteCollectionId || !noteTitle.trim() || !noteContent.trim() || saving} onClick={handleSaveNote}>
-              {saving ? "Saving..." : noteModalMode === "create" ? "Add Log" : "Save Log"}
-            </button>
+          <div className="research-editor-shell">
+            <div className="research-editor-main">
+              <div className="research-editor-meta">
+                <label>
+                  Title
+                  <input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} autoFocus />
+                </label>
+              </div>
+              <div className="research-editor-workbench mode-write">
+                <div className="research-editor-pane research-editor-write-pane">
+                  <StudyLogRichEditor
+                    key={`${noteModalMode}:${editingNoteId ?? "new"}:${noteCollectionId}`}
+                    value={noteContent}
+                    placeholder="Write"
+                    onChange={setNoteContent}
+                    referenceSuggestions={editorReferenceSuggestions}
+                    fileSuggestions={editorFileSuggestions}
+                    linkedFiles={citedPreviewFiles}
+                    projectId={selectedProjectId}
+                    collectionId={selectedCollectionId}
+                    spaceId={activeResearchSpaceId || undefined}
+                    tagSuggestions={noteTagOptions}
+                    onReferenceLinked={(referenceId) => {
+                      setNoteReferenceIds((current) => current.includes(referenceId) ? current : [...current, referenceId]);
+                    }}
+                    onFileLinked={(fileId) => {
+                      setNoteFileIds((current) => current.includes(fileId) ? current : [...current, fileId]);
+                    }}
+                    onReady={(editor) => {
+                      noteEditorRef.current = editor;
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+            <aside className="research-editor-sidebar">
+              <label>
+                Lane
+                {renderLanePills(noteLane, setNoteLane)}
+              </label>
+              <div className="research-editor-side-block">
+                <strong>Tags</strong>
+                <div className="research-chip-group">
+                  {derivedTags.length === 0 ? <span className="muted-small">No tags</span> : null}
+                  {derivedTags.map((tag) => (
+                    <button key={`note-tag-${tag}`} type="button" className="chip small" onClick={() => handleFilterByTag(tag)}>
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="research-editor-side-block">
+                <div className="research-editor-side-head">
+                  <strong>Files</strong>
+                  <button type="button" className="ghost icon-text-button small" disabled={uploadingStudyFile} onClick={() => noteModalFileInputRef.current?.click()}>
+                    <FontAwesomeIcon icon={faFileArrowUp} /> {uploadingStudyFile ? "Uploading..." : "Attach"}
+                  </button>
+                </div>
+                <input
+                  ref={noteModalFileInputRef}
+                  type="file"
+                  className="bib-pdf-input"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void handleUploadStudyFile(file, { linkToNoteModal: true });
+                  }}
+                />
+                <div className="research-chip-group">
+                  {noteFileIds.length === 0 ? <span className="muted-small">No files</span> : null}
+                  {noteFileIds.map((fileId) => {
+                    const file = studyFiles.find((item) => item.id === fileId);
+                    if (!file) return null;
+                    return (
+                      <button key={`note-file-${fileId}`} type="button" className="chip small" onClick={() => void handleOpenStudyFile(file)}>
+                        {file.original_filename}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="research-editor-side-block">
+                <strong>References</strong>
+                <div className="research-chip-group">
+                  {noteReferenceIds.length === 0 ? <span className="muted-small">Use @ in the editor</span> : null}
+                  {noteReferenceIds.map((referenceId) => {
+                    const ref = linkableReferenceMap.get(referenceId) || references.find((item) => item.id === referenceId) || allReferences.find((item) => item.id === referenceId);
+                    if (!ref) return null;
+                    return (
+                      <button key={`note-ref-${referenceId}`} type="button" className="chip small" onClick={() => handleOpenLinkedReference(referenceId)}>
+                        {formatRefLabel(ref)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
       </div>

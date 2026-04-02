@@ -4,11 +4,13 @@ export default defineConfig(function (_a) {
     var mode = _a.mode;
     var env = loadEnv(mode, ".", "");
     var portValue = env.VITE_DEV_PORT;
+    var publicBase = env.VITE_PUBLIC_BASE || "/";
     if (!portValue) {
         throw new Error("VITE_DEV_PORT must be set in frontend .env.");
     }
     return {
         plugins: [react()],
+        base: publicBase,
         server: {
             port: Number(portValue),
             strictPort: true,

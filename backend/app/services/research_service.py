@@ -1142,6 +1142,28 @@ class ResearchService:
         return slug[:64] or "tag"
 
     @staticmethod
+    def _extract_note_tags(content: str | None) -> list[str]:
+        if not content:
+            return []
+        scrubbed = re.sub(r"```[\s\S]*?```", " ", content)
+        scrubbed = re.sub(r"`[^`\n]*`", " ", scrubbed)
+        tags: list[str] = []
+        seen: set[str] = set()
+        for match in re.finditer(r"(^|[\s(>])#([A-Za-z0-9][A-Za-z0-9_/-]*)", scrubbed):
+            label = (match.group(2) or "").strip()
+            if not label:
+                continue
+            canonical = label.lower()
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            tags.append(label)
+        return tags
+
+    def _merged_note_tags(self, content: str | None, explicit_tags: list[str] | None) -> list[str]:
+        return self._normalize_tag_labels([*(explicit_tags or []), *self._extract_note_tags(content)])
+
+    @staticmethod
     def _normalize_concept_labels(labels: list[str] | None) -> list[str]:
         normalized: list[str] = []
         seen: set[str] = set()
@@ -2239,6 +2261,46 @@ class ResearchService:
             ).all()
         )
         return items, total
+
+    def _flatten_note_tags(self, tag_rows: list[list[str] | None]) -> list[str]:
+        return self._normalize_tag_labels([tag for row in tag_rows for tag in (row or [])])
+
+    def list_note_tags(
+        self,
+        project_id: uuid.UUID,
+        *,
+        collection_id: uuid.UUID | None = None,
+    ) -> list[str]:
+        self._get_project(project_id)
+        stmt = select(ResearchNote.tags).where(ResearchNote.project_id == project_id)
+        if collection_id:
+            stmt = stmt.where(ResearchNote.collection_id == collection_id)
+        rows = list(self.db.scalars(stmt).all())
+        return self._flatten_note_tags(rows)
+
+    def list_note_tags_for_space(
+        self,
+        space_id: uuid.UUID,
+        *,
+        collection_id: uuid.UUID | None = None,
+    ) -> list[str]:
+        self._get_space_record(space_id)
+        stmt = select(ResearchNote.tags).where(ResearchNote.research_space_id == space_id)
+        if collection_id:
+            stmt = stmt.where(ResearchNote.collection_id == collection_id)
+        rows = list(self.db.scalars(stmt).all())
+        return self._flatten_note_tags(rows)
+
+    def list_note_tags_any(
+        self,
+        *,
+        collection_id: uuid.UUID | None = None,
+    ) -> list[str]:
+        stmt = select(ResearchNote.tags)
+        if collection_id:
+            stmt = stmt.where(ResearchNote.collection_id == collection_id)
+        rows = list(self.db.scalars(stmt).all())
+        return self._flatten_note_tags(rows)
 
     def get_reference(self, project_id: uuid.UUID, reference_id: uuid.UUID) -> ResearchReference:
         item = self.db.scalar(
@@ -4351,7 +4413,7 @@ class ResearchService:
             collection_id=collection_id,
             lane=self._note_lane(lane),
             note_type=self._note_type(note_type),
-            tags=tags or [],
+            tags=self._merged_note_tags(content, tags),
             author_member_id=author_member_id,
             user_account_id=user_account_id,
         )
@@ -4384,7 +4446,7 @@ class ResearchService:
                 collection_id=kwargs.get("collection_id"),
                 lane=self._note_lane(kwargs.get("lane")),
                 note_type=self._note_type(kwargs.get("note_type") or "observation"),
-                tags=kwargs.get("tags") or [],
+                tags=self._merged_note_tags(kwargs.get("content"), kwargs.get("tags")),
                 author_member_id=kwargs.get("author_member_id"),
                 user_account_id=kwargs.get("user_account_id"),
             )
@@ -4420,7 +4482,7 @@ class ResearchService:
             collection_id=collection_id,
             lane=self._note_lane(kwargs.get("lane")),
             note_type=self._note_type(kwargs.get("note_type") or "observation"),
-            tags=kwargs.get("tags") or [],
+            tags=self._merged_note_tags(kwargs.get("content"), kwargs.get("tags")),
             author_member_id=kwargs.get("author_member_id"),
             user_account_id=kwargs.get("user_account_id"),
         )
@@ -4463,7 +4525,9 @@ class ResearchService:
         if note_type is not None:
             item.note_type = self._note_type(note_type)
         if tags is not None:
-            item.tags = tags
+            item.tags = self._merged_note_tags(item.content, tags)
+        elif content is not None:
+            item.tags = self._merged_note_tags(item.content, item.tags)
         if linked_file_ids is not None:
             self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
             allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
@@ -4489,7 +4553,9 @@ class ResearchService:
         if kwargs.get("note_type") is not None:
             item.note_type = self._note_type(kwargs["note_type"])
         if kwargs.get("tags") is not None:
-            item.tags = kwargs["tags"]
+            item.tags = self._merged_note_tags(item.content, kwargs["tags"])
+        elif kwargs.get("content") is not None:
+            item.tags = self._merged_note_tags(item.content, item.tags)
         if kwargs.get("linked_file_ids") is not None:
             self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
             allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}
@@ -4517,7 +4583,9 @@ class ResearchService:
         if kwargs.get("note_type") is not None:
             item.note_type = self._note_type(kwargs["note_type"])
         if kwargs.get("tags") is not None:
-            item.tags = kwargs["tags"]
+            item.tags = self._merged_note_tags(item.content, kwargs["tags"])
+        elif kwargs.get("content") is not None:
+            item.tags = self._merged_note_tags(item.content, item.tags)
         if kwargs.get("linked_file_ids") is not None:
             self.db.execute(delete(research_note_files).where(research_note_files.c.note_id == item.id))
             allowed_ids = {str(file.id) for file in self.list_study_files_for_collection(item.collection_id)}

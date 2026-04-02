@@ -1,6 +1,12 @@
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
+
+type RenderMarkdownOptions = {
+  onReferenceClick?: (label: string) => void;
+  onTagClick?: (tag: string) => void;
+  onFileClick?: (label: string) => void;
+};
 
 function renderMath(expression: string, displayMode: boolean, key: string): ReactNode {
   try {
@@ -15,49 +21,90 @@ function renderMath(expression: string, displayMode: boolean, key: string): Reac
   }
 }
 
-function renderInlineMarkdown(text: string): ReactNode[] {
+function renderInlineText(text: string, options?: RenderMarkdownOptions): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(@\[([^\]]+)\]|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\$([^$\n]+?)\$)/g;
+  const pattern = /(@\[([^\]]+)\]|!\[([^\]]+)\]|(^|[\s(>])#([A-Za-z0-9][A-Za-z0-9_/-]*))/g;
   let cursor = 0;
   let key = 0;
 
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
-    if (start > cursor) {
-      nodes.push(text.slice(cursor, start));
-    }
     if (match[2]) {
+      if (start > cursor) {
+        nodes.push(text.slice(cursor, start));
+      }
+      const label = match[2];
       nodes.push(
-        <span key={`markdown-inline-${key++}`} className="mention-chip">{match[2]}</span>
+        options?.onReferenceClick ? (
+          <button
+            key={`markdown-inline-text-${key++}`}
+            type="button"
+            className="mention-chip mention-chip-button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.preventDefault();
+              options.onReferenceClick?.(label);
+            }}
+          >
+            {label}
+          </button>
+        ) : (
+          <span key={`markdown-inline-text-${key++}`} className="mention-chip">{label}</span>
+        )
       );
-    } else if (match[3] && match[4]) {
-      const href = match[4];
-      const external = /^https?:\/\//.test(href);
-      nodes.push(
-        <a
-          key={`markdown-inline-${key++}`}
-          href={href}
-          target={external ? "_blank" : undefined}
-          rel={external ? "noreferrer" : undefined}
-        >
-          {match[3]}
-        </a>
-      );
-    } else if (match[5]) {
-      nodes.push(
-        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[5]}`}>
-          [{match[5]}]
-        </a>
-      );
-    } else if (match[6]) {
-      nodes.push(<strong key={`markdown-inline-${key++}`}>{match[6]}</strong>);
-    } else if (match[7]) {
-      nodes.push(<em key={`markdown-inline-${key++}`}>{match[7]}</em>);
-    } else if (match[8]) {
-      nodes.push(<code key={`markdown-inline-${key++}`}>{match[8]}</code>);
-    } else if (match[9]) {
-      nodes.push(renderMath(match[9], false, `markdown-inline-${key++}`));
+      cursor = start + match[0].length;
+      continue;
     }
+
+    if (match[3]) {
+      const label = match[3];
+      if (start > cursor) {
+        nodes.push(text.slice(cursor, start));
+      }
+      nodes.push(
+        options?.onFileClick ? (
+          <button
+            key={`markdown-inline-text-${key++}`}
+            type="button"
+            className="mention-chip mention-chip-button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.preventDefault();
+              options.onFileClick?.(label);
+            }}
+          >
+            {label}
+          </button>
+        ) : (
+          <span key={`markdown-inline-text-${key++}`} className="mention-chip">{label}</span>
+        )
+      );
+      cursor = start + match[0].length;
+      continue;
+    }
+
+    const prefix = match[4] || "";
+    const tag = match[5] || "";
+    const tokenStart = start + prefix.length;
+    if (tokenStart > cursor) {
+      nodes.push(text.slice(cursor, tokenStart));
+    }
+    nodes.push(prefix);
+    nodes.push(
+      options?.onTagClick ? (
+        <button
+          key={`markdown-inline-text-${key++}`}
+          type="button"
+          className="tag-link-button"
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            options.onTagClick?.(tag);
+          }}
+        >
+          #{tag}
+        </button>
+      ) : (
+        <span key={`markdown-inline-text-${key++}`} className="tag-link-inline">#{tag}</span>
+      )
+    );
     cursor = start + match[0].length;
   }
   if (cursor < text.length) {
@@ -66,7 +113,97 @@ function renderInlineMarkdown(text: string): ReactNode[] {
   return nodes;
 }
 
-export function renderMarkdown(content: string): ReactNode[] {
+function renderInlineMarkdown(text: string, options?: RenderMarkdownOptions): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(@\[([^\]]+)\]|!\[([^\]]+)\]|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\$([^$\n]+?)\$)/g;
+  let cursor = 0;
+  let key = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > cursor) {
+      nodes.push(...renderInlineText(text.slice(cursor, start), options));
+    }
+    if (match[2]) {
+      const label = match[2];
+      nodes.push(options?.onReferenceClick ? (
+        <button
+          key={`markdown-inline-${key++}`}
+          type="button"
+          className="mention-chip mention-chip-button"
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            options.onReferenceClick?.(label);
+          }}
+        >
+          {label}
+        </button>
+      ) : (
+        <span key={`markdown-inline-${key++}`} className="mention-chip">{label}</span>
+      ));
+    } else if (match[3]) {
+      const label = match[3];
+      nodes.push(options?.onFileClick ? (
+        <button
+          key={`markdown-inline-${key++}`}
+          type="button"
+          className="mention-chip mention-chip-button"
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            options.onFileClick?.(label);
+          }}
+        >
+          {label}
+        </button>
+      ) : (
+        <span key={`markdown-inline-${key++}`} className="mention-chip">{label}</span>
+      ));
+    } else if (match[4] && match[5]) {
+      const href = match[5];
+      const external = /^https?:\/\//.test(href);
+      nodes.push(
+        <a
+          key={`markdown-inline-${key++}`}
+          href={href}
+          target={external ? "_blank" : undefined}
+          rel={external ? "noreferrer" : undefined}
+        >
+          {match[4]}
+        </a>
+      );
+    } else if (match[6]) {
+      nodes.push(
+        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[6]}`}>
+          [{match[6]}]
+        </a>
+      );
+    } else if (match[7]) {
+      nodes.push(<strong key={`markdown-inline-${key++}`}>{match[7]}</strong>);
+    } else if (match[8]) {
+      nodes.push(<em key={`markdown-inline-${key++}`}>{match[8]}</em>);
+    } else if (match[9]) {
+      nodes.push(<code key={`markdown-inline-${key++}`}>{match[9]}</code>);
+    } else if (match[10]) {
+      nodes.push(renderMath(match[10], false, `markdown-inline-${key++}`));
+    }
+    cursor = start + match[0].length;
+  }
+  if (cursor < text.length) {
+    nodes.push(...renderInlineText(text.slice(cursor), options));
+  }
+  return nodes;
+}
+
+function isTableDivider(line: string): boolean {
+  return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line);
+}
+
+function parseTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+export function renderMarkdown(content: string, options?: RenderMarkdownOptions): ReactNode[] {
   const normalizedContent = content
     .replace(/\r\n/g, "\n")
     .replace(/&nbsp;/gi, " ")
@@ -80,6 +217,45 @@ export function renderMarkdown(content: string): ReactNode[] {
     const line = lines[i];
     if (!line.trim()) {
       i += 1;
+      continue;
+    }
+
+    if (
+      line.includes("|") &&
+      i + 1 < lines.length &&
+      isTableDivider(lines[i + 1])
+    ) {
+      const headers = parseTableRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) {
+        rows.push(parseTableRow(lines[i]));
+        i += 1;
+      }
+      output.push(
+        <div key={`markdown-block-${key++}`} className="markdown-table-wrap">
+          <table className="markdown-table">
+            <thead>
+              <tr>
+                {headers.map((header, index) => (
+                  <th key={`markdown-th-${index}`}>{renderInlineMarkdown(header, options)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={`markdown-row-${rowIndex}`}>
+                  {headers.map((_, colIndex) => (
+                    <td key={`markdown-cell-${rowIndex}-${colIndex}`}>
+                      {renderInlineMarkdown(row[colIndex] || "", options)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
       continue;
     }
 
@@ -118,9 +294,9 @@ export function renderMarkdown(content: string): ReactNode[] {
     if (heading) {
       const level = heading[1].length;
       const text = heading[2];
-      if (level === 1) output.push(<h1 key={`markdown-block-${key++}`}>{renderInlineMarkdown(text)}</h1>);
-      else if (level === 2) output.push(<h2 key={`markdown-block-${key++}`}>{renderInlineMarkdown(text)}</h2>);
-      else output.push(<h3 key={`markdown-block-${key++}`}>{renderInlineMarkdown(text)}</h3>);
+      if (level === 1) output.push(<h1 key={`markdown-block-${key++}`}>{renderInlineMarkdown(text, options)}</h1>);
+      else if (level === 2) output.push(<h2 key={`markdown-block-${key++}`}>{renderInlineMarkdown(text, options)}</h2>);
+      else output.push(<h3 key={`markdown-block-${key++}`}>{renderInlineMarkdown(text, options)}</h3>);
       i += 1;
       continue;
     }
@@ -128,7 +304,7 @@ export function renderMarkdown(content: string): ReactNode[] {
     if (/^[-*]\s+/.test(line)) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
-        items.push(<li key={`markdown-li-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^[-*]\s+/, ""))}</li>);
+        items.push(<li key={`markdown-li-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^[-*]\s+/, ""), options)}</li>);
         i += 1;
       }
       output.push(<ul key={`markdown-block-${key++}`}>{items}</ul>);
@@ -138,7 +314,7 @@ export function renderMarkdown(content: string): ReactNode[] {
     if (/^\d+\.\s+/.test(line)) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
-        items.push(<li key={`markdown-oli-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^\d+\.\s+/, ""))}</li>);
+        items.push(<li key={`markdown-oli-${key++}`}>{renderInlineMarkdown(lines[i].replace(/^\d+\.\s+/, ""), options)}</li>);
         i += 1;
       }
       output.push(<ol key={`markdown-block-${key++}`}>{items}</ol>);
@@ -162,7 +338,7 @@ export function renderMarkdown(content: string): ReactNode[] {
     if (!paragraphText) {
       continue;
     }
-    output.push(<p key={`markdown-block-${key++}`}>{renderInlineMarkdown(paragraphText)}</p>);
+    output.push(<p key={`markdown-block-${key++}`}>{renderInlineMarkdown(paragraphText, options)}</p>);
   }
 
   return output;

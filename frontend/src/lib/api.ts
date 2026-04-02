@@ -2619,6 +2619,12 @@ export const api = {
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/projects/${projectId}/research/notes?${q}`);
   },
+  listResearchNoteTags(projectId: string, opts?: { space_id?: string; collection_id?: string }): Promise<{ items: string[] }> {
+    const q = new URLSearchParams();
+    if (opts?.space_id) q.set("space_id", opts.space_id);
+    if (opts?.collection_id) q.set("collection_id", opts.collection_id);
+    return request(`/projects/${projectId}/research/note-tags?${q}`);
+  },
   createResearchNote(projectId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchNote> {
     const q = spaceId ? `?space_id=${spaceId}` : "";
     return request(`/projects/${projectId}/research/notes${q}`, { method: "POST", body: JSON.stringify(data) });

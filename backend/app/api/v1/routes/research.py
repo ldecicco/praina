@@ -70,6 +70,7 @@ from app.schemas.research import (
     NoteCreate,
     NoteReplyCreate,
     NoteReplyRead,
+    NoteTagListRead,
     StudyFileListRead,
     StudyFileRead,
     NoteListRead,
@@ -2437,6 +2438,35 @@ def list_notes(
         page_size=page_size,
         total=total,
     )
+
+
+@router.get("/{project_id}/research/note-tags", response_model=NoteTagListRead)
+def list_note_tags(
+    project_id: uuid.UUID,
+    space_id: str | None = Query(default=None),
+    collection_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> NoteTagListRead:
+    svc = ResearchService(db)
+    try:
+        items = (
+            svc.list_note_tags_for_space(
+                uuid.UUID(space_id),
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+            )
+            if space_id else
+            svc.list_note_tags_any(
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+            )
+            if project_id == GLOBAL_RESEARCH_PROJECT_ID else
+            svc.list_note_tags(
+                project_id,
+                collection_id=uuid.UUID(collection_id) if collection_id else None,
+            )
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return NoteTagListRead(items=items)
 
 
 @router.post("/{project_id}/research/notes", response_model=NoteRead, status_code=status.HTTP_201_CREATED)

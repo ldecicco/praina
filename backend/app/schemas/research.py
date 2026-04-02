@@ -680,6 +680,10 @@ class NoteListRead(PaginatedResponse):
     items: list[NoteRead] = Field(default_factory=list)
 
 
+class NoteTagListRead(BaseModel):
+    items: list[str] = Field(default_factory=list)
+
+
 class NoteReferencesPayload(BaseModel):
     reference_ids: list[str] = Field(default_factory=list)
 

@@ -9554,6 +9554,10 @@ tr.row-selected {
   color: var(--text-bright);
 }
 
+.research-lane-select {
+  display: none;
+}
+
 .research-log-lane-pills {
   flex: 1 1 320px;
 }
@@ -12966,6 +12970,14 @@ button.danger:hover:not(:disabled) {
 
   .suggestion-panel {
     max-width: 100%;
+  }
+
+  /* ── Lane pills → dropdown on mobile ── */
+  .research-lane-pills {
+    display: none;
+  }
+  .research-lane-select {
+    display: inline-block;
   }
 
   /* ── Reset collapsed sidebar styles on mobile ── */

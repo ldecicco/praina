@@ -4902,25 +4902,33 @@ function newStudyResult(): ResearchStudyResult {
     const noneLabel = options?.noneLabel || "No lane";
     const className = options?.className ? ` ${options.className}` : "";
     return (
-      <div className={`research-lane-pills${className}`}>
-        <button
-          type="button"
-          className={`research-lane-pill${value === "" ? " active" : ""}`}
-          onClick={() => onChange("")}
-        >
-          {noneLabel}
-        </button>
-        {NOTE_LANE_OPTIONS.map(([laneValue, laneLabel]) => (
+      <>
+        <div className={`research-lane-pills${className}`}>
           <button
-            key={laneValue}
             type="button"
-            className={`research-lane-pill${value === laneValue ? " active" : ""}`}
-            onClick={() => onChange(laneValue)}
+            className={`research-lane-pill${value === "" ? " active" : ""}`}
+            onClick={() => onChange("")}
           >
-            {laneLabel}
+            {noneLabel}
           </button>
-        ))}
-      </div>
+          {NOTE_LANE_OPTIONS.map(([laneValue, laneLabel]) => (
+            <button
+              key={laneValue}
+              type="button"
+              className={`research-lane-pill${value === laneValue ? " active" : ""}`}
+              onClick={() => onChange(laneValue)}
+            >
+              {laneLabel}
+            </button>
+          ))}
+        </div>
+        <select className={`research-lane-select${className}`} value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">{noneLabel}</option>
+          {NOTE_LANE_OPTIONS.map(([laneValue, laneLabel]) => (
+            <option key={laneValue} value={laneValue}>{laneLabel}</option>
+          ))}
+        </select>
+      </>
     );
   }
 

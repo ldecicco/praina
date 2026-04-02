@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -84,6 +84,8 @@ def embed_backfill(
     current_user: UserAccount = Depends(get_current_user),
 ) -> EmbedBackfillResponse:
     """Backfill embeddings for all un-embedded chunks in a project."""
+    if current_user.platform_role == "student":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students cannot perform this action.")
     svc = EmbeddingService(db)
     result = svc.embed_all_unembedded(project_id)
     db.commit()

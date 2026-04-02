@@ -415,6 +415,7 @@ export function ResearchWorkspace({
   accessToken,
   bibliographyOnly = false,
   isAdmin = false,
+  isStudent = false,
   currentProject = null,
   onClearResearchSpaceFilter,
   navigationState,
@@ -431,6 +432,7 @@ export function ResearchWorkspace({
   accessToken: string;
   bibliographyOnly?: boolean;
   isAdmin?: boolean;
+  isStudent?: boolean;
   currentProject?: Project | null;
   onClearResearchSpaceFilter?: () => void;
   navigationState?: {
@@ -2730,7 +2732,7 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   async function persistBibliography(options?: { allowDuplicate?: boolean; reuseExistingId?: string | null }) {
-    if (!bibliographyTitle.trim()) return;
+    if (!bibliographyTitle.trim() && !bibliographyBibtexInput.trim()) return;
     setSaving(true);
     setError("");
     setStatus("");
@@ -2767,7 +2769,7 @@ function newStudyResult(): ResearchStudyResult {
           await api.linkBibliographyReference(selectedProjectId, {
             bibliography_reference_id: finalItem.id,
             collection_id: selectedCollectionId,
-            reading_status: "unread",
+            reading_status: isStudent ? "to_review" : "unread",
           }, activeResearchSpaceId || undefined);
           await refreshResearchDataAfterReferenceChange(selectedCollectionId);
           await loadBibliography();
@@ -3632,9 +3634,11 @@ function newStudyResult(): ResearchStudyResult {
                 All Studies
               </button>
             ) : null}
-            <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
-              <FontAwesomeIcon icon={faPlus} /> New Study
-            </button>
+            {!isStudent ? (
+              <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
+                <FontAwesomeIcon icon={faPlus} /> New Study
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -3833,25 +3837,27 @@ function newStudyResult(): ResearchStudyResult {
                 )}
               </div>
             )}
-            <div className="study-header-actions">
-              <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
-                <FontAwesomeIcon icon={faPen} />
-              </button>
-              <button type="button" className="ghost docs-action-btn" title="Link Context" onClick={openWbsModal}>
-                <FontAwesomeIcon icon={faLink} />
-              </button>
-              <button type="button" className="ghost docs-action-btn" title="Archive" onClick={() => handleArchiveCollection(selectedCollection.id)}>
-                <FontAwesomeIcon icon={faArchive} />
-              </button>
-              <button
-                type="button"
-                className={`ghost docs-action-btn danger${confirmingDeleteId === selectedCollection.id ? " confirm-pulse" : ""}`}
-                title={confirmingDeleteId === selectedCollection.id ? "Click again to confirm" : "Delete"}
-                onClick={() => requestConfirmDelete(selectedCollection.id, () => handleDeleteCollection(selectedCollection.id))}
-              >
-                {confirmingDeleteId === selectedCollection.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
-              </button>
-            </div>
+            {!isStudent ? (
+              <div className="study-header-actions">
+                <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
+                  <FontAwesomeIcon icon={faPen} />
+                </button>
+                <button type="button" className="ghost docs-action-btn" title="Link Context" onClick={openWbsModal}>
+                  <FontAwesomeIcon icon={faLink} />
+                </button>
+                <button type="button" className="ghost docs-action-btn" title="Archive" onClick={() => handleArchiveCollection(selectedCollection.id)}>
+                  <FontAwesomeIcon icon={faArchive} />
+                </button>
+                <button
+                  type="button"
+                  className={`ghost docs-action-btn danger${confirmingDeleteId === selectedCollection.id ? " confirm-pulse" : ""}`}
+                  title={confirmingDeleteId === selectedCollection.id ? "Click again to confirm" : "Delete"}
+                  onClick={() => requestConfirmDelete(selectedCollection.id, () => handleDeleteCollection(selectedCollection.id))}
+                >
+                  {confirmingDeleteId === selectedCollection.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="study-header-meta">
             <span className={`chip small ${collectionDetail.status === "active" ? "status-ok" : ""}`}>{collectionDetail.status}</span>
@@ -4190,14 +4196,18 @@ function newStudyResult(): ResearchStudyResult {
               >
                 <FontAwesomeIcon icon={faShareNodes} /> Show Graph
               </button>
-              <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyModal}>
-                <FontAwesomeIcon icon={faPlus} /> Add Paper
-              </button>
+              {!isStudent ? (
+                <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyModal}>
+                  <FontAwesomeIcon icon={faPlus} /> Add Paper
+                </button>
+              ) : null}
             </div>
           ) : (
-            <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyCollectionModal}>
-              <FontAwesomeIcon icon={faPlus} /> New Collection
-            </button>
+            !isStudent ? (
+              <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateBibliographyCollectionModal}>
+                <FontAwesomeIcon icon={faPlus} /> New Collection
+              </button>
+            ) : null
           )}
         </div>
 
@@ -4397,15 +4407,17 @@ function newStudyResult(): ResearchStudyResult {
                       </td>
                       <td className="col-icon" onClick={(event) => event.stopPropagation()}>
                         <div className="research-icon-actions">
-                          <button
-                            type="button"
-                            className="ghost docs-action-btn"
-                            title="Summarize"
-                            disabled={summarizingId === item.id}
-                            onClick={() => void handleSummarizeBibliography(item.id)}
-                          >
-                            <FontAwesomeIcon icon={faMagicWandSparkles} spin={summarizingId === item.id} />
-                          </button>
+                          {!isStudent ? (
+                            <button
+                              type="button"
+                              className="ghost docs-action-btn"
+                              title="Summarize"
+                              disabled={summarizingId === item.id}
+                              onClick={() => void handleSummarizeBibliography(item.id)}
+                            >
+                              <FontAwesomeIcon icon={faMagicWandSparkles} spin={summarizingId === item.id} />
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="ghost docs-action-btn"
@@ -4805,7 +4817,7 @@ function newStudyResult(): ResearchStudyResult {
                     openCreateBibliographyModal();
                   }}
                 >
-                  <FontAwesomeIcon icon={faPlus} /> Add Paper
+                  <FontAwesomeIcon icon={faPlus} /> Add reference
                 </button>
               </div>
             );
@@ -4862,6 +4874,18 @@ function newStudyResult(): ResearchStudyResult {
                   ))}
                 </tbody>
               </table>
+            <div style={{ padding: "8px 0", textAlign: "center" }}>
+              <button
+                type="button"
+                className="ghost icon-text-button small"
+                onClick={() => {
+                  setBibliographyPickerOpen(false);
+                  openCreateBibliographyModal();
+                }}
+              >
+                <FontAwesomeIcon icon={faPlus} /> Add reference
+              </button>
+            </div>
             </div>
             );
           })()}
@@ -5271,7 +5295,11 @@ function newStudyResult(): ResearchStudyResult {
               handleContentChange(textarea.value, textarea.selectionStart, textarea, "composer");
             }}
             onFocus={() => setComposerExpanded(true)}
-            onBlur={() => { if (!quickLogContent.trim() && !quickLogTitle.trim()) setComposerExpanded(false); }}
+            onBlur={(event) => {
+              const related = event.relatedTarget as HTMLElement | null;
+              if (related?.closest(".research-log-composer")) return;
+              if (!quickLogContent.trim() && !quickLogTitle.trim()) setComposerExpanded(false);
+            }}
             onKeyDown={(event) => {
               handleMentionKeyDown(event);
               if (mentionOpen) return;
@@ -5455,25 +5483,29 @@ function newStudyResult(): ResearchStudyResult {
               <strong>Paper</strong>
             </div>
             <div className="research-header-actions">
-              <button
-                type="button"
-                className="ghost icon-text-button small"
-                disabled={draftingGapPaper || gapNotes.length === 0}
-                onClick={() => void handleDraftPaperFromGap()}
-              >
-                <FontAwesomeIcon icon={faMagicWandSparkles} spin={draftingGapPaper} /> {draftingGapPaper ? "Drafting..." : "Draft From Gap"}
-              </button>
-              <button
-                type="button"
-                className="ghost icon-text-button small"
-                disabled={buildingPaperOutline || (paperQuestions.length === 0 && paperClaims.length === 0 && collectionNotes.length === 0 && collectionReferences.length === 0)}
-                onClick={() => void handleBuildPaperOutline()}
-              >
-                <FontAwesomeIcon icon={faMagicWandSparkles} spin={buildingPaperOutline} /> {buildingPaperOutline ? "Building..." : "Build Outline"}
-              </button>
-              <button type="button" className="ghost icon-text-button small" disabled={auditingPaperClaims || paperClaims.length === 0} onClick={() => void handleAuditPaperClaims()}>
-                <FontAwesomeIcon icon={faMagicWandSparkles} spin={auditingPaperClaims} /> {auditingPaperClaims ? "Auditing..." : "Audit Claims"}
-              </button>
+              {!isStudent ? (
+                <>
+                  <button
+                    type="button"
+                    className="ghost icon-text-button small"
+                    disabled={draftingGapPaper || gapNotes.length === 0}
+                    onClick={() => void handleDraftPaperFromGap()}
+                  >
+                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={draftingGapPaper} /> {draftingGapPaper ? "Drafting..." : "Draft From Gap"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost icon-text-button small"
+                    disabled={buildingPaperOutline || (paperQuestions.length === 0 && paperClaims.length === 0 && collectionNotes.length === 0 && collectionReferences.length === 0)}
+                    onClick={() => void handleBuildPaperOutline()}
+                  >
+                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={buildingPaperOutline} /> {buildingPaperOutline ? "Building..." : "Build Outline"}
+                  </button>
+                  <button type="button" className="ghost icon-text-button small" disabled={auditingPaperClaims || paperClaims.length === 0} onClick={() => void handleAuditPaperClaims()}>
+                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={auditingPaperClaims} /> {auditingPaperClaims ? "Auditing..." : "Audit Claims"}
+                  </button>
+                </>
+              ) : null}
               <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void handleSavePaperWorkspace()}>
                 {saving ? "Saving..." : "Save"}
               </button>
@@ -5574,9 +5606,11 @@ function newStudyResult(): ResearchStudyResult {
                 </label>
               </div>
               <div className="row-actions">
-                <button type="button" className="ghost icon-text-button small" onClick={() => void handleGeneratePaperFromStudy()}>
-                  <FontAwesomeIcon icon={faMagicWandSparkles} /> Generate From Study
-                </button>
+                {!isStudent ? (
+                  <button type="button" className="ghost icon-text-button small" onClick={() => void handleGeneratePaperFromStudy()}>
+                    <FontAwesomeIcon icon={faMagicWandSparkles} /> Generate From Study
+                  </button>
+                ) : null}
                 <button type="button" className="meetings-new-btn" onClick={() => setPaperExpanded(true)}>
                   Open Full Workspace
                 </button>
@@ -6158,14 +6192,16 @@ function newStudyResult(): ResearchStudyResult {
                 <strong>Results</strong>
               </div>
               <div className="research-header-actions">
-                <button
-                  type="button"
-                  className="ghost icon-text-button small"
-                  disabled={comparingResults || orderedResults.length < 2}
-                  onClick={() => void handleCompareResults()}
-                >
-                  <FontAwesomeIcon icon={faMagicWandSparkles} spin={comparingResults} /> {comparingResults ? "Comparing..." : "Compare Results"}
-                </button>
+                {!isStudent ? (
+                  <button
+                    type="button"
+                    className="ghost icon-text-button small"
+                    disabled={comparingResults || orderedResults.length < 2}
+                    onClick={() => void handleCompareResults()}
+                  >
+                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={comparingResults} /> {comparingResults ? "Comparing..." : "Compare Results"}
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="paper-stack">
@@ -6268,14 +6304,16 @@ function newStudyResult(): ResearchStudyResult {
                 </span>
                 <span className="chip small">{iteration.note_ids.length} logs</span>
                 <span className="chip small">{iterationResults(iteration.id).length} results</span>
-                <button
-                  type="button"
-                  className="ghost icon-text-button small"
-                  disabled={reviewingIterationId === iteration.id}
-                  onClick={() => void handleReviewIteration(iteration.id)}
-                >
-                  <FontAwesomeIcon icon={faMagicWandSparkles} spin={reviewingIterationId === iteration.id} /> {reviewingIterationId === iteration.id ? "Reviewing..." : "Review"}
-                </button>
+                {!isStudent ? (
+                  <button
+                    type="button"
+                    className="ghost icon-text-button small"
+                    disabled={reviewingIterationId === iteration.id}
+                    onClick={() => void handleReviewIteration(iteration.id)}
+                  >
+                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={reviewingIterationId === iteration.id} /> {reviewingIterationId === iteration.id ? "Reviewing..." : "Review"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="ghost icon-text-button small"
@@ -6654,9 +6692,11 @@ function newStudyResult(): ResearchStudyResult {
               <FontAwesomeIcon icon={faLink} />
               <strong>Context Links</strong>
             </div>
-            <button type="button" className="meetings-new-btn" onClick={openWbsModal}>
-              <FontAwesomeIcon icon={faPen} /> Edit
-            </button>
+            {!isStudent ? (
+              <button type="button" className="meetings-new-btn" onClick={openWbsModal}>
+                <FontAwesomeIcon icon={faPen} /> Edit
+              </button>
+            ) : null}
           </div>
           <div className="research-overview-body">
             <div className="research-chip-group">
@@ -6713,9 +6753,11 @@ function newStudyResult(): ResearchStudyResult {
               <strong>Team Members</strong>
               <span className="delivery-tab-count">{collectionDetail.members.length}</span>
             </div>
-            <button type="button" className="meetings-new-btn" onClick={() => setMemberModalOpen(true)}>
-              <FontAwesomeIcon icon={faPlus} /> Add
-            </button>
+            {!isStudent ? (
+              <button type="button" className="meetings-new-btn" onClick={() => setMemberModalOpen(true)}>
+                <FontAwesomeIcon icon={faPlus} /> Add
+              </button>
+            ) : null}
           </div>
           {collectionDetail.members.length === 0 ? (
             <p className="muted-small research-overview-body">No members.</p>
@@ -6727,22 +6769,27 @@ function newStudyResult(): ResearchStudyResult {
                     <strong>{member.member_name}</strong>
                     <span className="muted-small research-inline-meta">{member.organization_short_name}</span>
                   </div>
-                  <div className="research-member-actions">
-                    <select value={member.role} onChange={(event) => void handleUpdateMemberRole(member.id, event.target.value)}>
-                      <option value="lead">Lead</option>
-                      <option value="contributor">Contributor</option>
-                      <option value="reviewer">Reviewer</option>
-                    </select>
-                    <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => handleRemoveMember(member.id)}>
-                      <FontAwesomeIcon icon={faXmark} />
-                    </button>
-                  </div>
+                  {!isStudent ? (
+                    <div className="research-member-actions">
+                      <select value={member.role} onChange={(event) => void handleUpdateMemberRole(member.id, event.target.value)}>
+                        <option value="lead">Lead</option>
+                        <option value="contributor">Contributor</option>
+                        <option value="reviewer">Reviewer</option>
+                      </select>
+                      <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => handleRemoveMember(member.id)}>
+                        <FontAwesomeIcon icon={faXmark} />
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="chip small">{member.role}</span>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
 
+        {!isStudent ? (
         <div className="meetings-detail-section">
           <div className="meetings-detail-head">
             <div className="meetings-detail-info">
@@ -6861,6 +6908,7 @@ function newStudyResult(): ResearchStudyResult {
             )}
           </div>
         </div>
+        ) : null}
       </div>
     );
   }
@@ -7226,9 +7274,9 @@ function newStudyResult(): ResearchStudyResult {
                 type="button"
                 className="meetings-new-btn"
                 disabled={!canSave || saving}
-                onClick={() => void (isBatchMode ? handleImportBibliographyIdentifiers() : (isBibtexMode ? handleImportBibliographyBibtex() : handleSaveBibliography()))}
+                onClick={() => void (isBatchMode && !isStudent ? handleImportBibliographyIdentifiers() : (isBibtexMode && !isStudent ? handleImportBibliographyBibtex() : handleSaveBibliography()))}
               >
-                {saving ? (isBatchMode || isBibtexMode ? "Importing..." : "Saving...") : isCreate ? (isBatchMode || isBibtexMode ? "Import" : "Add") : "Save"}
+                {saving ? ((isBatchMode || isBibtexMode) && !isStudent ? "Importing..." : "Saving...") : isCreate ? ((isBatchMode || isBibtexMode) && !isStudent ? "Import" : "Add") : "Save"}
               </button>
               <button type="button" className="ghost docs-action-btn" onClick={() => setBibliographyModalOpen(false)} title="Close">
                 <FontAwesomeIcon icon={faXmark} />
@@ -7242,9 +7290,11 @@ function newStudyResult(): ResearchStudyResult {
                 <button className={`delivery-tab ${bibliographyCreateTab === "manual" ? "active" : ""}`} onClick={() => setBibliographyCreateTab("manual")}>
                   Manual
                 </button>
-                <button className={`delivery-tab ${bibliographyCreateTab === "batch" ? "active" : ""}`} onClick={() => setBibliographyCreateTab("batch")}>
-                  Batch
-                </button>
+                {!isStudent ? (
+                  <button className={`delivery-tab ${bibliographyCreateTab === "batch" ? "active" : ""}`} onClick={() => setBibliographyCreateTab("batch")}>
+                    Batch
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
@@ -7432,7 +7482,7 @@ function newStudyResult(): ResearchStudyResult {
                   <span className="bib-abstract-head">
                     <span>Abstract</span>
                     <span className="bib-abstract-actions">
-                      {canExtractAbstract ? (
+                      {canExtractAbstract && !isStudent ? (
                         <button
                           type="button"
                           className="ghost docs-action-btn"
@@ -7443,7 +7493,7 @@ function newStudyResult(): ResearchStudyResult {
                           {extractingBibliographyAbstractId === editingBibliographyId ? "Extracting..." : "Extract"}
                         </button>
                       ) : null}
-                      {canExtractConcepts ? (
+                      {canExtractConcepts && !isStudent ? (
                         <button
                           type="button"
                           className="ghost docs-action-btn"

@@ -138,6 +138,7 @@ export default function App() {
   const canAccessResearch = currentUser?.can_access_research ?? false;
   const canAccessTeaching = currentUser?.can_access_teaching ?? false;
   const isSuperAdmin = currentUser?.platform_role === "super_admin";
+  const isStudent = currentUser?.platform_role === "student";
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_PROJECT_KEY) || "" : "")
   );
@@ -865,10 +866,10 @@ export default function App() {
     { id: "todos", label: "Todos", icon: faSquareCheck },
     { id: "search", label: "Search", icon: faSearch },
   ];
-  const sharedNavItems: NavItem[] = [
+  const sharedNavItems: NavItem[] = isStudent ? [] : [
     { id: "bibliography", label: "Bibliography", icon: faBook },
   ];
-  const platformNavItems: NavItem[] = [
+  const platformNavItems: NavItem[] = isStudent ? [] : [
     { id: "resources", label: "Resources", icon: faWrench },
   ];
 
@@ -913,7 +914,7 @@ export default function App() {
                 items: [
                   { id: "research", label: "Studies", icon: faBook },
                   { id: "research-home", label: "Spaces", icon: faFlask },
-                  { id: "assistant", label: "Assistant", icon: faComments },
+                  ...(!isStudent ? [{ id: "assistant" as View, label: "Assistant", icon: faComments }] : []),
                   { id: "search", label: "Search", icon: faSearch },
                 ],
               },
@@ -987,6 +988,7 @@ export default function App() {
   ];
 
   function switchWorkspaceFamily(nextFamily: WorkspaceFamily) {
+    if (isStudent && nextFamily === "projects") return;
     if ((nextFamily === "projects" || nextFamily === "research") && !canAccessResearch) {
       return;
     }
@@ -1022,7 +1024,7 @@ export default function App() {
     ? (currentUser.platform_role === "super_admin" || currentUser.platform_role === "project_creator") &&
       (workspaceFamily === "teaching" ? canAccessTeaching : workspaceFamily === "projects")
     : false;
-  const canCreateResearchSpaces = canAccessResearch;
+  const canCreateResearchSpaces = canAccessResearch && !isStudent;
   const userInitials =
     currentUser?.display_name
       .split(" ")
@@ -1084,6 +1086,11 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) return;
+    if (isStudent && workspaceFamily === "projects") {
+      setWorkspaceFamily("research");
+      setView("research");
+      return;
+    }
     if ((workspaceFamily === "projects" || workspaceFamily === "research") && !canAccessResearch && canAccessTeaching) {
       setWorkspaceFamily("teaching");
       setView("courses");
@@ -1093,7 +1100,7 @@ export default function App() {
       setWorkspaceFamily("projects");
       setView("dashboard");
     }
-  }, [currentUser?.id, workspaceFamily, canAccessResearch, canAccessTeaching]);
+  }, [currentUser?.id, workspaceFamily, canAccessResearch, canAccessTeaching, isStudent]);
 
   useEffect(() => {
     if (!canAccessResearch || researchTourOpen) return;
@@ -1404,16 +1411,17 @@ export default function App() {
               <FontAwesomeIcon icon={faChevronLeft} />
             )}
           </button>
-          {!sidebarCollapsed ? (
-            <div className="brand-block">
-              <img src={prainaLogoWhite} alt="Praina" className="brand-logo" />
-              <span className="brand-wordmark">Praina</span>
-            </div>
-          ) : null}
+          <div className="brand-block sidebar-expanded-only">
+            <img src={prainaLogoWhite} alt="Praina" className="brand-logo" />
+            <span className="brand-wordmark">Praina</span>
+          </div>
+          <button type="button" className="mobile-close-btn" onClick={() => setMobileSidebarOpen(false)} aria-label="Close menu">
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
         </div>
 
         <div className="sidebar-workspace-switch">
-          {canAccessResearch ? (
+          {canAccessResearch && !isStudent ? (
             <button
               type="button"
               className={`sidebar-workspace-btn ${workspaceFamily === "projects" ? "active" : ""}`}
@@ -1421,7 +1429,7 @@ export default function App() {
               title={sidebarCollapsed ? "Projects" : undefined}
             >
               <FontAwesomeIcon icon={faSitemap} />
-              {!sidebarCollapsed ? <span>Projects</span> : null}
+              <span className="sidebar-expanded-only">Projects</span>
             </button>
           ) : null}
           {canAccessResearch ? (
@@ -1432,7 +1440,7 @@ export default function App() {
               title={sidebarCollapsed ? "Research" : undefined}
             >
               <FontAwesomeIcon icon={faFlask} />
-              {!sidebarCollapsed ? <span>Research</span> : null}
+              <span className="sidebar-expanded-only">Research</span>
             </button>
           ) : null}
           {canAccessTeaching ? (
@@ -1443,7 +1451,7 @@ export default function App() {
               title={sidebarCollapsed ? "Teaching" : undefined}
             >
               <FontAwesomeIcon icon={faGraduationCap} />
-              {!sidebarCollapsed ? <span>Teaching</span> : null}
+              <span className="sidebar-expanded-only">Teaching</span>
             </button>
           ) : null}
         </div>
@@ -1451,20 +1459,18 @@ export default function App() {
         <nav className="app-nav">
           {navSections.map((section) => (
             <div key={section.label} className="app-nav-section">
-              {!sidebarCollapsed ? (
-                section.collapsible ? (
-                  <button
-                    type="button"
-                    className={`app-nav-section-toggle ${collapsedNavGroups[section.key] ? "collapsed" : ""}`}
-                    onClick={() => toggleNavGroup(section.key)}
-                  >
-                    <span>{section.label}</span>
-                    <FontAwesomeIcon icon={faChevronDown} />
-                  </button>
-                ) : (
-                  <div className="app-nav-section-label">{section.label}</div>
-                )
-              ) : null}
+              {section.collapsible ? (
+                <button
+                  type="button"
+                  className={`app-nav-section-toggle sidebar-expanded-only ${collapsedNavGroups[section.key] ? "collapsed" : ""}`}
+                  onClick={() => toggleNavGroup(section.key)}
+                >
+                  <span>{section.label}</span>
+                  <FontAwesomeIcon icon={faChevronDown} />
+                </button>
+              ) : (
+                <div className="app-nav-section-label sidebar-expanded-only">{section.label}</div>
+              )}
               {(sidebarCollapsed || !section.collapsible || !collapsedNavGroups[section.key]) ? section.items.map((item) => {
                 const active = view === item.id;
                 const disabled = isNavItemDisabled(item.id);
@@ -1480,7 +1486,7 @@ export default function App() {
                     <span className="app-nav-icon">
                       <FontAwesomeIcon icon={item.icon} />
                     </span>
-                    {!sidebarCollapsed ? <span className="app-nav-label">{item.label}</span> : null}
+                    <span className="app-nav-label sidebar-expanded-only">{item.label}</span>
                   </button>
                 );
               }) : null}
@@ -1496,7 +1502,7 @@ export default function App() {
             title={sidebarCollapsed ? "Suggestions" : undefined}
           >
             <FontAwesomeIcon icon={faLightbulb} />
-            {!sidebarCollapsed ? <span>Suggestions</span> : null}
+            <span className="sidebar-expanded-only">Suggestions</span>
           </button>
         </div>
       </aside>
@@ -1735,6 +1741,7 @@ export default function App() {
               navigationState={researchNavigationState}
               onNavigationStateChange={handleResearchNavigationStateChange}
               isAdmin={isSuperAdmin}
+              isStudent={isStudent}
               researchTourActive={researchTourOpen}
               researchTourStepId={currentResearchTourStep?.target || null}
             />
@@ -1752,6 +1759,7 @@ export default function App() {
               onNavigationStateChange={handleResearchNavigationStateChange}
               bibliographyOnly
               isAdmin={isSuperAdmin}
+              isStudent={isStudent}
               openBibliographyReferenceId={pendingBibliographyReferenceId}
               onOpenBibliographyReferenceConsumed={() => {
                 setPendingBibliographyReferenceId(null);

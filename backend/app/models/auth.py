@@ -13,6 +13,7 @@ class PlatformRole(str, enum.Enum):
     super_admin = "super_admin"
     project_creator = "project_creator"
     user = "user"
+    student = "student"
 
 
 class ProjectRole(str, enum.Enum):

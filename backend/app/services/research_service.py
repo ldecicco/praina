@@ -557,6 +557,7 @@ class ResearchService:
         *,
         status_filter: str | None = None,
         member_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[ResearchCollection], int]:
@@ -576,6 +577,14 @@ class ResearchService:
                 ResearchCollectionMember.member_id == member_id
             ).scalar_subquery()
             stmt = stmt.where(ResearchCollection.id.in_(member_collection_ids))
+        if user_id:
+            user_collection_ids = select(ResearchCollectionMember.collection_id).where(
+                (ResearchCollectionMember.user_account_id == user_id)
+                | (ResearchCollectionMember.member_id.in_(
+                    select(TeamMember.id).where(TeamMember.user_account_id == user_id)
+                ))
+            ).scalar_subquery()
+            stmt = stmt.where(ResearchCollection.id.in_(user_collection_ids))
         total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
         items = list(
             self.db.scalars(
@@ -671,6 +680,7 @@ class ResearchService:
                 ResearchCollectionMember(
                     collection_id=item.id,
                     user_account_id=creator_user_id,
+                    member_id=kwargs.get("created_by_member_id"),
                     role=CollectionMemberRole.lead,
                 )
             )
@@ -1272,6 +1282,7 @@ class ResearchService:
         *,
         status_filter: str | None = None,
         member_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[ResearchCollection], int]:
@@ -1286,6 +1297,14 @@ class ResearchService:
                 ResearchCollectionMember.member_id == member_id
             ).scalar_subquery()
             stmt = stmt.where(ResearchCollection.id.in_(member_collection_ids))
+        if user_id:
+            user_collection_ids = select(ResearchCollectionMember.collection_id).where(
+                (ResearchCollectionMember.user_account_id == user_id)
+                | (ResearchCollectionMember.member_id.in_(
+                    select(TeamMember.id).where(TeamMember.user_account_id == user_id)
+                ))
+            ).scalar_subquery()
+            stmt = stmt.where(ResearchCollection.id.in_(user_collection_ids))
         total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
         items = list(
             self.db.scalars(
@@ -1415,6 +1434,15 @@ class ResearchService:
         self.db.add(item)
         self.db.flush()
         self._set_collection_spaces(item.id, normalized_space_ids)
+        if creator_user_id:
+            self.db.add(
+                ResearchCollectionMember(
+                    collection_id=item.id,
+                    user_account_id=creator_user_id,
+                    member_id=created_by_member_id,
+                    role=CollectionMemberRole.lead,
+                )
+            )
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -3489,7 +3517,7 @@ class ResearchService:
 
     def attach_bibliography_file(
         self,
-        project_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         bibliography_reference_id: uuid.UUID,
         *,
         file_name: str,
@@ -3497,29 +3525,56 @@ class ResearchService:
         file_stream: BinaryIO,
     ) -> BibliographyReference:
         item = self.get_bibliography_reference(bibliography_reference_id)
-        document = DocumentService(self.db).create_document(
-            project_id=project_id,
-            payload=DocumentUploadPayload(
-                scope=DocumentScope.project,
-                title=item.title[:255],
-                metadata_json={
-                    "category": "bibliography_reference",
-                    "bibliography_reference_id": str(item.id),
-                },
-            ),
-            file_name=file_name,
-            content_type=content_type,
-            file_stream=file_stream,
-        )
-        DocumentIngestionService(self.db).reindex_document(project_id, document.id)
-        item.source_project_id = project_id
-        item.document_key = document.document_key
-        item.attachment_path = document.storage_uri
-        item.attachment_filename = document.original_filename
-        item.attachment_mime_type = document.mime_type
-        if not item.abstract and (document.mime_type == "application/pdf" or Path(document.storage_uri).suffix.lower() == ".pdf"):
+        doc_title = (item.title or "").strip()[:255] or file_name[:255] or "Untitled"
+        # Try to use DocumentService with a real project; fall back to direct file storage
+        from app.core.config import settings as app_settings
+        safe_name = Path(file_name).name or "document.bin"
+        real_project = False
+        if project_id:
             try:
-                abstract = extract_pdf_abstract(Path(document.storage_uri), max_pages=2)
+                self._get_project(project_id)
+                real_project = True
+            except NotFoundError:
+                pass
+        if real_project:
+            document = DocumentService(self.db).create_document(
+                project_id=project_id,
+                payload=DocumentUploadPayload(
+                    scope=DocumentScope.project,
+                    title=doc_title,
+                    metadata_json={
+                        "category": "bibliography_reference",
+                        "bibliography_reference_id": str(item.id),
+                    },
+                ),
+                file_name=file_name,
+                content_type=content_type,
+                file_stream=file_stream,
+            )
+            DocumentIngestionService(self.db).reindex_document(project_id, document.id)
+            item.source_project_id = project_id
+            item.document_key = document.document_key
+            item.attachment_path = document.storage_uri
+            item.attachment_filename = document.original_filename
+            item.attachment_mime_type = document.mime_type
+        else:
+            # No valid project — store file directly for bibliography
+            root = Path(app_settings.documents_storage_path)
+            if not root.is_absolute():
+                root = (Path.cwd() / root).resolve()
+            target_dir = root / "bibliography" / str(item.id)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = target_dir / safe_name
+            with target_path.open("wb") as out:
+                while chunk := file_stream.read(1024 * 1024):
+                    out.write(chunk)
+            item.attachment_path = str(target_path)
+            item.attachment_filename = safe_name
+            item.attachment_mime_type = content_type or "application/octet-stream"
+        storage_path = item.attachment_path or ""
+        if not item.abstract and (item.attachment_mime_type == "application/pdf" or Path(storage_path).suffix.lower() == ".pdf"):
+            try:
+                abstract = extract_pdf_abstract(Path(storage_path), max_pages=2)
                 if abstract:
                     item.abstract = abstract
             except Exception:

@@ -32,6 +32,7 @@ class ReadingStatus(str, enum.Enum):
     reading = "reading"
     read = "read"
     reviewed = "reviewed"
+    to_review = "to_review"
 
 
 class NoteType(str, enum.Enum):

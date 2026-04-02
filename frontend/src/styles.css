@@ -615,6 +615,10 @@ body::after {
   font-size: 14px;
 }
 
+.sidebar-collapsed .sidebar-expanded-only {
+  display: none;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 6px;
@@ -12767,29 +12771,42 @@ button.danger:hover:not(:disabled) {
   display: none;
 }
 
+.mobile-close-btn {
+  display: none;
+}
+
 .mobile-overlay {
   display: none;
 }
 
 @media (max-width: 768px) {
-  .app-frame {
-    grid-template-columns: 1fr;
-  }
-
+  .app-frame,
   .app-frame.sidebar-collapsed {
     grid-template-columns: 1fr;
   }
 
+  /* ── Off-canvas drawer ── */
   .app-sidebar {
     position: fixed;
     top: 0;
     left: 0;
     bottom: 0;
-    width: 260px;
+    width: 280px;
+    max-width: 80vw;
     z-index: 200;
     transform: translateX(-100%);
     transition: transform 0.2s ease;
     box-shadow: none;
+    /* Reset tablet horizontal layout */
+    flex-direction: column;
+    flex-wrap: nowrap;
+    min-height: 0;
+    height: 100dvh;
+    padding: 0;
+    gap: 0;
+    border-right: 1px solid var(--line);
+    border-bottom: none;
+    overflow: hidden;
   }
 
   .app-sidebar.mobile-open {
@@ -12797,14 +12814,92 @@ button.danger:hover:not(:disabled) {
     box-shadow: var(--shadow-lg);
   }
 
+  /* ── Drawer header ── */
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 8px;
+    min-height: auto;
+    flex-shrink: 0;
+  }
+
+  /* ── Workspace switcher ── */
+  .sidebar-workspace-switch {
+    width: 100%;
+    flex-shrink: 0;
+    padding: 0 10px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* ── Scrollable nav area ── */
+  .app-nav {
+    flex: 1 1 0;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 8px 12px;
+    gap: 4px;
+  }
+
+  .app-nav-item {
+    height: 40px;
+    font-size: 14px;
+    border-radius: var(--radius);
+    padding: 0 12px;
+  }
+
+  .app-nav-icon {
+    width: 22px;
+    font-size: 14px;
+  }
+
+  /* ── Footer pinned to bottom ── */
+  .sidebar-footer {
+    flex-shrink: 0;
+    margin-top: 0;
+    padding: 8px 10px 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* Hide the desktop collapse button on mobile — replaced by close */
+  .sidebar-header > .icon-button:first-child {
+    display: none;
+  }
+
+  .mobile-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--muted);
+    font-size: 16px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  .mobile-close-btn:hover {
+    color: var(--text);
+    background: var(--surface);
+  }
+
+  /* ── Overlay ── */
   .mobile-overlay {
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.45);
     z-index: 199;
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
   }
 
+  /* ── Hamburger button ── */
   .mobile-menu-btn {
     display: flex;
     align-items: center;
@@ -12819,16 +12914,34 @@ button.danger:hover:not(:disabled) {
     flex-shrink: 0;
   }
 
+  /* ── Topbar adjustments ── */
   .topbar {
-    padding: 6px 10px;
+    flex-wrap: nowrap;
+    height: 40px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .topbar-left {
+    width: auto;
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 6px;
   }
 
   .topbar-left h2 {
     font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .topbar-history-controls {
-    display: none;
+  .topbar-right {
+    flex-shrink: 0;
+    margin-left: auto;
+    width: auto;
+    flex-wrap: nowrap;
+    gap: 4px;
   }
 
   .topbar-right > button.ghost.icon-only {
@@ -12836,21 +12949,46 @@ button.danger:hover:not(:disabled) {
     height: 28px;
   }
 
+  .topbar-history-controls {
+    display: none;
+  }
+
   .topbar-context-link {
     display: none;
   }
 
-  .sidebar-header {
-    display: flex;
-    justify-content: space-between;
-  }
-
+  /* ── Modals ── */
   .modal-card {
     margin: 8px;
-    max-height: calc(100vh - 16px);
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
   }
 
   .suggestion-panel {
     max-width: 100%;
+  }
+
+  /* ── Reset collapsed sidebar styles on mobile ── */
+  .sidebar-collapsed .app-nav-item {
+    justify-content: flex-start;
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .sidebar-collapsed .app-nav-icon {
+    width: 22px;
+    font-size: 14px;
+  }
+  .sidebar-collapsed .sidebar-workspace-switch {
+    width: 100%;
+    flex-direction: row;
+  }
+  .sidebar-collapsed .sidebar-workspace-btn {
+    justify-content: center;
+    flex: 1 1 0;
+    border-radius: 0;
+  }
+  /* Always show labels on mobile even if sidebar was collapsed on desktop */
+  .sidebar-collapsed .sidebar-expanded-only {
+    display: revert;
   }
 }

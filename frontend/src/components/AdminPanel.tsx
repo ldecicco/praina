@@ -12,7 +12,7 @@ type Props = {
   currentUser: AuthUser;
 };
 
-const PLATFORM_ROLES = ["super_admin", "project_creator", "user"];
+const PLATFORM_ROLES = ["super_admin", "project_creator", "user", "student"];
 const PROJECT_ROLES = ["project_owner", "project_manager", "partner_lead", "partner_member", "reviewer", "viewer"];
 type AdminTab = "projects" | "courses" | "calls" | "users" | "memberships" | "suggestions";
 

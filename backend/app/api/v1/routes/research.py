@@ -110,6 +110,11 @@ def require_bibliography_access(current_user: UserAccount = Depends(get_current_
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot access Bibliography.")
 
 
+def _reject_student(current_user: UserAccount) -> None:
+    if current_user.platform_role == "student":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students cannot perform this action.")
+
+
 router = APIRouter(dependencies=[Depends(require_research_access)])
 websocket_router = APIRouter()
 bibliography_router = APIRouter(prefix="/bibliography", dependencies=[Depends(require_bibliography_access)])
@@ -205,6 +210,7 @@ def create_research_space(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> ResearchSpaceRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.create_research_space(
@@ -262,14 +268,18 @@ def list_collections(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionListRead:
     svc = ResearchService(db)
+    # Students only see studies they are a member of
+    user_id_filter = current_user.id if current_user.platform_role == "student" else None
     try:
         if space_id:
             items, total = svc.list_collections_for_space(
                 uuid.UUID(space_id),
                 status_filter=status_filter,
                 member_id=uuid.UUID(member_id) if member_id else None,
+                user_id=user_id_filter,
                 page=page,
                 page_size=page_size,
             )
@@ -278,6 +288,7 @@ def list_collections(
                 None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id,
                 status_filter=status_filter,
                 member_id=uuid.UUID(member_id) if member_id else None,
+                user_id=user_id_filter,
                 page=page,
                 page_size=page_size,
             )
@@ -299,6 +310,7 @@ def create_collection(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     member_id = None if project_id == GLOBAL_RESEARCH_PROJECT_ID else _resolve_member_id(db, current_user, project_id)
     try:
@@ -621,7 +633,9 @@ def audit_collection_paper_claims(
     collection_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionDetailRead:
+    _reject_student(current_user)
     from app.agents.paper_claim_audit_agent import PaperClaimAuditAgent
 
     svc = ResearchService(db)
@@ -684,7 +698,9 @@ def build_collection_paper_outline(
     collection_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionDetailRead:
+    _reject_student(current_user)
     from app.agents.paper_outline_agent import PaperOutlineAgent
 
     svc = ResearchService(db)
@@ -746,7 +762,9 @@ def draft_collection_paper_from_gap(
     collection_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionDetailRead:
+    _reject_student(current_user)
     from app.agents.paper_gap_agent import PaperGapAgent
 
     svc = ResearchService(db)
@@ -815,7 +833,9 @@ def review_collection_iteration(
     iteration_id: str,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionDetailRead:
+    _reject_student(current_user)
     from app.agents.iteration_review_agent import IterationReviewAgent
 
     svc = ResearchService(db)
@@ -884,7 +904,9 @@ def compare_collection_results(
     collection_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> ResultComparisonRead:
+    _reject_student(current_user)
     from app.agents.result_comparison_agent import ResultComparisonAgent
 
     svc = ResearchService(db)
@@ -910,7 +932,9 @@ def delete_collection(
     collection_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         if space_id:
@@ -950,7 +974,9 @@ def add_collection_member(
     payload: CollectionMemberCreate,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionMemberRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         member_uuid = uuid.UUID(payload.member_id) if payload.member_id else None
@@ -976,7 +1002,9 @@ def update_collection_member(
     payload: CollectionMemberUpdate,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> CollectionMemberRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         data = (
@@ -997,7 +1025,9 @@ def remove_collection_member(
     member_record_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         if space_id:
@@ -1018,7 +1048,9 @@ def set_wbs_links(
     payload: WbsLinksPayload,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> WbsLinksRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         result = (
@@ -1038,7 +1070,9 @@ def set_collection_meetings(
     payload: CollectionMeetingPayload,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> list[CollectionMeetingRead]:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         items = (
@@ -1444,13 +1478,14 @@ def link_bibliography_reference(
     else:
         resolved_space_id = None
         member_id = _resolve_member_id(db, current_user, project_id)
+    reading_status = "to_review" if current_user.platform_role == "student" else payload.reading_status
     try:
         item = (
             svc.link_bibliography_reference_for_space(
                 resolved_space_id,
                 bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),
                 collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
-                reading_status=payload.reading_status,
+                reading_status=reading_status,
                 added_by_member_id=member_id,
             )
             if use_space else
@@ -1458,7 +1493,7 @@ def link_bibliography_reference(
                 project_id,
                 bibliography_reference_id=uuid.UUID(payload.bibliography_reference_id),
                 collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
-                reading_status=payload.reading_status,
+                reading_status=reading_status,
                 added_by_member_id=member_id,
             )
         )
@@ -1564,6 +1599,7 @@ def create_bibliography_collection(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyCollectionRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     item = svc.create_bibliography_collection(
         current_user.id,
@@ -1581,6 +1617,7 @@ def update_bibliography_collection(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyCollectionRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.update_bibliography_collection(
@@ -1601,6 +1638,7 @@ def delete_bibliography_collection(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         svc.delete_bibliography_collection(bibliography_collection_id, current_user.id)
@@ -1615,6 +1653,7 @@ def add_paper_to_bibliography_collection(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         svc.add_reference_to_bibliography_collection(
@@ -1633,6 +1672,7 @@ def remove_paper_from_bibliography_collection(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         svc.remove_reference_from_bibliography_collection(
@@ -1665,6 +1705,7 @@ def bulk_link_bibliography_collection_to_research(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> dict[str, int]:
+    _reject_student(current_user)
     svc = ResearchService(db)
     member_id = _resolve_member_id(db, current_user, uuid.UUID(payload.project_id))
     try:
@@ -1688,6 +1729,7 @@ def bulk_link_bibliography_collection_to_teaching(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> dict[str, int]:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         count = svc.bulk_link_bibliography_collection_to_teaching(
@@ -1774,6 +1816,7 @@ def bibliography_embed_backfill(
     current_user: UserAccount = Depends(get_current_user),
 ) -> dict[str, int]:
     """Backfill embeddings for bibliography references that don't have one yet."""
+    _reject_student(current_user)
     svc = ResearchService(db)
     count = svc.embed_bibliography_backfill()
     db.commit()
@@ -1786,6 +1829,7 @@ def summarize_bibliography_reference(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> AISummaryRead:
+    _reject_student(current_user)
     from app.services.research_ai_service import ResearchAIService
 
     svc = ResearchService(db)
@@ -1924,7 +1968,9 @@ def update_global_bibliography_reference(
     bibliography_reference_id: uuid.UUID,
     payload: BibliographyReferenceUpdate,
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyReferenceRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.update_bibliography_reference(
@@ -1950,7 +1996,9 @@ def update_global_bibliography_reference(
 def delete_global_bibliography_reference(
     bibliography_reference_id: uuid.UUID,
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         svc.delete_bibliography_reference(bibliography_reference_id)
@@ -1964,6 +2012,7 @@ def import_global_bibliography_bibtex(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyBibtexImportRead:
+    _reject_student(current_user)
     from app.services.bibtex_parser import parse_bibtex
 
     entries = parse_bibtex(payload.bibtex)
@@ -2002,6 +2051,7 @@ def import_global_bibliography_identifiers(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyIdentifierImportRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         created, reused, errors = svc.import_bibliography_identifiers(
@@ -2025,6 +2075,7 @@ async def upload_global_bibliography_attachment(
     source_project_id: uuid.UUID | None = Query(default=None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyReferenceRead:
     svc = ResearchService(db)
     try:
@@ -2048,7 +2099,9 @@ def ingest_global_bibliography_attachment(
     bibliography_reference_id: uuid.UUID,
     source_project_id: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyReferenceRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.ensure_bibliography_document_ingested(
@@ -2065,7 +2118,9 @@ def ingest_global_bibliography_attachment(
 def extract_global_bibliography_abstract(
     bibliography_reference_id: uuid.UUID,
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyReferenceRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.extract_bibliography_abstract(bibliography_reference_id)
@@ -2081,6 +2136,7 @@ def extract_global_bibliography_concepts(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyReferenceRead:
+    _reject_student(current_user)
     from app.services.research_ai_service import ResearchAIService
 
     svc = ResearchService(db)
@@ -2174,6 +2230,7 @@ def create_bibliography_note(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyNoteRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.create_bibliography_note(
@@ -2195,6 +2252,7 @@ def update_bibliography_note(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyNoteRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = svc.update_bibliography_note(
@@ -2216,6 +2274,7 @@ def delete_bibliography_note(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> None:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         svc.delete_bibliography_note(note_id, current_user.id)
@@ -2246,6 +2305,7 @@ def set_bibliography_reading_status(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ) -> BibliographyReadingStatusRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         result = svc.set_bibliography_reading_status(bibliography_reference_id, current_user.id, payload.reading_status)
@@ -2302,7 +2362,9 @@ def update_reference_status(
     payload: ReferenceStatusPayload,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> ReferenceRead:
+    _reject_student(current_user)
     svc = ResearchService(db)
     try:
         item = (
@@ -2674,7 +2736,9 @@ def summarize_reference(
     reference_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> AISummaryRead:
+    _reject_student(current_user)
     from app.services.research_ai_service import ResearchAIService
     ai_svc = ResearchAIService(db)
     research_svc = ResearchService(db)
@@ -2705,7 +2769,9 @@ def extract_metadata_from_pdf(
     project_id: uuid.UUID,
     document_key: str = Query(...),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> ReferenceMetadataRead:
+    _reject_student(current_user)
     from app.services.research_ai_service import ResearchAIService
     svc = ResearchAIService(db)
     try:
@@ -2723,7 +2789,9 @@ def synthesize_collection(
     collection_id: uuid.UUID,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> AISynthesisRead:
+    _reject_student(current_user)
     from app.services.research_ai_service import ResearchAIService
     ai_svc = ResearchAIService(db)
     research_svc = ResearchService(db)

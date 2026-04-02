@@ -735,7 +735,7 @@ export type AuthUser = {
   id: string;
   email: string;
   display_name: string;
-  platform_role: "super_admin" | "user" | string;
+  platform_role: "super_admin" | "project_creator" | "user" | "student" | string;
   is_active: boolean;
   can_access_research: boolean;
   can_access_teaching: boolean;

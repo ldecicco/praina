@@ -9599,6 +9599,166 @@ tr.row-selected {
   gap: 6px;
 }
 
+/* ── Iteration cluster: rail + body ── */
+.iteration-cluster {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+}
+
+.iteration-cluster-rail {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.iteration-cluster-rail-line {
+  flex: 1 1 0;
+  width: 2px;
+  min-height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 30%, var(--line));
+  transition: background var(--t);
+}
+
+.iteration-cluster-rail:hover .iteration-cluster-rail-line {
+  background: color-mix(in srgb, var(--brand) 55%, var(--line));
+}
+
+.iteration-cluster-rail-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.iteration-cluster-body {
+  min-width: 0;
+}
+
+/* ── Collapsed: stacked cards ── */
+.iteration-stack {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+}
+
+.iteration-stack-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.iteration-stack-label strong {
+  color: var(--text-bright);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.iteration-stack-label span:not(strong) {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* The deck: positioned container holding real log cards stacked */
+.iteration-stack-deck {
+  position: relative;
+  margin-bottom: calc((var(--stack-n, 3) - 1) * 8px);
+}
+
+/* All layers disable interaction — the parent handles click */
+.iteration-stack-layer {
+  pointer-events: none;
+}
+
+/* ALL cards in the stack: collapse to header-only */
+.iteration-stack-layer .research-log-card {
+  gap: 0;
+}
+
+/* Hide everything except the head row */
+.iteration-stack-layer .research-log-card > *:not(.research-log-head) {
+  display: none;
+}
+
+/* Hide the controls inside the head too */
+.iteration-stack-layer .research-log-controls {
+  display: none;
+}
+
+/* Hide the checkbox */
+.iteration-stack-layer .research-log-select {
+  display: none;
+}
+
+/* Front card: normal flow, sets the deck height */
+.iteration-stack-layer:first-child {
+  position: relative;
+  z-index: 3;
+}
+
+/* Back cards: absolute, offset down + inset horizontally for perspective */
+.iteration-stack-layer:nth-child(2) {
+  position: absolute;
+  top: 0;
+  left: 3px;
+  right: 3px;
+  z-index: 2;
+  transform: translateY(8px);
+  transition: transform var(--t);
+}
+
+.iteration-stack-layer:nth-child(3) {
+  position: absolute;
+  top: 0;
+  left: 6px;
+  right: 6px;
+  z-index: 1;
+  transform: translateY(16px);
+  transition: transform var(--t);
+}
+
+/* Back cards: dimmed, shadow for depth */
+.iteration-stack-layer:nth-child(2) .research-log-card {
+  background: var(--surface);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+}
+
+.iteration-stack-layer:nth-child(3) .research-log-card {
+  background: var(--surface-2);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+}
+
+/* Hover: fan out more + highlight front */
+.iteration-stack:hover .iteration-stack-layer:nth-child(2) {
+  transform: translateY(10px);
+}
+.iteration-stack:hover .iteration-stack-layer:nth-child(3) {
+  transform: translateY(20px);
+}
+.iteration-stack:hover .iteration-stack-layer:first-child .research-log-card {
+  border-color: var(--line-strong);
+}
+
 .research-log-card {
   display: flex;
   flex-direction: column;

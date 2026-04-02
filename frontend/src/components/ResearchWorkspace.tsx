@@ -755,6 +755,7 @@ export function ResearchWorkspace({
   const [submittingReplyNoteId, setSubmittingReplyNoteId] = useState<string | null>(null);
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [replyRefIds, setReplyRefIds] = useState<Record<string, string[]>>({});
+  const [collapsedIterationIds, setCollapsedIterationIds] = useState<Set<string>>(new Set());
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
@@ -5234,6 +5235,7 @@ function newStudyResult(): ResearchStudyResult {
     const unassignedLogs = notes.filter((note) => note.collection_id === selectedCollectionId && !noteIterationState(note.id).assigned);
     const allVisibleSelected = orderedNotes.length > 0 && orderedNotes.every((note) => selectedInboxLogIds.has(note.id));
     const fileLookup = new Map(studyFiles.map((item) => [item.id, item]));
+    const iterationLookup = new Map(studyIterations.map((iteration) => [iteration.id, iteration]));
 
     function renderReferencedFilePreviews(content: string, fileIds: string[]) {
       const files = extractMarkdownFileLabels(content)
@@ -5623,6 +5625,82 @@ function newStudyResult(): ResearchStudyResult {
       );
     };
 
+    function toggleIterationCollapsed(iterationId: string) {
+      setCollapsedIterationIds((current) => {
+        const next = new Set(current);
+        if (next.has(iterationId)) next.delete(iterationId);
+        else next.add(iterationId);
+        return next;
+      });
+    }
+
+    function renderIterationCluster(iterationId: string, clusterNotes: ResearchNote[]) {
+      const iteration = iterationLookup.get(iterationId);
+      const collapsed = collapsedIterationIds.has(iterationId);
+      const stackNotes = clusterNotes.slice(0, 3);
+      return (
+        <div key={`iteration-cluster-${iterationId}`} className={`iteration-cluster${collapsed ? " collapsed" : ""}`}>
+          <button
+            type="button"
+            className="iteration-cluster-rail"
+            onClick={() => toggleIterationCollapsed(iterationId)}
+            title={collapsed ? "Expand iteration" : "Collapse iteration"}
+          >
+            <span className="iteration-cluster-rail-line" />
+            <span className="iteration-cluster-rail-count">{clusterNotes.length}</span>
+          </button>
+          <div className="iteration-cluster-body">
+            {collapsed ? (
+              <div
+                className="iteration-stack"
+                style={{ ["--stack-n" as string]: stackNotes.length } as React.CSSProperties}
+                onClick={() => toggleIterationCollapsed(iterationId)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleIterationCollapsed(iterationId); }}
+              >
+                <span className="iteration-stack-label">
+                  <strong>{iteration?.title || "Iteration"}</strong>
+                  <span>{clusterNotes.length} logs</span>
+                </span>
+                <div className="iteration-stack-deck">
+                  {stackNotes.map((note, index) => (
+                    <div
+                      key={`${iterationId}-stack-${note.id}`}
+                      className="iteration-stack-layer"
+                      style={{ ["--i" as string]: index } as React.CSSProperties}
+                    >
+                      {renderNoteCard(note)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="research-log-list">
+                {clusterNotes.map(renderNoteCard)}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function renderNoteList(noteItems: ResearchNote[]) {
+      const renderedIterationIds = new Set<string>();
+      return noteItems.map((note) => {
+        const iterationState = noteIterationState(note.id);
+        if (!iterationState.iterationId) {
+          return renderNoteCard(note);
+        }
+        if (renderedIterationIds.has(iterationState.iterationId)) {
+          return null;
+        }
+        renderedIterationIds.add(iterationState.iterationId);
+        const clusterNotes = noteItems.filter((item) => noteIterationState(item.id).iterationId === iterationState.iterationId);
+        return renderIterationCluster(iterationState.iterationId, clusterNotes);
+      });
+    }
+
     return (
       <>
         <div className={`research-log-composer${composerExpanded ? " expanded" : ""}`}>
@@ -5760,13 +5838,13 @@ function newStudyResult(): ResearchStudyResult {
               <div className="log-group-label log-group-unprocessed">Needs Processing <span className="delivery-tab-count">{unprocessedNotes.length}</span></div>
             ) : null}
             <div className="research-log-list">
-              {(unprocessedNotes.length > 0 && processedNotes.length > 0 ? unprocessedNotes : orderedNotes).map(renderNoteCard)}
+              {renderNoteList(unprocessedNotes.length > 0 && processedNotes.length > 0 ? unprocessedNotes : orderedNotes)}
             </div>
             {unprocessedNotes.length > 0 && processedNotes.length > 0 ? (
               <>
                 <div className="log-group-label log-group-processed">Processed <span className="delivery-tab-count">{processedNotes.length}</span></div>
                 <div className="research-log-list">
-                  {processedNotes.map(renderNoteCard)}
+                  {renderNoteList(processedNotes)}
                 </div>
               </>
             ) : null}

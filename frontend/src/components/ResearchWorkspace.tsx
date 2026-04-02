@@ -514,6 +514,20 @@ function deriveLogTitle(content: string): string {
   return collapsed.length > 72 ? `${collapsed.slice(0, 72).trimEnd()}...` : collapsed;
 }
 
+async function computeStudyFileFingerprint(file: File): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  try {
+    const buffer = await file.arrayBuffer();
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+    const hex = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    return `${file.type || "application/octet-stream"}:${file.size}:${hex}`;
+  } catch {
+    return null;
+  }
+}
+
 export function ResearchWorkspace({
   researchSpaceId,
   availableResearchSpaces,
@@ -612,6 +626,7 @@ export function ResearchWorkspace({
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingBibliographyId, setEditingBibliographyId] = useState<string | null>(null);
   const [editingBibliographyCollectionId, setEditingBibliographyCollectionId] = useState<string | null>(null);
+  const uploadedStudyFileFingerprintMapRef = useRef<Map<string, ResearchStudyFile>>(new Map());
 
   const [collectionTitle, setCollectionTitle] = useState("");
   const [collectionDescription, setCollectionDescription] = useState("");
@@ -3601,12 +3616,10 @@ function newStudyResult(): ResearchStudyResult {
     }
   }
 
-  async function handleUploadStudyFile(file: File, options?: { linkToQuickLog?: boolean; linkToInlineEdit?: boolean; linkToNoteModal?: boolean }) {
-    if (!selectedProjectId || !selectedCollectionId) return;
-    setUploadingStudyFile(true);
-    setError("");
-    try {
-      const created = await api.uploadStudyFile(selectedProjectId, selectedCollectionId, file, activeResearchSpaceId);
+  async function handleUploadStudyFile(file: File, options?: { linkToQuickLog?: boolean; linkToInlineEdit?: boolean; linkToNoteModal?: boolean }): Promise<ResearchStudyFile | null> {
+    if (!selectedProjectId || !selectedCollectionId) return null;
+
+    function linkCreatedFile(created: ResearchStudyFile) {
       setStudyFiles((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       if (options?.linkToQuickLog) {
         setQuickLogFileIds((current) => (current.includes(created.id) ? current : [...current, created.id]));
@@ -3617,12 +3630,33 @@ function newStudyResult(): ResearchStudyResult {
       if (options?.linkToNoteModal) {
         setNoteFileIds((current) => (current.includes(created.id) ? current : [...current, created.id]));
       }
+    }
+
+    setUploadingStudyFile(true);
+    setError("");
+    try {
+      const fingerprint = await computeStudyFileFingerprint(file);
+      const fingerprintKey = fingerprint ? `${selectedCollectionId}:${fingerprint}` : null;
+      const cached = fingerprintKey ? uploadedStudyFileFingerprintMapRef.current.get(fingerprintKey) ?? null : null;
+      if (cached && cached.collection_id === selectedCollectionId) {
+        linkCreatedFile(cached);
+        setStatus("File reused.");
+        return cached;
+      }
+
+      const created = await api.uploadStudyFile(selectedProjectId, selectedCollectionId, file, activeResearchSpaceId);
+      linkCreatedFile(created);
+      if (fingerprintKey) {
+        uploadedStudyFileFingerprintMapRef.current.set(fingerprintKey, created);
+      }
       if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
       }
       setStatus("File uploaded.");
+      return created;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload file");
+      return null;
     } finally {
       setUploadingStudyFile(false);
       if (quickLogFileInputRef.current) quickLogFileInputRef.current.value = "";
@@ -7929,6 +7963,10 @@ function newStudyResult(): ResearchStudyResult {
                     }}
                     onFileLinked={(fileId) => {
                       setNoteFileIds((current) => current.includes(fileId) ? current : [...current, fileId]);
+                    }}
+                    onPasteImage={async (file) => {
+                      const created = await handleUploadStudyFile(file, { linkToNoteModal: true });
+                      return created ? { id: created.id, label: created.original_filename } : null;
                     }}
                     onReady={(editor) => {
                       noteEditorRef.current = editor;

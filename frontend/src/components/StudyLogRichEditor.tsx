@@ -250,6 +250,7 @@ type Props = {
   tagSuggestions?: string[];
   onReferenceLinked?: (referenceId: string) => void;
   onFileLinked?: (fileId: string) => void;
+  onPasteImage?: (file: File) => Promise<{ id: string; label: string } | null>;
 };
 
 type SuggestionState =
@@ -280,6 +281,7 @@ export function StudyLogRichEditor({
   tagSuggestions = [],
   onReferenceLinked,
   onFileLinked,
+  onPasteImage,
 }: Props) {
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [tableGridHover, setTableGridHover] = useState<[number, number]>([0, 0]);
@@ -337,6 +339,36 @@ export function StudyLogRichEditor({
       attributes: {
         class: "study-log-editor-content",
       },
+      handlePaste(view, event) {
+        if (!onPasteImage) return false;
+        const clipboardEvent = event as ClipboardEvent;
+        const items = Array.from(clipboardEvent.clipboardData?.items || []);
+        const imageItem = items.find((item) => item.type.startsWith("image/"));
+        if (!imageItem) return false;
+        const blob = imageItem.getAsFile();
+        if (!blob) return false;
+        event.preventDefault();
+        const extension = blob.type.split("/")[1] || "png";
+        const fileName = blob.name && blob.name.trim()
+          ? blob.name
+          : `clipboard-image-${Date.now()}.${extension}`;
+        const file = new File([blob], fileName, {
+          type: blob.type || "image/png",
+          lastModified: Date.now(),
+        });
+        const insertFrom = view.state.selection.from;
+        const insertTo = view.state.selection.to;
+        void onPasteImage(file).then((created) => {
+          if (!created) return;
+          const tr = view.state.tr.insertText(`![${created.label}] `, insertFrom, insertTo);
+          view.dispatch(tr);
+          view.focus();
+          onFileLinked?.(created.id);
+        }).catch(() => {
+          /* caller surfaces upload errors */
+        });
+        return true;
+      },
     },
     onUpdate: ({ editor: nextEditor }) => {
       const next = nextEditor.getMarkdown();
@@ -359,6 +391,11 @@ export function StudyLogRichEditor({
     if (current === value) return;
     editor.commands.setContent(value || "", { contentType: "markdown" });
   }, [editor, value]);
+
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dispatch(editor.state.tr.setMeta("study-log-refresh-previews", Date.now()));
+  }, [editor, linkedFiles, projectId, collectionId, spaceId]);
 
   useEffect(() => {
     if (!tableMenuOpen) return;

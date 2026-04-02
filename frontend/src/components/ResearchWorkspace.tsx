@@ -7889,7 +7889,7 @@ function newStudyResult(): ResearchStudyResult {
       .filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
 
     return (
-      <div className="modal-overlay" role="dialog" aria-modal="true" onClick={() => setNoteModalOpen(false)}>
+      <div className="modal-overlay research-editor-overlay" role="dialog" aria-modal="true" onClick={() => setNoteModalOpen(false)}>
         <div className="modal-card settings-modal-card research-editor-modal" onClick={(event) => event.stopPropagation()}>
           <div className="modal-head">
             <h3>{noteModalMode === "create" ? "New Log" : "Edit Log"}</h3>

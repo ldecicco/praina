@@ -13092,6 +13092,19 @@ button.danger:hover:not(:disabled) {
   flex-direction: column;
 }
 
+.research-editor-overlay {
+  z-index: 1600;
+}
+
+.research-editor-overlay .research-editor-modal {
+  position: relative;
+  z-index: 1;
+}
+
+.research-editor-overlay .study-log-editor-suggestions {
+  z-index: 1601;
+}
+
 .research-editor-shell {
   min-height: 0;
   flex: 1 1 auto;

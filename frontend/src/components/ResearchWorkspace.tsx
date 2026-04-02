@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
+import { createPortal } from "react-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArchive,
@@ -7896,6 +7897,7 @@ function newStudyResult(): ResearchStudyResult {
   }
 
   function renderNoteModal() {
+    if (typeof document === "undefined") return null;
     const linkableReferences = Array.from(
       new Map(
         [...references, ...allReferences]
@@ -7922,7 +7924,7 @@ function newStudyResult(): ResearchStudyResult {
       .filter((item): item is ResearchStudyFile => Boolean(item))
       .filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
 
-    return (
+    return createPortal(
       <div className="modal-overlay research-editor-overlay" role="dialog" aria-modal="true" onClick={() => setNoteModalOpen(false)}>
         <div className="modal-card settings-modal-card research-editor-modal" onClick={(event) => event.stopPropagation()}>
           <div className="modal-head">
@@ -8038,7 +8040,8 @@ function newStudyResult(): ResearchStudyResult {
             </aside>
           </div>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 

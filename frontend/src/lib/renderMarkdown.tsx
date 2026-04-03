@@ -257,6 +257,7 @@ function renderInlineMarkdown(text: string, options?: RenderMarkdownOptions): Re
       nodes.push(
         <a
           key={`markdown-inline-${key++}`}
+          className="markdown-inline-link"
           href={href}
           target={external ? "_blank" : undefined}
           rel={external ? "noreferrer" : undefined}
@@ -266,7 +267,7 @@ function renderInlineMarkdown(text: string, options?: RenderMarkdownOptions): Re
       );
     } else if (match[9]) {
       nodes.push(
-        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[9]}`}>
+        <a key={`markdown-inline-${key++}`} className="markdown-inline-link" href={`#call-citation-${match[9]}`}>
           [{match[9]}]
         </a>
       );
@@ -383,6 +384,12 @@ export function renderMarkdown(content: string, options?: RenderMarkdownOptions)
       continue;
     }
 
+    if (/^\s*(?:---|\*\*\*|___)\s*$/.test(line)) {
+      output.push(<hr key={`markdown-block-${key++}`} className="markdown-rule" />);
+      i += 1;
+      continue;
+    }
+
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
@@ -411,6 +418,30 @@ export function renderMarkdown(content: string, options?: RenderMarkdownOptions)
         i += 1;
       }
       output.push(<ol key={`markdown-block-${key++}`}>{items}</ol>);
+      continue;
+    }
+
+    if (/^\s*(?:[-*+]\s+)?\[(?: |x|X|-)\]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^\s*(?:[-*+]\s+)?\[(?: |x|X|-)\]\s+/.test(lines[i])) {
+        const match = lines[i].match(/^\s*(?:[-*+]\s+)?(\[(?: |x|X|-)\])\s+(.*)$/);
+        const marker = match?.[1] || "[ ]";
+        const body = match?.[2] || "";
+        const state =
+          marker === "[x]" || marker === "[X]"
+            ? "done"
+            : marker === "[-]"
+            ? "doing"
+            : "open";
+        items.push(
+          <li key={`markdown-task-${key++}`} className={`markdown-task-item state-${state}`}>
+            <span className={`markdown-task-checkbox state-${state}`} aria-hidden="true" />
+            <span className="markdown-task-copy">{renderInlineMarkdown(body, options)}</span>
+          </li>
+        );
+        i += 1;
+      }
+      output.push(<ul key={`markdown-block-${key++}`} className="markdown-task-list">{items}</ul>);
       continue;
     }
 

@@ -1411,6 +1411,25 @@ class ResearchService:
         except ValueError as exc:
             raise ValidationError("Invalid note type.") from exc
 
+    def _ensure_single_index_note(
+        self,
+        *,
+        collection_id: uuid.UUID | None,
+        note_type: NoteType,
+        exclude_note_id: uuid.UUID | None = None,
+    ) -> None:
+        if note_type != NoteType.index or collection_id is None:
+            return
+        stmt = select(ResearchNote.id).where(
+            ResearchNote.collection_id == collection_id,
+            ResearchNote.note_type == NoteType.index,
+        )
+        if exclude_note_id is not None:
+            stmt = stmt.where(ResearchNote.id != exclude_note_id)
+        existing = self.db.scalar(stmt.limit(1))
+        if existing:
+            raise ValidationError("Only one Index is allowed per study.")
+
     def _bibliography_visibility(self, value: str) -> BibliographyVisibility:
         try:
             return BibliographyVisibility(value)
@@ -4709,6 +4728,8 @@ class ResearchService:
         linked_note_ids: list[str] | None = None,
     ) -> ResearchNote:
         self._get_project(project_id)
+        resolved_note_type = self._note_type(note_type)
+        self._ensure_single_index_note(collection_id=collection_id, note_type=resolved_note_type)
         item = ResearchNote(
             project_id=project_id,
             title=title[:255].strip(),
@@ -4717,7 +4738,7 @@ class ResearchService:
             lane=self._note_lane(lane),
             pinned=bool(pinned),
             starred=bool(starred),
-            note_type=self._note_type(note_type),
+            note_type=resolved_note_type,
             tags=self._merged_note_tags(content, tags),
             author_member_id=author_member_id,
             user_account_id=user_account_id,
@@ -4754,6 +4775,8 @@ class ResearchService:
         if project_id:
             item = self.create_note(project_id, **kwargs)
         else:
+            resolved_note_type = self._note_type(kwargs.get("note_type") or "observation")
+            self._ensure_single_index_note(collection_id=kwargs.get("collection_id"), note_type=resolved_note_type)
             item = ResearchNote(
                 research_space_id=space_id,
                 project_id=None,
@@ -4763,7 +4786,7 @@ class ResearchService:
                 lane=self._note_lane(kwargs.get("lane")),
                 pinned=bool(kwargs.get("pinned")),
                 starred=bool(kwargs.get("starred")),
-                note_type=self._note_type(kwargs.get("note_type") or "observation"),
+                note_type=resolved_note_type,
                 tags=self._merged_note_tags(kwargs.get("content"), kwargs.get("tags")),
                 author_member_id=kwargs.get("author_member_id"),
                 user_account_id=kwargs.get("user_account_id"),
@@ -4803,6 +4826,8 @@ class ResearchService:
             return self.create_note_for_space(collection.research_space_id, collection_id=collection_id, **kwargs)
         if collection.project_id:
             return self.create_note(collection.project_id, collection_id=collection_id, **kwargs)
+        resolved_note_type = self._note_type(kwargs.get("note_type") or "observation")
+        self._ensure_single_index_note(collection_id=collection_id, note_type=resolved_note_type)
         item = ResearchNote(
             research_space_id=None,
             project_id=None,
@@ -4812,7 +4837,7 @@ class ResearchService:
             lane=self._note_lane(kwargs.get("lane")),
             pinned=bool(kwargs.get("pinned")),
             starred=bool(kwargs.get("starred")),
-            note_type=self._note_type(kwargs.get("note_type") or "observation"),
+            note_type=resolved_note_type,
             tags=self._merged_note_tags(kwargs.get("content"), kwargs.get("tags")),
             author_member_id=kwargs.get("author_member_id"),
             user_account_id=kwargs.get("user_account_id"),
@@ -4860,6 +4885,13 @@ class ResearchService:
         linked_note_ids: list[str] | None = None,
     ) -> ResearchNote:
         item = self.get_note(project_id, note_id)
+        target_collection_id = uuid.UUID(collection_id) if collection_id else item.collection_id if collection_id is not None else item.collection_id
+        target_note_type = self._note_type(note_type) if note_type is not None else item.note_type
+        self._ensure_single_index_note(
+            collection_id=target_collection_id,
+            note_type=target_note_type,
+            exclude_note_id=item.id,
+        )
         if title is not None:
             item.title = title[:255].strip()
         if content is not None:
@@ -4873,7 +4905,7 @@ class ResearchService:
         if starred is not None:
             item.starred = bool(starred)
         if note_type is not None:
-            item.note_type = self._note_type(note_type)
+            item.note_type = target_note_type
         if tags is not None:
             item.tags = self._merged_note_tags(item.content, tags)
         elif content is not None:
@@ -4904,6 +4936,13 @@ class ResearchService:
         item = self.get_note_for_space(space_id, note_id)
         if item.project_id:
             return self.update_note(item.project_id, note_id, **kwargs)
+        target_collection_id = uuid.UUID(kwargs["collection_id"]) if kwargs.get("collection_id") else item.collection_id if kwargs.get("collection_id") is not None else item.collection_id
+        target_note_type = self._note_type(kwargs["note_type"]) if kwargs.get("note_type") is not None else item.note_type
+        self._ensure_single_index_note(
+            collection_id=target_collection_id,
+            note_type=target_note_type,
+            exclude_note_id=item.id,
+        )
         if kwargs.get("title") is not None:
             item.title = kwargs["title"][:255].strip()
         if kwargs.get("content") is not None:
@@ -4917,7 +4956,7 @@ class ResearchService:
         if kwargs.get("starred") is not None:
             item.starred = bool(kwargs["starred"])
         if kwargs.get("note_type") is not None:
-            item.note_type = self._note_type(kwargs["note_type"])
+            item.note_type = target_note_type
         if kwargs.get("tags") is not None:
             item.tags = self._merged_note_tags(item.content, kwargs["tags"])
         elif kwargs.get("content") is not None:
@@ -4955,6 +4994,13 @@ class ResearchService:
             return self.update_note(item.project_id, note_id, **kwargs)
         if item.research_space_id:
             return self.update_note_for_space(item.research_space_id, note_id, **kwargs)
+        target_collection_id = uuid.UUID(kwargs["collection_id"]) if kwargs.get("collection_id") else item.collection_id if kwargs.get("collection_id") is not None else item.collection_id
+        target_note_type = self._note_type(kwargs["note_type"]) if kwargs.get("note_type") is not None else item.note_type
+        self._ensure_single_index_note(
+            collection_id=target_collection_id,
+            note_type=target_note_type,
+            exclude_note_id=item.id,
+        )
         if kwargs.get("title") is not None:
             item.title = kwargs["title"][:255].strip()
         if kwargs.get("content") is not None:
@@ -4968,7 +5014,7 @@ class ResearchService:
         if kwargs.get("starred") is not None:
             item.starred = bool(kwargs["starred"])
         if kwargs.get("note_type") is not None:
-            item.note_type = self._note_type(kwargs["note_type"])
+            item.note_type = target_note_type
         if kwargs.get("tags") is not None:
             item.tags = self._merged_note_tags(item.content, kwargs["tags"])
         elif kwargs.get("content") is not None:

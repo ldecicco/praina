@@ -36,6 +36,7 @@ import { api } from "../lib/api";
 import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { useStatusToast } from "../lib/useStatusToast";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
+import { StudyGraphModal } from "./StudyGraphModal";
 import { StudyCollabChat } from "./StudyCollabChat";
 import { StudyLogRichEditor } from "./StudyLogRichEditor";
 import { renderMarkdown } from "../lib/renderMarkdown";
@@ -91,6 +92,18 @@ type ReferenceModalTab = "manual" | "bibtex" | "pdf" | "document";
 type BibliographyModalMode = "create" | "edit";
 type BibliographyCreateTab = "manual" | "batch";
 type BibTab = "papers" | "collections";
+type NoteModalSnapshot = {
+  title: string;
+  content: string;
+  noteType: string;
+  collectionId: string;
+  lane: string;
+  pinned: boolean;
+  starred: boolean;
+  referenceIds: string[];
+  fileIds: string[];
+  linkedNoteIds: string[];
+};
 
 function csvToList(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -98,6 +111,29 @@ function csvToList(value: string): string[] {
 
 function toggleListValue(values: string[], value: string): string[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function sortedUniqueIds(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function buildNoteModalSnapshot(value: NoteModalSnapshot): NoteModalSnapshot {
+  return {
+    title: value.title,
+    content: value.content,
+    noteType: value.noteType,
+    collectionId: value.collectionId,
+    lane: value.lane,
+    pinned: value.pinned,
+    starred: value.starred,
+    referenceIds: sortedUniqueIds(value.referenceIds),
+    fileIds: sortedUniqueIds(value.fileIds),
+    linkedNoteIds: sortedUniqueIds(value.linkedNoteIds),
+  };
+}
+
+function noteModalSnapshotsEqual(a: NoteModalSnapshot, b: NoteModalSnapshot): boolean {
+  return JSON.stringify(buildNoteModalSnapshot(a)) === JSON.stringify(buildNoteModalSnapshot(b));
 }
 
 function moveItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
@@ -110,6 +146,10 @@ function moveItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
 
 function normalizeTagLabel(value: string): string {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function isIndexNote(note: ResearchNote): boolean {
+  return note.note_type === "index";
 }
 
 function bibliographyDocumentStatusLabel(status: string | null): string {
@@ -897,11 +937,18 @@ export function ResearchWorkspace({
   const [inlineEditRefIds, setInlineEditRefIds] = useState<string[]>([]);
   const [inlineEditFileIds, setInlineEditFileIds] = useState<string[]>([]);
   const [inlineEditLinkedNoteIds, setInlineEditLinkedNoteIds] = useState<string[]>([]);
+  const [editingIterationTitleId, setEditingIterationTitleId] = useState<string | null>(null);
+  const [inlineIterationTitle, setInlineIterationTitle] = useState("");
+  const [editingIterationStartId, setEditingIterationStartId] = useState<string | null>(null);
+  const [inlineIterationStart, setInlineIterationStart] = useState("");
+  const [editingIterationEndId, setEditingIterationEndId] = useState<string | null>(null);
+  const [inlineIterationEnd, setInlineIterationEnd] = useState("");
   const [replyingNoteId, setReplyingNoteId] = useState<string | null>(null);
   const [submittingReplyNoteId, setSubmittingReplyNoteId] = useState<string | null>(null);
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [replyRefIds, setReplyRefIds] = useState<Record<string, string[]>>({});
   const [collapsedIterationIds, setCollapsedIterationIds] = useState<Set<string>>(new Set());
+  const [foldedNoteIds, setFoldedNoteIds] = useState<Set<string>>(new Set());
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionTrigger, setMentionTrigger] = useState<"@" | "%">("%");
   const [mentionQuery, setMentionQuery] = useState("");
@@ -944,12 +991,14 @@ export function ResearchWorkspace({
   const [extractingBibliographyConceptsId, setExtractingBibliographyConceptsId] = useState<string | null>(null);
   const [bibliographyGraphOpen, setBibliographyGraphOpen] = useState(false);
   const [bibliographyGraphReferences, setBibliographyGraphReferences] = useState<BibliographyReference[]>([]);
+  const [studyGraphOpen, setStudyGraphOpen] = useState(false);
   const quickLogInputRef = useRef<HTMLTextAreaElement | null>(null);
   const quickLogFileInputRef = useRef<HTMLInputElement | null>(null);
   const inlineEditFileInputRef = useRef<HTMLInputElement | null>(null);
   const noteSearchInputRef = useRef<HTMLInputElement | null>(null);
   const noteEditorRef = useRef<Editor | null>(null);
   const noteModalFileInputRef = useRef<HTMLInputElement | null>(null);
+  const noteModalInitialSnapshotRef = useRef<NoteModalSnapshot | null>(null);
   const [studySearchQuery, setStudySearchQuery] = useState("");
   const pendingNavigationSyncRef = useRef<string | null>(null);
   const lastAppliedNavigationStateRef = useRef<string | null>(null);
@@ -1001,6 +1050,12 @@ export function ResearchWorkspace({
     const weakSections = paperSections.filter((s) => s.claim_ids.length + s.reference_ids.length + s.note_ids.length + s.result_ids.length === 0).length;
     return { inboxAlert: unprocessedInbox > 0, paperAlert: unsupportedClaims > 0 || weakSections > 0, refsAlert: unreadRefCount > 0 };
   }, [notes, selectedCollectionId, paperQuestions, paperClaims, paperSections, unreadRefCount]);
+  const visibleStudyLogNotes = useMemo(
+    () => notes.filter((item) => item.collection_id === selectedCollectionId && !isIndexNote(item)),
+    [notes, selectedCollectionId],
+  );
+  const allVisibleStudyLogsFolded =
+    visibleStudyLogNotes.length > 0 && visibleStudyLogNotes.every((item) => foldedNoteIds.has(item.id));
   const selectedCollection = collections.find((item) => item.id === selectedCollectionId) ?? null;
   const selectedBibliographyCollection = bibliographyCollections.find((item) => item.id === selectedBibliographyCollectionId) ?? null;
 
@@ -1115,6 +1170,20 @@ export function ResearchWorkspace({
       const currentIndex = Math.max(visibleIds.indexOf(currentId), 0);
       const activeNote = notes.find((item) => item.id === currentId) || null;
 
+      if (event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setFoldedNoteIds((current) => {
+          const allFolded = visibleIds.every((id) => current.has(id));
+          const next = new Set(current);
+          if (allFolded) {
+            visibleIds.forEach((id) => next.delete(id));
+          } else {
+            visibleIds.forEach((id) => next.add(id));
+          }
+          return next;
+        });
+        return;
+      }
       if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         const delta = event.key === "j" ? 1 : -1;
@@ -1379,6 +1448,29 @@ export function ResearchWorkspace({
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperDirty, paperTitle, paperMotivation, paperVenue, paperOverleafUrl, paperStatus, paperRegistrationDeadline, paperSubmissionDeadline, paperDecisionDate, paperAuthors, paperQuestions, paperClaims, paperSections]);
+
+  useEffect(() => {
+    if (!noteModalOpen) return;
+    function handleNoteModalEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      closeNoteModal();
+    }
+    window.addEventListener("keydown", handleNoteModalEscape);
+    return () => window.removeEventListener("keydown", handleNoteModalEscape);
+  }, [
+    noteModalOpen,
+    noteTitle,
+    noteContent,
+    noteType,
+    noteCollectionId,
+    noteLane,
+    notePinned,
+    noteStarred,
+    noteReferenceIds,
+    noteFileIds,
+    noteLinkedNoteIds,
+  ]);
 
   // Mark paper dirty when any paper field changes (skip the initial sync)
   const paperSyncedRef = useRef(false);
@@ -1741,6 +1833,32 @@ export function ResearchWorkspace({
     setEditingNoteId(null);
   }
 
+  function setInitialNoteModalSnapshot(snapshot: NoteModalSnapshot) {
+    noteModalInitialSnapshotRef.current = buildNoteModalSnapshot(snapshot);
+  }
+
+  function currentNoteModalSnapshot(): NoteModalSnapshot {
+    return buildNoteModalSnapshot({
+      title: noteTitle,
+      content: noteContent,
+      noteType,
+      collectionId: noteCollectionId,
+      lane: noteLane,
+      pinned: notePinned,
+      starred: noteStarred,
+      referenceIds: noteReferenceIds,
+      fileIds: noteFileIds,
+      linkedNoteIds: noteLinkedNoteIds,
+    });
+  }
+
+  function noteModalHasUnsavedChanges() {
+    if (!noteModalOpen) return false;
+    const initial = noteModalInitialSnapshotRef.current;
+    if (!initial) return false;
+    return !noteModalSnapshotsEqual(initial, currentNoteModalSnapshot());
+  }
+
   function resetBibliographyForm() {
     setBibliographyCreateTab("manual");
     setBibliographyTitle("");
@@ -1950,42 +2068,78 @@ export function ResearchWorkspace({
     setReferenceModalOpen(true);
   }
 
-  function openCreateNoteModal(options?: { seedFromQuickLog?: boolean }) {
+  function openCreateNoteModal(options?: { seedFromQuickLog?: boolean; noteType?: string }) {
     if (!selectedCollectionId) {
       setError("Select a study first.");
       return;
     }
+    const nextSnapshot = buildNoteModalSnapshot({
+      title: options?.seedFromQuickLog ? (quickLogTitle.trim() || deriveLogTitle(quickLogContent)) : "",
+      content: options?.seedFromQuickLog ? quickLogContent : "",
+      noteType: options?.noteType || "observation",
+      collectionId: selectedCollectionId,
+      lane: options?.seedFromQuickLog ? quickLogLane : "",
+      pinned: false,
+      starred: false,
+      referenceIds: options?.seedFromQuickLog ? [...quickLogRefIds] : [],
+      fileIds: options?.seedFromQuickLog ? [...quickLogFileIds] : [],
+      linkedNoteIds: [],
+    });
     setNoteModalMode("create");
     setEditingNoteId(null);
-    setNoteCollectionId(selectedCollectionId);
-    setNoteTitle(options?.seedFromQuickLog ? (quickLogTitle.trim() || deriveLogTitle(quickLogContent)) : "");
-    setNoteContent(options?.seedFromQuickLog ? quickLogContent : "");
-    setNoteLane(options?.seedFromQuickLog ? quickLogLane : "");
-    setNotePinned(false);
-    setNoteStarred(false);
-    setNoteType("observation");
-    setNoteReferenceIds(options?.seedFromQuickLog ? [...quickLogRefIds] : []);
-    setNoteFileIds(options?.seedFromQuickLog ? [...quickLogFileIds] : []);
-    setNoteLinkedNoteIds([]);
+    setNoteCollectionId(nextSnapshot.collectionId);
+    setNoteTitle(nextSnapshot.title);
+    setNoteContent(nextSnapshot.content);
+    setNoteLane(nextSnapshot.lane);
+    setNotePinned(nextSnapshot.pinned);
+    setNoteStarred(nextSnapshot.starred);
+    setNoteType(nextSnapshot.noteType);
+    setNoteReferenceIds(nextSnapshot.referenceIds);
+    setNoteFileIds(nextSnapshot.fileIds);
+    setNoteLinkedNoteIds(nextSnapshot.linkedNoteIds);
+    setInitialNoteModalSnapshot(nextSnapshot);
     setNoteModalOpen(true);
     void loadNoteTemplates();
   }
 
   function openEditNoteModal(note: ResearchNote) {
+    const nextSnapshot = buildNoteModalSnapshot({
+      title: note.title,
+      content: note.content,
+      noteType: note.note_type,
+      collectionId: note.collection_id || selectedCollectionId || "",
+      lane: note.lane || "",
+      pinned: note.pinned,
+      starred: note.starred,
+      referenceIds: note.linked_reference_ids,
+      fileIds: note.linked_file_ids || [],
+      linkedNoteIds: note.linked_note_ids || [],
+    });
     setNoteModalMode("edit");
     setEditingNoteId(note.id);
-    setNoteTitle(note.title);
-    setNoteContent(note.content);
-    setNoteType(note.note_type);
-    setNoteCollectionId(note.collection_id || selectedCollectionId || "");
-    setNoteLane(note.lane || "");
-    setNotePinned(note.pinned);
-    setNoteStarred(note.starred);
-    setNoteReferenceIds(note.linked_reference_ids);
-    setNoteFileIds(note.linked_file_ids || []);
-    setNoteLinkedNoteIds(note.linked_note_ids || []);
+    setNoteTitle(nextSnapshot.title);
+    setNoteContent(nextSnapshot.content);
+    setNoteType(nextSnapshot.noteType);
+    setNoteCollectionId(nextSnapshot.collectionId);
+    setNoteLane(nextSnapshot.lane);
+    setNotePinned(nextSnapshot.pinned);
+    setNoteStarred(nextSnapshot.starred);
+    setNoteReferenceIds(nextSnapshot.referenceIds);
+    setNoteFileIds(nextSnapshot.fileIds);
+    setNoteLinkedNoteIds(nextSnapshot.linkedNoteIds);
+    setInitialNoteModalSnapshot(nextSnapshot);
     setNoteModalOpen(true);
     void loadNoteTemplates();
+  }
+
+  function openIndexNote() {
+    if (!selectedCollectionId) return;
+    const existingIndex = notes.find((item) => item.collection_id === selectedCollectionId && isIndexNote(item));
+    if (existingIndex) {
+      openEditNoteModal(existingIndex);
+      return;
+    }
+    openCreateNoteModal({ noteType: "index" });
   }
 
   function applyNoteTemplate(template: ResearchNoteTemplate) {
@@ -2018,10 +2172,15 @@ export function ResearchWorkspace({
     setNoteTemplateSaveOpen(true);
   }
 
-  function closeNoteModal() {
+  function closeNoteModal(force = false) {
+    if (!force && noteModalHasUnsavedChanges() && typeof window !== "undefined") {
+      const confirmed = window.confirm("Discard unsaved changes?");
+      if (!confirmed) return;
+    }
     setNoteModalOpen(false);
     setNoteTemplateLibraryOpen(false);
     setNoteTemplateSaveOpen(false);
+    noteModalInitialSnapshotRef.current = null;
   }
 
   function startInlineEdit(note: ResearchNote) {
@@ -2176,6 +2335,11 @@ export function ResearchWorkspace({
       target?.scrollIntoView({ block: "center", behavior: "smooth" });
       target?.focus();
     }, 80);
+  }
+
+  function handleOpenIteration(iterationId: string) {
+    setTab("iterations");
+    setExpandedIterationId(iterationId);
   }
 
   function handleOpenLinkedNoteByLabel(label: string, noteIds?: string[]) {
@@ -3951,7 +4115,7 @@ function newStudyResult(): ResearchStudyResult {
       if (selectedCollectionId) {
         await loadCollectionDetail(selectedCollectionId);
       }
-      closeNoteModal();
+      closeNoteModal(true);
       resetNoteForm(selectedCollectionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save log");
@@ -4700,6 +4864,40 @@ function newStudyResult(): ResearchStudyResult {
           <div className="bibliography-tab-tools">
             <button
               type="button"
+              className="ghost icon-text-button small"
+              onClick={openIndexNote}
+              disabled={!selectedCollectionId}
+            >
+              <FontAwesomeIcon icon={faBookOpen} /> {notes.some((item) => item.collection_id === selectedCollectionId && isIndexNote(item)) ? "Open Index" : "New Index"}
+            </button>
+            <button
+              type="button"
+              className="ghost icon-text-button small"
+              disabled={notes.filter((item) => item.collection_id === selectedCollectionId).length === 0}
+              onClick={() => setStudyGraphOpen(true)}
+            >
+              <FontAwesomeIcon icon={faShareNodes} /> Graph
+            </button>
+            <button
+              type="button"
+              className="ghost icon-text-button small"
+              disabled={visibleStudyLogNotes.length === 0}
+              onClick={() =>
+                setFoldedNoteIds((current) => {
+                  const next = new Set(current);
+                  if (allVisibleStudyLogsFolded) {
+                    visibleStudyLogNotes.forEach((note) => next.delete(note.id));
+                  } else {
+                    visibleStudyLogNotes.forEach((note) => next.add(note.id));
+                  }
+                  return next;
+                })
+              }
+            >
+              {allVisibleStudyLogsFolded ? "Unfold All" : "Fold All"}
+            </button>
+            <button
+              type="button"
               className="meetings-new-btn delivery-tab-action"
               disabled={selectedInboxLogIds.size === 0}
               onClick={() => void handleCreateIterationFromLogs(Array.from(selectedInboxLogIds))}
@@ -4773,6 +4971,33 @@ function newStudyResult(): ResearchStudyResult {
         />
       ) : null}
       {bibliographyCollectionModalOpen ? renderBibliographyCollectionModal() : null}
+      {studyGraphOpen && selectedCollectionId ? (
+        <StudyGraphModal
+          notes={notes.filter((item) => item.collection_id === selectedCollectionId)}
+          references={references.filter((item) => item.collection_id === selectedCollectionId)}
+          files={studyFiles.filter((item) => item.collection_id === selectedCollectionId)}
+          iterations={studyIterations}
+          initialNodeId={activeInboxNoteId ? `log:${activeInboxNoteId}` : null}
+          onClose={() => setStudyGraphOpen(false)}
+          onOpenNote={(noteId) => {
+            setStudyGraphOpen(false);
+            handleOpenLinkedNote(noteId);
+          }}
+          onOpenReference={(referenceId) => {
+            setStudyGraphOpen(false);
+            handleOpenLinkedReference(referenceId);
+          }}
+          onOpenFile={(fileId) => {
+            setStudyGraphOpen(false);
+            const file = studyFiles.find((item) => item.id === fileId);
+            if (file) void handleOpenStudyFile(file);
+          }}
+          onOpenIteration={(iterationId) => {
+            setStudyGraphOpen(false);
+            handleOpenIteration(iterationId);
+          }}
+        />
+      ) : null}
       {addToCollectionModalOpen ? renderAddToCollectionModal() : null}
       {!bibliographyOnly && bibliographyPickerOpen ? renderBibliographyPickerModal() : null}
       {!bibliographyOnly && noteModalOpen ? renderNoteModal() : null}
@@ -5737,15 +5962,15 @@ function newStudyResult(): ResearchStudyResult {
         );
       })
       : notes;
-    const sortedNotes = [...visibleNotes].sort((a, b) => {
+    const collectionVisibleNotes = visibleNotes.filter((note) => note.collection_id === selectedCollectionId);
+    const indexNote = collectionVisibleNotes.find((note) => isIndexNote(note)) || null;
+    const sortedNotes = [...collectionVisibleNotes.filter((note) => !isIndexNote(note))].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       if (a.starred !== b.starred) return a.starred ? -1 : 1;
       return b.created_at.localeCompare(a.created_at);
     });
-    const unprocessedNotes = sortedNotes.filter((n) => noteWorkflow(n).state === "Unprocessed");
-    const processedNotes = sortedNotes.filter((n) => noteWorkflow(n).state !== "Unprocessed");
     const orderedNotes = sortedNotes;
-    const unassignedLogs = notes.filter((note) => note.collection_id === selectedCollectionId && !noteIterationState(note.id).assigned);
+    const unassignedLogs = orderedNotes.filter((note) => !noteIterationState(note.id).assigned);
     const allVisibleSelected = orderedNotes.length > 0 && orderedNotes.every((note) => selectedInboxLogIds.has(note.id));
     const fileLookup = new Map(studyFiles.map((item) => [item.id, item]));
     const iterationLookup = new Map(studyIterations.map((iteration) => [iteration.id, iteration]));
@@ -5840,12 +6065,22 @@ function newStudyResult(): ResearchStudyResult {
         {action.due_date ? <span className="chip small">{action.due_date}</span> : null}
       </div>
     );
+    function toggleNoteFold(noteId: string) {
+      setFoldedNoteIds((current) => {
+        const next = new Set(current);
+        if (next.has(noteId)) next.delete(noteId);
+        else next.add(noteId);
+        return next;
+      });
+    }
+
     const renderNoteCard = (note: ResearchNote, options?: { stackPreview?: boolean }) => {
       const workflow = noteWorkflow(note);
       const iterationState = noteIterationState(note.id);
       const isSelected = selectedInboxLogIds.has(note.id);
       const isEditing = inlineEditNoteId === note.id;
       const isReplying = replyingNoteId === note.id;
+      const isFolded = foldedNoteIds.has(note.id);
       const replyDraft = replyDrafts[note.id] || "";
       const linkedReferencesLabel = note.linked_reference_ids.length === 1 ? "1 ref" : `${note.linked_reference_ids.length} refs`;
       const linkedFilesLabel = note.linked_file_ids.length === 1 ? "1 file" : `${note.linked_file_ids.length} files`;
@@ -5856,26 +6091,41 @@ function newStudyResult(): ResearchStudyResult {
           key={note.id}
           data-note-id={note.id}
           tabIndex={options?.stackPreview ? -1 : 0}
-          className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " log-state-unprocessed" : " log-state-promoted"}${iterationState.assigned ? " log-state-iterated" : ""}${note.pinned ? " is-pinned" : ""}${note.starred ? " is-starred" : ""}${activeInboxNoteId === note.id ? " is-active" : ""}${options?.stackPreview ? " in-stack-preview" : ""}`}
+          className={`research-log-card${isSelected ? " selected" : ""}${isEditing ? " editing" : ""}${workflow.state === "Unprocessed" ? " log-state-unprocessed" : " log-state-promoted"}${iterationState.assigned ? " log-state-iterated" : ""}${note.pinned ? " is-pinned" : ""}${note.starred ? " is-starred" : ""}${activeInboxNoteId === note.id ? " is-active" : ""}${options?.stackPreview ? " in-stack-preview" : ""}${isIndexNote(note) ? " is-index-note" : ""}${isFolded ? " is-folded" : ""}`}
           onFocus={() => {
             if (!options?.stackPreview) setActiveInboxNoteId(note.id);
           }}
+          onDoubleClick={() => {
+            if (options?.stackPreview) return;
+            openEditNoteModal(note);
+          }}
         >
-          <div className="research-log-head">
-            <label className="research-log-select">
-              <input
-                type="checkbox"
-                checked={isSelected}
-                onChange={() =>
-                  setSelectedInboxLogIds((current) => {
-                    const next = new Set(current);
-                    if (next.has(note.id)) next.delete(note.id);
-                    else next.add(note.id);
-                    return next;
-                  })
-                }
-              />
-            </label>
+          <div
+            className="research-log-head"
+            onClick={(event) => {
+              const target = event.target as HTMLElement | null;
+              if (!target) return;
+              if (target.closest("button, input, textarea, select, label, a")) return;
+              if (options?.stackPreview) return;
+              toggleNoteFold(note.id);
+            }}
+          >
+            {!isIndexNote(note) ? (
+              <label className="research-log-select">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() =>
+                    setSelectedInboxLogIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(note.id)) next.delete(note.id);
+                      else next.add(note.id);
+                      return next;
+                    })
+                  }
+                />
+              </label>
+            ) : null}
             <LogAvatar
               name={note.author_name || "Unknown author"}
               avatarUrl={note.author_avatar_url}
@@ -6036,7 +6286,7 @@ function newStudyResult(): ResearchStudyResult {
                 </div>
               ) : null}
             </div>
-          ) : (
+          ) : !isFolded ? (
             <div className="research-log-body">
               <strong>{note.title}</strong>
               <div className="research-log-text chat-markdown">
@@ -6199,11 +6449,10 @@ function newStudyResult(): ResearchStudyResult {
                 </div>
               ) : null}
             </div>
-          )}
+          ) : null}
+          {!isFolded ? (
           <div className="research-log-footer">
             <div className="research-log-meta">
-              {note.pinned ? <span>Pinned</span> : null}
-              {note.starred ? <span>Starred</span> : null}
               <span>{linkedReferencesLabel}</span>
               {note.linked_file_ids.length > 0 ? <span>{linkedFilesLabel}</span> : null}
               {linkedNotes.length > 0 ? <span>{linkedNotes.length} links</span> : null}
@@ -6224,19 +6473,22 @@ function newStudyResult(): ResearchStudyResult {
                   <FontAwesomeIcon icon={faComment} /> Reply
                 </button>
               ) : null}
-              <div className="note-promote-actions">
-                <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToClaim(note)}>
-                  Claim
-                </button>
-                <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToQuestion(note)}>
-                  Question
-                </button>
-                <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToSection(note)}>
-                  Section
-                </button>
-              </div>
+              {!isIndexNote(note) ? (
+                <div className="note-promote-actions">
+                  <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToClaim(note)}>
+                    Claim
+                  </button>
+                  <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToQuestion(note)}>
+                    Question
+                  </button>
+                  <button type="button" className="ghost icon-text-button small" onClick={() => void handlePromoteNoteToSection(note)}>
+                    Section
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
+          ) : null}
         </article>
       );
     };
@@ -6331,6 +6583,21 @@ function newStudyResult(): ResearchStudyResult {
 
       return (
         <>
+          <section className="research-log-section research-index-section">
+            <div className="log-group-label log-group-index">
+              <span>Index</span>
+            </div>
+            <div className="research-log-list">
+              {indexNote ? (
+                renderNoteCard(indexNote)
+              ) : (
+                <button type="button" className="research-index-empty-card" onClick={openIndexNote}>
+                  <FontAwesomeIcon icon={faPlus} />
+                  <span>New Index</span>
+                </button>
+              )}
+            </div>
+          </section>
           {pinnedNotes.length > 0 ? (
             <section className="research-log-section">
               <div className="log-group-label log-group-pinned">
@@ -7505,7 +7772,134 @@ function newStudyResult(): ResearchStudyResult {
     const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
     const collectionFiles = studyFiles.filter((item) => item.collection_id === selectedCollectionId);
     const fileLookup = new Map(collectionFiles.map((item) => [item.id, item]));
+    const referenceLookup = new Map(references.map((item) => [item.id, item]));
     const orderedResults = sortedStudyResults();
+    const iterationReferenceSuggestions = references
+      .filter((item) => item.collection_id === selectedCollectionId)
+      .map((item) => ({
+        id: item.id,
+        label: formatRefLabel(item),
+        meta: item.authors.join(", "),
+      }));
+    const iterationFileSuggestions = collectionFiles.map((item) => ({
+      id: item.id,
+      label: item.original_filename,
+      meta: item.mime_type || undefined,
+    }));
+    const iterationNoteSuggestions = collectionNotes.map((item) => ({
+      id: item.id,
+      label: item.title || "Untitled Log",
+      meta: formatLogTimestamp(item.created_at),
+    }));
+    const iterationMemberSuggestions = (collectionDetail.members || []).map((member) => ({
+      id: member.member_id,
+      label: `@${memberMentionHandle(member.member_name)}`,
+      meta: member.member_name,
+    }));
+
+    function updateIterationInline(iterationId: string, patch: Partial<ResearchStudyIteration>) {
+      setStudyIterations((items) => items.map((entry) => (entry.id === iterationId ? { ...entry, ...patch } : entry)));
+    }
+
+    function iterationReviewMarkdown(iteration: ResearchStudyIteration): string {
+      const sections: string[] = [];
+      if (iteration.summary?.trim()) {
+        sections.push(iteration.summary.trim());
+      }
+      const appendListSection = (title: string, items: string[]) => {
+        if (!items.length) return;
+        sections.push(`## ${title}\n${items.map((item) => `- ${item}`).join("\n")}`);
+      };
+      appendListSection("What Changed", iteration.what_changed);
+      appendListSection("Improvements", iteration.improvements);
+      appendListSection("Regressions", iteration.regressions);
+      appendListSection("Unclear", iteration.unclear_points);
+      appendListSection("Next Actions", iteration.next_actions);
+      return sections.join("\n\n").trim();
+    }
+
+    function renderIterationNoteCard(note: ResearchNote) {
+      return (
+        <div
+          key={note.id}
+          className="iteration-evidence-entry"
+        >
+          <div className="iteration-evidence-entry-head">
+            <LogAvatar
+              name={note.author_name || "Unknown author"}
+              avatarUrl={note.author_avatar_url}
+              className="iteration-evidence-avatar"
+            />
+            <div className="iteration-evidence-entry-meta">
+              <button type="button" className="iteration-inline-link" onClick={() => handleOpenLinkedNote(note.id)}>
+                {note.title || deriveLogTitle(note.content) || "Log"}
+              </button>
+              <span>{formatLogTimestamp(note.created_at)}</span>
+            </div>
+          </div>
+          <div className="iteration-evidence-entry-body chat-markdown">
+            {renderMarkdown(note.content || deriveLogTitle(note.content) || "No content", {
+              onReferenceClick: (label) => handleOpenReferenceByLabel(label, note.linked_reference_ids),
+              onTagClick: handleFilterByTag,
+              onFileClick: (label) => handleOpenLinkedFileByLabel(label, note.linked_file_ids),
+              onNoteClick: (label) => handleOpenLinkedNoteByLabel(label, note.linked_note_ids),
+            })}
+          </div>
+          <div className="iteration-evidence-entry-foot">
+            {note.replies.length ? <span>{note.replies.length} replies</span> : null}
+            {note.action_items.length ? <span>{note.action_items.length} actions</span> : null}
+            {note.linked_file_ids.length ? <span>{note.linked_file_ids.length} files</span> : null}
+          </div>
+        </div>
+      );
+    }
+
+    function renderIterationFileCard(file: ResearchStudyFile) {
+      return (
+        <div
+          key={file.id}
+          className="iteration-evidence-entry iteration-evidence-entry-compact"
+        >
+          <div className="iteration-evidence-entry-head">
+            <span className="meetings-source-icon">
+              <FontAwesomeIcon icon={faFileArrowUp} />
+            </span>
+            <div className="iteration-evidence-entry-meta">
+              <button type="button" className="iteration-inline-link" onClick={() => void handleOpenStudyFile(file)}>
+                {file.original_filename}
+              </button>
+              <span>{file.mime_type || "file"} · {formatFileSize(file.file_size_bytes || 0)}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function renderIterationReferenceCard(reference: ResearchReference) {
+      return (
+        <div
+          key={reference.id}
+          className="iteration-evidence-entry"
+        >
+          <div className="iteration-evidence-entry-head">
+            <span className="meetings-source-icon">
+              <FontAwesomeIcon icon={faBookOpen} />
+            </span>
+            <div className="iteration-evidence-entry-meta">
+              <button type="button" className="iteration-inline-link" onClick={() => handleOpenLinkedReference(reference.id)}>
+                {reference.title}
+              </button>
+              <span>{formatRefLabel(reference)}</span>
+            </div>
+          </div>
+          <div className="iteration-evidence-entry-body">
+            {reference.abstract
+              ? `${reference.abstract.slice(0, 180)}${reference.abstract.length > 180 ? "..." : ""}`
+              : reference.authors.join(", ")}
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className="paper-workspace">
@@ -7640,15 +8034,132 @@ function newStudyResult(): ResearchStudyResult {
           </div>
         ) : null}
         {studyIterations.map((iteration, index) => (
-          <div key={iteration.id} className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info">
-                <strong>{iteration.title || `Iteration ${index + 1}`}</strong>
+          <div key={iteration.id} className={`meetings-detail-section iteration-workspace-card${expandedIterationId === iteration.id ? " is-expanded" : ""}`}>
+            <div
+              className="meetings-detail-head iteration-workspace-head"
+              onClick={(event) => {
+                const target = event.target as HTMLElement | null;
+                if (!target) return;
+                if (target.closest("button, input, textarea, select, label, a")) return;
+                setExpandedIterationId((current) => (current === iteration.id ? null : iteration.id));
+              }}
+            >
+              <div className="meetings-detail-info iteration-head-info">
+                <div className="iteration-head-title-row">
+                  {editingIterationTitleId === iteration.id ? (
+                    <input
+                      className="iteration-inline-title-input"
+                      value={inlineIterationTitle}
+                      autoFocus
+                      onChange={(event) => setInlineIterationTitle(event.target.value)}
+                      onBlur={() => {
+                        updateIterationInline(iteration.id, { title: inlineIterationTitle.trim() });
+                        setEditingIterationTitleId(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          updateIterationInline(iteration.id, { title: inlineIterationTitle.trim() });
+                          setEditingIterationTitleId(null);
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          setEditingIterationTitleId(null);
+                          setInlineIterationTitle(iteration.title || "");
+                        }
+                      }}
+                    />
+                  ) : (
+                    <strong
+                      className="iteration-inline-title"
+                      onClick={() => {
+                        setEditingIterationTitleId(iteration.id);
+                        setInlineIterationTitle(iteration.title || "");
+                      }}
+                    >
+                      {iteration.title || `Iteration ${index + 1}`}
+                    </strong>
+                  )}
+                  <div className="iteration-head-meta">
+                    {iteration.reviewed_at ? <span className="chip small">Reviewed</span> : <span className="chip small paper-health-alert">Review pending</span>}
+                    {iteration.file_ids.length ? <span className="chip small">{iteration.file_ids.length} files</span> : null}
+                    {iteration.improvements.length ? <span className="chip small">{iteration.improvements.length} improvements</span> : null}
+                    {iteration.regressions.length ? <span className="chip small">{iteration.regressions.length} regressions</span> : null}
+                    {iteration.next_actions.length ? <span className="chip small">{iteration.next_actions.length} next actions</span> : null}
+                  </div>
+                </div>
               </div>
               <div className="research-header-actions">
-                <span className="chip small">
-                  {iteration.start_date || "?"} {iteration.end_date ? `- ${iteration.end_date}` : ""}
-                </span>
+                {editingIterationStartId === iteration.id ? (
+                  <input
+                    type="date"
+                    className="iteration-inline-date-input"
+                    value={inlineIterationStart}
+                    autoFocus
+                    onChange={(event) => setInlineIterationStart(event.target.value)}
+                    onBlur={() => {
+                      updateIterationInline(iteration.id, { start_date: inlineIterationStart || null });
+                      setEditingIterationStartId(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        updateIterationInline(iteration.id, { start_date: inlineIterationStart || null });
+                        setEditingIterationStartId(null);
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        setEditingIterationStartId(null);
+                        setInlineIterationStart(iteration.start_date || "");
+                      }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="chip small iteration-inline-chip"
+                    onClick={() => {
+                      setEditingIterationStartId(iteration.id);
+                      setInlineIterationStart(iteration.start_date || "");
+                    }}
+                  >
+                    {iteration.start_date || "Start"}
+                  </button>
+                )}
+                <span className="iteration-inline-date-sep">-</span>
+                {editingIterationEndId === iteration.id ? (
+                  <input
+                    type="date"
+                    className="iteration-inline-date-input"
+                    value={inlineIterationEnd}
+                    autoFocus
+                    onChange={(event) => setInlineIterationEnd(event.target.value)}
+                    onBlur={() => {
+                      updateIterationInline(iteration.id, { end_date: inlineIterationEnd || null });
+                      setEditingIterationEndId(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        updateIterationInline(iteration.id, { end_date: inlineIterationEnd || null });
+                        setEditingIterationEndId(null);
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        setEditingIterationEndId(null);
+                        setInlineIterationEnd(iteration.end_date || "");
+                      }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="chip small iteration-inline-chip"
+                    onClick={() => {
+                      setEditingIterationEndId(iteration.id);
+                      setInlineIterationEnd(iteration.end_date || "");
+                    }}
+                  >
+                    {iteration.end_date || "End"}
+                  </button>
+                )}
                 <span className="chip small">{iteration.note_ids.length} logs</span>
                 <span className="chip small">{iterationResults(iteration.id).length} results</span>
                 {!isStudent ? (
@@ -7671,13 +8182,6 @@ function newStudyResult(): ResearchStudyResult {
                 </button>
                 <button
                   type="button"
-                  className="ghost icon-text-button small"
-                  onClick={() => setExpandedIterationId((current) => (current === iteration.id ? null : iteration.id))}
-                >
-                  {expandedIterationId === iteration.id ? "Close" : "Open"}
-                </button>
-                <button
-                  type="button"
                   className="ghost docs-action-btn"
                   title="Remove"
                   onClick={() => setStudyIterations((items) => items.filter((entry) => entry.id !== iteration.id))}
@@ -7687,168 +8191,167 @@ function newStudyResult(): ResearchStudyResult {
               </div>
             </div>
             <div className="paper-stack">
-              <div className="paper-evidence-strip">
-                {iteration.reviewed_at ? <span className="chip small">Reviewed</span> : <span className="chip small paper-health-alert">Review pending</span>}
-                {iteration.file_ids.length ? <span className="chip small">{iteration.file_ids.length} files</span> : null}
-                {iteration.improvements.length ? <span className="chip small">{iteration.improvements.length} improvements</span> : null}
-                {iteration.regressions.length ? <span className="chip small">{iteration.regressions.length} regressions</span> : null}
-                {iteration.next_actions.length ? <span className="chip small">{iteration.next_actions.length} next actions</span> : null}
+              <div className="iteration-summary-block chat-markdown">
+                {iteration.summary
+                  ? renderMarkdown(iteration.summary, {
+                      onReferenceClick: (label) => handleOpenReferenceByLabel(label, []),
+                      onTagClick: handleFilterByTag,
+                      onFileClick: (label) => handleOpenLinkedFileByLabel(label, iteration.file_ids),
+                      onNoteClick: (label) => handleOpenLinkedNoteByLabel(label),
+                    })
+                  : "No review yet."}
               </div>
-              <p>{iteration.summary || "No review yet."}</p>
-              {iteration.file_ids.length > 0 ? (
-                <div className="research-chip-group">
-                  {iteration.file_ids.map((fileId) => {
-                    const file = fileLookup.get(fileId);
-                    if (!file) return null;
-                    return <span key={`${iteration.id}-file-${fileId}`} className="chip small">{file.original_filename}</span>;
-                  })}
-                </div>
-              ) : null}
             </div>
-            {expandedIterationId === iteration.id ? (
-              <div className="paper-stack">
-                <div className="paper-section-grid">
-                  <label>
-                    Title
-                    <input
-                      value={iteration.title}
-                      onChange={(event) =>
-                        setStudyIterations((items) =>
-                          items.map((entry) => (entry.id === iteration.id ? { ...entry, title: event.target.value } : entry))
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    Start
-                    <input
-                      type="date"
-                      value={iteration.start_date || ""}
-                      onChange={(event) =>
-                        setStudyIterations((items) =>
-                          items.map((entry) => (entry.id === iteration.id ? { ...entry, start_date: event.target.value || null } : entry))
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    End
-                    <input
-                      type="date"
-                      value={iteration.end_date || ""}
-                      onChange={(event) =>
-                        setStudyIterations((items) =>
-                          items.map((entry) => (entry.id === iteration.id ? { ...entry, end_date: event.target.value || null } : entry))
-                        )
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="paper-link-block">
-                  <strong>Logs</strong>
-                  <div className="research-bullet-stack">
-                    {collectionNotes
-                      .filter((note) => iteration.note_ids.includes(note.id))
-                      .map((note) => (
-                        <span key={`${iteration.id}-log-${note.id}`} className="chip small">
-                          {note.title || "Log"}
-                        </span>
-                      ))}
-                  </div>
-                </div>
-                {iteration.what_changed.length > 0 ? (
-                  <div className="paper-link-block">
-                    <strong>What Changed</strong>
-                    <div className="research-bullet-stack">
-                      {iteration.what_changed.map((entry) => (
-                        <span key={`${iteration.id}-changed-${entry}`} className="chip small">{entry}</span>
-                      ))}
+            {expandedIterationId === iteration.id ? (() => {
+              const iterationNotes = collectionNotes.filter((note) => iteration.note_ids.includes(note.id));
+              const iterationFiles = iteration.file_ids
+                .map((fileId) => fileLookup.get(fileId))
+                .filter((item): item is ResearchStudyFile => Boolean(item));
+              const iterationReferences = iteration.reference_ids
+                .map((referenceId) => referenceLookup.get(referenceId))
+                .filter((item): item is ResearchReference => Boolean(item));
+              const iterationActions = iterationNotes.flatMap((note) =>
+                note.action_items.map((action) => ({ action, note })),
+              );
+              const relatedResults = iterationResults(iteration.id);
+
+              return (
+                <div className="paper-stack iteration-workspace-body">
+                  <div className="iteration-evidence-grid">
+                    <div className="paper-link-block iteration-section-card">
+                      <strong>Logs</strong>
+                      <div className="iteration-evidence-list">
+                        {iterationNotes.length === 0 ? <span className="muted-small">None</span> : null}
+                        {iterationNotes.map((note) => renderIterationNoteCard(note))}
+                      </div>
                     </div>
-                  </div>
-                ) : null}
-                <div className="paper-columns">
-                  <div className="paper-link-block">
-                    <strong>Improvements</strong>
-                    <div className="research-bullet-stack">
-                      {iteration.improvements.length === 0 ? <span className="muted-small">None</span> : null}
-                      {iteration.improvements.map((entry) => (
-                        <span key={`${iteration.id}-improvement-${entry}`} className="chip small">{entry}</span>
-                      ))}
+                    <div className="paper-link-block iteration-section-card">
+                      <strong>Files</strong>
+                      <div className="iteration-evidence-list">
+                        {iterationFiles.length === 0 ? <span className="muted-small">None</span> : null}
+                        {iterationFiles.map((file) => renderIterationFileCard(file))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="paper-link-block">
-                    <strong>Regressions</strong>
-                    <div className="research-bullet-stack">
-                      {iteration.regressions.length === 0 ? <span className="muted-small">None</span> : null}
-                      {iteration.regressions.map((entry) => (
-                        <span key={`${iteration.id}-regression-${entry}`} className="chip small">{entry}</span>
-                      ))}
+                    <div className="paper-link-block iteration-section-card">
+                      <strong>References</strong>
+                      <div className="iteration-evidence-list">
+                        {iterationReferences.length === 0 ? <span className="muted-small">None</span> : null}
+                        {iterationReferences.map((reference) => renderIterationReferenceCard(reference))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="paper-link-block">
-                    <strong>Unclear</strong>
-                    <div className="research-bullet-stack">
-                      {iteration.unclear_points.length === 0 ? <span className="muted-small">None</span> : null}
-                      {iteration.unclear_points.map((entry) => (
-                        <span key={`${iteration.id}-unclear-${entry}`} className="chip small">{entry}</span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="paper-link-block">
-                    <strong>Next Actions</strong>
-                    <div className="research-bullet-stack">
-                      {iteration.next_actions.length === 0 ? <span className="muted-small">None</span> : null}
-                      {iteration.next_actions.map((entry) => (
-                        <span key={`${iteration.id}-next-${entry}`} className="chip small">{entry}</span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-                <label>
-                  Comments
-                  <textarea
-                    rows={4}
-                    value={iteration.user_comments || ""}
-                    onChange={(event) =>
-                      setStudyIterations((items) =>
-                        items.map((entry) => (entry.id === iteration.id ? { ...entry, user_comments: event.target.value || null } : entry))
-                      )
-                    }
-                  />
-                </label>
-                {iterationResults(iteration.id).length > 0 ? (
-                  <div className="paper-link-block">
-                    <strong>Results</strong>
-                    <div className="paper-stack">
-                      {iterationResults(iteration.id).map((result) => (
-                        <div key={result.id} className="paper-item-card">
-                          <div className="paper-item-head">
-                            <strong>{result.title}</strong>
-                            <span className="chip small">{result.updated_at ? formatRelativeTime(result.updated_at) : "Result"}</span>
+                    <div className="paper-link-block iteration-section-card">
+                      <strong>Actions</strong>
+                      <div className="iteration-action-list">
+                        {iterationActions.length === 0 ? <span className="muted-small">None</span> : null}
+                        {iterationActions.map(({ action, note }) => (
+                          <div
+                            key={`${iteration.id}-action-${action.id}`}
+                            className="iteration-action-row"
+                          >
+                            <span className={`research-note-action-checkbox research-note-action-toggle${action.status === "done" ? " done" : ""}`}>
+                              {action.status === "done" ? "[x]" : action.status === "doing" ? "[-]" : "[ ]"}
+                            </span>
+                            <span className="iteration-action-row-main">
+                              <strong>{action.text}</strong>
+                              <span>
+                                <button type="button" className="iteration-inline-link" onClick={() => handleOpenLinkedNote(note.id)}>
+                                  {note.title || deriveLogTitle(note.content) || "Log"}
+                                </button>
+                                {action.assignee_name ? ` · ${action.assignee_name}` : ""}
+                                {action.due_date ? ` · ${action.due_date}` : ""}
+                              </span>
+                            </span>
                           </div>
-                          <div className="paper-evidence-strip">
-                            <span className="chip small">{result.note_ids.length} logs</span>
-                            <span className="chip small">{result.reference_ids.length} references</span>
-                            {result.improvements.length ? <span className="chip small">{result.improvements.length} improvements</span> : null}
-                            {result.regressions.length ? <span className="chip small">{result.regressions.length} regressions</span> : null}
-                          </div>
-                          <p>{result.summary || "No summary."}</p>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   </div>
-                ) : null}
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    className="meetings-new-btn"
-                    onClick={() => void persistPaperWorkspace({ study_iterations: studyIterations, study_results: studyResults }, { successMessage: "Iteration updated." })}
-                  >
-                    Save
-                  </button>
+
+                  {iteration.reviewed_at && iterationReviewMarkdown(iteration) ? (
+                    <div className="paper-link-block iteration-section-card">
+                      <strong>Review</strong>
+                      <div className="iteration-review-note chat-markdown">
+                        {renderMarkdown(iterationReviewMarkdown(iteration), {
+                          onReferenceClick: (label) => handleOpenReferenceByLabel(label, iteration.reference_ids),
+                          onTagClick: handleFilterByTag,
+                          onFileClick: (label) => handleOpenLinkedFileByLabel(label, iteration.file_ids),
+                          onNoteClick: (label) => handleOpenLinkedNoteByLabel(label, iteration.note_ids),
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="paper-link-block iteration-section-card">
+                    <strong>Comments</strong>
+                    <div className="iteration-comments-editor-shell">
+                      <StudyLogRichEditor
+                        key={`iteration-comments:${iteration.id}`}
+                        value={iteration.user_comments || ""}
+                        placeholder="Write"
+                        onChange={(value) =>
+                          setStudyIterations((items) =>
+                            items.map((entry) => (entry.id === iteration.id ? { ...entry, user_comments: value || null } : entry))
+                          )
+                        }
+                        referenceSuggestions={iterationReferenceSuggestions}
+                        fileSuggestions={iterationFileSuggestions}
+                        noteSuggestions={iterationNoteSuggestions.filter((item) => !iteration.note_ids.includes(item.id))}
+                        memberSuggestions={iterationMemberSuggestions}
+                        tagSuggestions={noteTagOptions}
+                        projectId={selectedProjectId}
+                        collectionId={selectedCollectionId}
+                        spaceId={activeResearchSpaceId || undefined}
+                      />
+                    </div>
+                  </div>
+
+                  {relatedResults.length > 0 ? (
+                    <div className="paper-link-block iteration-section-card">
+                      <strong>Results</strong>
+                      <div className="iteration-result-list">
+                        {relatedResults.map((result) => {
+                          const delta = resultDeltaLabel(result, previousStudyResult(result.id));
+                          return (
+                            <div key={result.id} className="paper-item-card iteration-result-card">
+                              <div className="paper-item-head">
+                                <strong>{result.title}</strong>
+                                <span className="chip small">{result.updated_at ? formatRelativeTime(result.updated_at) : "Result"}</span>
+                              </div>
+                              <div className="paper-evidence-strip">
+                                <span className="chip small">{result.note_ids.length} logs</span>
+                                <span className="chip small">{result.reference_ids.length} references</span>
+                                {result.file_ids.length ? <span className="chip small">{result.file_ids.length} files</span> : null}
+                              </div>
+                              <div className="iteration-summary-block chat-markdown">
+                                {result.summary
+                                  ? renderMarkdown(result.summary, {
+                                      onReferenceClick: (label) => handleOpenReferenceByLabel(label, []),
+                                      onTagClick: handleFilterByTag,
+                                      onFileClick: (label) => handleOpenLinkedFileByLabel(label, result.file_ids),
+                                      onNoteClick: (label) => handleOpenLinkedNoteByLabel(label),
+                                    })
+                                  : "No summary."}
+                              </div>
+                              {delta ? <span className="muted-small">{delta}</span> : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="row-actions">
+                    <button
+                      type="button"
+                      className="meetings-new-btn"
+                      onClick={() => void persistPaperWorkspace({ study_iterations: studyIterations, study_results: studyResults }, { successMessage: "Iteration updated." })}
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              );
+            })() : null}
           </div>
         ))}
       </div>
@@ -8935,11 +9438,27 @@ function newStudyResult(): ResearchStudyResult {
     });
 
     return createPortal(
-      <div className="modal-overlay research-editor-overlay" role="dialog" aria-modal="true" onClick={closeNoteModal}>
+      <div className="modal-overlay research-editor-overlay" role="dialog" aria-modal="true" onClick={() => closeNoteModal()}>
         <div className="modal-card settings-modal-card research-editor-modal" onClick={(event) => event.stopPropagation()}>
           <div className="modal-head">
-            <h3>{noteModalMode === "create" ? "New Log" : "Edit Log"}</h3>
+            <h3>{noteType === "index" ? (noteModalMode === "create" ? "New Index" : "Edit Index") : (noteModalMode === "create" ? "New Log" : "Edit Log")}</h3>
             <div className="modal-head-actions">
+              <button
+                type="button"
+                className={`ghost docs-action-btn${notePinned ? " active" : ""}`}
+                title={notePinned ? "Unpin" : "Pin"}
+                onClick={() => setNotePinned((current) => !current)}
+              >
+                <FontAwesomeIcon icon={faThumbtack} />
+              </button>
+              <button
+                type="button"
+                className={`ghost docs-action-btn${noteStarred ? " active" : ""}`}
+                title={noteStarred ? "Unstar" : "Star"}
+                onClick={() => setNoteStarred((current) => !current)}
+              >
+                <FontAwesomeIcon icon={faStar} />
+              </button>
               <button type="button" className="ghost" onClick={() => setNoteTemplateLibraryOpen(true)}>
                 Templates
               </button>
@@ -8947,9 +9466,9 @@ function newStudyResult(): ResearchStudyResult {
                 Save as Template
               </button>
               <button type="button" disabled={!noteCollectionId || !noteContent.trim() || saving} onClick={handleSaveNote}>
-                {saving ? "Saving..." : noteModalMode === "create" ? "Add Log" : "Save Log"}
+                {saving ? "Saving..." : noteType === "index" ? (noteModalMode === "create" ? "Add Index" : "Save Index") : (noteModalMode === "create" ? "Add Log" : "Save Log")}
               </button>
-              <button type="button" className="ghost docs-action-btn" onClick={closeNoteModal} title="Close">
+              <button type="button" className="ghost docs-action-btn" onClick={() => closeNoteModal()} title="Close">
                 <FontAwesomeIcon icon={faXmark} />
               </button>
             </div>
@@ -8999,26 +9518,6 @@ function newStudyResult(): ResearchStudyResult {
               </div>
             </div>
             <aside className="research-editor-sidebar">
-              <div className="research-editor-side-block">
-                <strong>Pin</strong>
-                <button
-                  type="button"
-                  className={`ghost icon-text-button small${notePinned ? " active" : ""}`}
-                  onClick={() => setNotePinned((current) => !current)}
-                >
-                  <FontAwesomeIcon icon={faThumbtack} /> {notePinned ? "Pinned" : "Pin"}
-                </button>
-              </div>
-              <div className="research-editor-side-block">
-                <strong>Star</strong>
-                <button
-                  type="button"
-                  className={`ghost icon-text-button small${noteStarred ? " active" : ""}`}
-                  onClick={() => setNoteStarred((current) => !current)}
-                >
-                  <FontAwesomeIcon icon={faStar} /> {noteStarred ? "Starred" : "Star"}
-                </button>
-              </div>
               <label>
                 Lane
                 {renderLanePills(noteLane, setNoteLane)}

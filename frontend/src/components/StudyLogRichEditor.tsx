@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown } from "@tiptap/markdown";
@@ -11,6 +12,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import katex from "katex";
 import { api } from "../lib/api";
 import type { ResearchStudyFile } from "../types";
+import { CommandPalette, type CommandItem } from "./CommandPalette";
 import {
   faBold,
   faCode,
@@ -23,6 +25,8 @@ import {
   faAt,
   faCalendarDay,
   faFileLines,
+  faListCheck,
+  faMinus,
   faQuoteLeft,
   faTable,
 } from "@fortawesome/free-solid-svg-icons";
@@ -97,6 +101,74 @@ function formatEditorActionDate(value: string): string {
   if (!normalized) return value;
   const [year, month, day] = normalized.split("-");
   return `${Number(day)}/${Number(month)}/${year}`;
+}
+
+function parseMarkdownLink(raw: string): { label: string; href: string } | null {
+  const match = raw.match(/^\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)$/);
+  if (!match) return null;
+  return {
+    label: match[1] || "",
+    href: match[2] || "",
+  };
+}
+
+function findMarkdownLinkAtSelection(editor: Editor): { from: number; to: number; label: string; href: string } | null {
+  const { from, to, $from } = editor.state.selection;
+  const parentText = $from.parent.textContent || "";
+  const blockStart = $from.start();
+  const localFrom = from - blockStart;
+  const localTo = to - blockStart;
+
+  for (const match of parentText.matchAll(/\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)/g)) {
+    const raw = match[0] || "";
+    const label = match[1] || "";
+    const href = match[2] || "";
+    const start = match.index ?? 0;
+    const end = start + raw.length;
+    const overlaps = localFrom <= end && localTo >= start;
+    const containsCursor = localFrom >= start && localFrom <= end;
+    if (!overlaps && !containsCursor) continue;
+    return {
+      from: blockStart + start,
+      to: blockStart + end,
+      label,
+      href,
+    };
+  }
+
+  return null;
+}
+
+function findRenderedLinkAtCursor(
+  editor: Editor,
+): { from: number; to: number; label: string; href: string; cursorOffset: number } | null {
+  const selection = editor.state.selection;
+  if (!selection.empty) return null;
+  const { from, $from } = selection;
+  const parent = $from.parent;
+  const parentStart = $from.start();
+  let match: { from: number; to: number; label: string; href: string; cursorOffset: number } | null = null;
+
+  parent.forEach((child, offset) => {
+    if (match || !child.isText) return;
+    const linkMark = child.marks.find((mark) => mark.type.name === "link");
+    if (!linkMark) return;
+    const label = child.text || "";
+    const start = parentStart + offset;
+    const end = start + label.length;
+    if (from < start || from > end) return;
+    const href = String(linkMark.attrs?.href || "").trim();
+    if (!href) return;
+    match = {
+      from: start,
+      to: end,
+      label,
+      href,
+      cursorOffset: Math.max(0, Math.min(label.length, from - start)),
+    };
+  });
+
+  return match;
 }
 
 function createFilePreviewWidget(
@@ -176,6 +248,20 @@ function createFilePreviewWidget(
   return container;
 }
 
+function createTaskCheckboxWidget(state: "open" | "done" | "doing"): HTMLElement {
+  const container = document.createElement("span");
+  container.className = `study-log-editor-task-checkbox-widget state-${state}`;
+  return container;
+}
+
+function createHorizontalRuleWidget(): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "study-log-editor-hr-widget";
+  const hr = document.createElement("hr");
+  container.appendChild(hr);
+  return container;
+}
+
 function createLiveMarkdownTokensExtension(options: {
   getLinkedFiles: () => ResearchStudyFile[];
   getProjectId: () => string | null | undefined;
@@ -205,10 +291,53 @@ function createLiveMarkdownTokensExtension(options: {
               const text = node.text;
               const base = pos;
 
+              for (const match of text.matchAll(/(^|\n)(\[(?: |x|X|-)\])(?=\s)/g)) {
+                const prefix = match[1] || "";
+                const marker = match[2] || "";
+                const start = base + (match.index ?? 0) + prefix.length;
+                const end = start + marker.length;
+                if (overlaps(start, end)) continue;
+                const stateName = marker === "[x]" || marker === "[X]"
+                  ? "done"
+                  : marker === "[-]"
+                  ? "doing"
+                  : "open";
+                decorations.push(Decoration.inline(start, end, { class: "study-log-editor-hidden-token" }));
+                decorations.push(
+                  Decoration.widget(start, () => createTaskCheckboxWidget(stateName), { side: 0 }),
+                );
+              }
+
+              for (const match of text.matchAll(/(^|\n)(---|\*\*\*|___)(?=\n|$)/g)) {
+                const prefix = match[1] || "";
+                const marker = match[2] || "";
+                const start = base + (match.index ?? 0) + prefix.length;
+                const end = start + marker.length;
+                if (overlaps(start, end)) continue;
+                decorations.push(Decoration.inline(start, end, { class: "study-log-editor-hidden-token" }));
+                decorations.push(
+                  Decoration.widget(start, () => createHorizontalRuleWidget(), { side: 0 }),
+                );
+              }
+
               for (const match of text.matchAll(/(?:@|%)\[[^\]]+\]/g)) {
                 const start = base + (match.index ?? 0);
                 const end = start + match[0].length;
                 decorations.push(Decoration.inline(start, end, { class: "study-log-editor-citation-token" }));
+              }
+
+              for (const match of text.matchAll(/\[[^\]]+\]\(((?:https?:\/\/|#)[^\s)]+)\)/g)) {
+                const start = base + (match.index ?? 0);
+                const end = start + match[0].length;
+                if (overlaps(start, end)) continue;
+                const parsed = parseMarkdownLink(match[0]);
+                decorations.push(Decoration.inline(start, end, {
+                  class: "study-log-editor-link-token",
+                  "data-link-start": String(start),
+                  "data-link-end": String(end),
+                  "data-link-label": parsed?.label || "",
+                  "data-link-href": parsed?.href || "",
+                }));
               }
 
               for (const match of text.matchAll(/(^|[\s(>])@([A-Za-z0-9][A-Za-z0-9_.-]*)/g)) {
@@ -362,6 +491,16 @@ type ActionDatePopoverState =
       left: number;
     };
 
+type LinkPopoverState =
+  | { open: false }
+  | {
+      open: true;
+      from: number;
+      to: number;
+      label: string;
+      href: string;
+    };
+
 export function StudyLogRichEditor({
   value,
   placeholder,
@@ -386,6 +525,8 @@ export function StudyLogRichEditor({
   const [suggestionState, setSuggestionState] = useState<SuggestionState>({ open: false });
   const [suggestionActiveIndex, setSuggestionActiveIndex] = useState(0);
   const [actionDatePopover, setActionDatePopover] = useState<ActionDatePopoverState>({ open: false });
+  const [linkPopover, setLinkPopover] = useState<LinkPopoverState>({ open: false });
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const suggestionStateRef = useRef<SuggestionState>({ open: false });
@@ -414,6 +555,11 @@ export function StudyLogRichEditor({
     immediatelyRender: false,
     extensions: [
       StarterKit,
+      Link.configure({
+        openOnClick: false,
+        autolink: false,
+        linkOnPaste: true,
+      }),
       Placeholder.configure({ placeholder }),
       createLiveMarkdownTokensExtension({
         getLinkedFiles: () => linkedFilesRef.current,
@@ -495,6 +641,13 @@ export function StudyLogRichEditor({
     if (!editor) return;
     editor.view.dispatch(editor.state.tr.setMeta("study-log-refresh-previews", Date.now()));
   }, [editor, linkedFiles, projectId, collectionId, spaceId]);
+
+  useEffect(() => {
+    if (!commandPaletteOpen) return;
+    setSuggestionState({ open: false });
+    setTableMenuOpen(false);
+    setActionDatePopover({ open: false });
+  }, [commandPaletteOpen]);
 
   useEffect(() => {
     if (!tableMenuOpen) return;
@@ -721,6 +874,13 @@ export function StudyLogRichEditor({
     }
 
     function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        event.stopPropagation();
+        activeEditor.commands.blur();
+        setCommandPaletteOpen(true);
+        return;
+      }
       if (event.key === "Tab") {
         event.preventDefault();
         activeEditor.chain().focus().insertContent("\t").run();
@@ -754,15 +914,17 @@ export function StudyLogRichEditor({
       if (shellRef.current?.contains(event.target as Node)) return;
       closeSuggestions();
       setActionDatePopover({ open: false });
+      setLinkPopover({ open: false });
     }
 
-    function handleEditorClick(event: MouseEvent) {
+    function maybeHandleTokenInteraction(event: MouseEvent) {
       const target = event.target as HTMLElement | null;
       const token = target?.closest?.(".study-log-editor-action-date-token") as HTMLElement | null;
       if (!token) {
-        setActionDatePopover({ open: false });
         return;
       }
+      event.preventDefault();
+      event.stopPropagation();
       const from = Number(token.dataset.dateStart || "");
       const to = Number(token.dataset.dateEnd || "");
       const value = token.dataset.dateValue || "";
@@ -779,6 +941,15 @@ export function StudyLogRichEditor({
         top: rect.bottom + 8,
         left: rect.left,
       });
+      setLinkPopover({ open: false });
+    }
+
+    function handleEditorMouseDown(event: MouseEvent) {
+      maybeHandleTokenInteraction(event);
+    }
+
+    function handleShellClickCapture(event: MouseEvent) {
+      maybeHandleTokenInteraction(event);
     }
 
     updateSuggestions();
@@ -797,8 +968,11 @@ export function StudyLogRichEditor({
     } catch {
       editorDom = null;
     }
+    const shell = shellRef.current;
     editorDom?.addEventListener("keydown", handleKeyDown);
-    editorDom?.addEventListener("click", handleEditorClick);
+    editorDom?.addEventListener("mousedown", handleEditorMouseDown);
+    shell?.addEventListener("click", handleShellClickCapture, true);
+    shell?.addEventListener("mousedown", handleShellClickCapture, true);
     document.addEventListener("mousedown", handleDocumentMouseDown);
     return () => {
       activeEditor.off("update", updateSuggestions);
@@ -806,10 +980,32 @@ export function StudyLogRichEditor({
       activeEditor.off("focus", updateSuggestions);
       activeEditor.off("blur", handleBlur);
       editorDom?.removeEventListener("keydown", handleKeyDown);
-      editorDom?.removeEventListener("click", handleEditorClick);
+      editorDom?.removeEventListener("mousedown", handleEditorMouseDown);
+      shell?.removeEventListener("click", handleShellClickCapture, true);
+      shell?.removeEventListener("mousedown", handleShellClickCapture, true);
       document.removeEventListener("mousedown", handleDocumentMouseDown);
     };
   }, [activeSuggestions.length, editor, filteredFileSuggestions, filteredMemberSuggestions, filteredNoteSuggestions, filteredReferenceSuggestions, filteredTagSuggestions, onFileLinked, onNoteLinked, onReferenceLinked, suggestionActiveIndex]);
+
+  function openReferenceInsert() {
+    editor?.chain().focus().insertContent("%").run();
+  }
+
+  function openMemberInsert() {
+    editor?.chain().focus().insertContent("@").run();
+  }
+
+  function openTagInsert() {
+    editor?.chain().focus().insertContent("#").run();
+  }
+
+  function openFileInsert() {
+    editor?.chain().focus().insertContent("!").run();
+  }
+
+  function openNoteLinkInsert() {
+    editor?.chain().focus().insertContent("[[").run();
+  }
 
   function applyActionDate(value: string) {
     if (!editor || !actionDatePopover.open) return;
@@ -823,6 +1019,184 @@ export function StudyLogRichEditor({
       .insertContentAt(actionDatePopover.from, display)
       .run();
     setActionDatePopover({ open: false });
+  }
+
+  function insertMarkdownLink() {
+    if (!editor) return;
+    const renderedLink = findRenderedLinkAtCursor(editor);
+    if (renderedLink) {
+      setLinkPopover({
+        open: true,
+        from: renderedLink.from,
+        to: renderedLink.to,
+        label: renderedLink.label,
+        href: renderedLink.href,
+      });
+      return;
+    }
+    const existingLink = findMarkdownLinkAtSelection(editor);
+    if (existingLink) {
+      setLinkPopover({
+        open: true,
+        from: existingLink.from,
+        to: existingLink.to,
+        label: existingLink.label,
+        href: existingLink.href,
+      });
+      return;
+    }
+    const { from, to } = editor.state.selection;
+    const selectedText = from === to ? "" : editor.state.doc.textBetween(from, to, "\n", " ");
+    const label = selectedText.trim() || "Link";
+    setLinkPopover({
+      open: true,
+      from,
+      to,
+      label,
+      href: "https://",
+    });
+  }
+
+  function applyMarkdownLink(label: string, href: string) {
+    if (!editor || !linkPopover.open) return;
+    const nextLabel = label.trim() || "Link";
+    const nextHref = href.trim() || "https://";
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: linkPopover.from, to: linkPopover.to })
+      .insertContentAt(linkPopover.from, {
+        type: "text",
+        text: nextLabel,
+        marks: [
+          {
+            type: "link",
+            attrs: {
+              href: nextHref,
+            },
+          },
+        ],
+      })
+      .run();
+    setLinkPopover({ open: false });
+  }
+
+  function removeMarkdownLink() {
+    if (!editor || !linkPopover.open) return;
+    const nextLabel = linkPopover.label.trim() || "Link";
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: linkPopover.from, to: linkPopover.to })
+      .insertContentAt(linkPopover.from, nextLabel)
+      .run();
+    setLinkPopover({ open: false });
+  }
+
+  const commandItems: CommandItem[] = editor
+    ? [
+        { id: "bold", label: "Bold", icon: faBold, section: "Format" },
+        { id: "italic", label: "Italic", icon: faItalic, section: "Format" },
+        { id: "heading", label: "Heading", icon: faHeading, section: "Format" },
+        { id: "bullet-list", label: "Bullet List", icon: faListUl, section: "Format" },
+        { id: "ordered-list", label: "Ordered List", icon: faListOl, section: "Format" },
+        { id: "blockquote", label: "Quote", icon: faQuoteLeft, section: "Format" },
+        { id: "code-block", label: "Code Block", icon: faCode, section: "Format" },
+        { id: "horizontal-rule", label: "Horizontal Rule", icon: faMinus, section: "Insert" },
+        { id: "task", label: "Task", icon: faListCheck, section: "Insert" },
+        { id: "link", label: "Link", icon: faLink, section: "Insert" },
+        { id: "reference", label: "Reference", icon: faAt, section: "Insert" },
+        { id: "member", label: "Member", icon: faAt, section: "Insert" },
+        { id: "tag", label: "Tag", icon: faHashtag, section: "Insert" },
+        { id: "file", label: "File", icon: faFileLines, section: "Insert" },
+        { id: "log-link", label: "Log Link", icon: faLink, section: "Insert" },
+        { id: "due-date", label: "Due Date", icon: faCalendarDay, section: "Insert" },
+        { id: "table", label: "Table", icon: faTable, section: "Insert" },
+        ...(editor.isActive("table")
+          ? [
+              { id: "table-add-row", label: "Add Row", icon: faTable, section: "Table" },
+              { id: "table-delete-row", label: "Delete Row", icon: faTable, section: "Table" },
+              { id: "table-add-column", label: "Add Column", icon: faTable, section: "Table" },
+              { id: "table-delete-column", label: "Delete Column", icon: faTable, section: "Table" },
+              { id: "table-delete", label: "Delete Table", icon: faTable, section: "Table" },
+            ]
+          : []),
+      ]
+    : [];
+
+  function handleCommandSelect(id: string) {
+    if (!editor) return;
+    setCommandPaletteOpen(false);
+    switch (id) {
+      case "bold":
+        editor.chain().focus().toggleBold().run();
+        break;
+      case "italic":
+        editor.chain().focus().toggleItalic().run();
+        break;
+      case "heading":
+        editor.chain().focus().toggleHeading({ level: 2 }).run();
+        break;
+      case "bullet-list":
+        editor.chain().focus().toggleBulletList().run();
+        break;
+      case "ordered-list":
+        editor.chain().focus().toggleOrderedList().run();
+        break;
+      case "blockquote":
+        editor.chain().focus().toggleBlockquote().run();
+        break;
+      case "code-block":
+        editor.chain().focus().toggleCodeBlock().run();
+        break;
+      case "horizontal-rule":
+        editor.chain().focus().setHorizontalRule().run();
+        break;
+      case "task":
+        editor.chain().focus().insertContent("[ ] ").run();
+        break;
+      case "link":
+        insertMarkdownLink();
+        break;
+      case "reference":
+        openReferenceInsert();
+        break;
+      case "member":
+        openMemberInsert();
+        break;
+      case "tag":
+        openTagInsert();
+        break;
+      case "file":
+        openFileInsert();
+        break;
+      case "log-link":
+        openNoteLinkInsert();
+        break;
+      case "due-date":
+        editor.chain().focus().insertContent(new Date().toISOString().slice(0, 10)).run();
+        break;
+      case "table":
+        editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+        break;
+      case "table-add-row":
+        editor.chain().focus().addRowAfter().run();
+        break;
+      case "table-delete-row":
+        editor.chain().focus().deleteRow().run();
+        break;
+      case "table-add-column":
+        editor.chain().focus().addColumnAfter().run();
+        break;
+      case "table-delete-column":
+        editor.chain().focus().deleteColumn().run();
+        break;
+      case "table-delete":
+        editor.chain().focus().deleteTable().run();
+        break;
+      default:
+        break;
+    }
   }
 
   return (
@@ -871,6 +1245,22 @@ export function StudyLogRichEditor({
           </button>
           <button
             type="button"
+            className="ghost docs-action-btn"
+            onClick={insertMarkdownLink}
+            title="Link"
+          >
+            <FontAwesomeIcon icon={faLink} />
+          </button>
+          <button
+            type="button"
+            className="ghost docs-action-btn"
+            onClick={() => editor?.chain().focus().insertContent("[ ] ").run()}
+            title="Task"
+          >
+            <FontAwesomeIcon icon={faListCheck} />
+          </button>
+          <button
+            type="button"
             className={`ghost docs-action-btn ${editor?.isActive("blockquote") ? "active" : ""}`}
             onClick={() => editor?.chain().focus().toggleBlockquote().run()}
             title="Quote"
@@ -884,6 +1274,14 @@ export function StudyLogRichEditor({
             title="Code Block"
           >
             <FontAwesomeIcon icon={faCode} />
+          </button>
+          <button
+            type="button"
+            className="ghost docs-action-btn"
+            onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+            title="Horizontal Rule"
+          >
+            <FontAwesomeIcon icon={faMinus} />
           </button>
           <div className="proposal-table-menu-wrapper" ref={tableMenuRef}>
             <button
@@ -1059,6 +1457,64 @@ export function StudyLogRichEditor({
             </button>
           </div>
         </div>
+      ) : null}
+      {linkPopover.open ? (
+        <div className="cmd-palette-overlay" onClick={() => setLinkPopover({ open: false })}>
+          <div className="study-log-editor-link-palette cmd-palette" onClick={(event) => event.stopPropagation()}>
+            <div className="study-log-editor-suggestions-head cmd-palette-input-row">
+              <FontAwesomeIcon icon={faLink} className="cmd-palette-search-icon" />
+              <span className="study-log-editor-suggestions-label">Link</span>
+              <kbd className="cmd-palette-kbd">esc</kbd>
+            </div>
+            <div className="study-log-editor-link-body">
+              <label>
+                <span>Label</span>
+                <input
+                  type="text"
+                  value={linkPopover.label}
+                  onChange={(event) => setLinkPopover((current) => current.open ? { ...current, label: event.target.value } : current)}
+                  autoFocus
+                />
+              </label>
+              <label>
+                <span>URL</span>
+                <input
+                  type="text"
+                  value={linkPopover.href}
+                  onChange={(event) => setLinkPopover((current) => current.open ? { ...current, href: event.target.value } : current)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      applyMarkdownLink(linkPopover.label, linkPopover.href);
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setLinkPopover({ open: false });
+                    }
+                  }}
+                />
+              </label>
+              <div className="study-log-editor-link-actions">
+                <button type="button" onClick={() => applyMarkdownLink(linkPopover.label, linkPopover.href)}>
+                  Save
+                </button>
+                <button type="button" className="ghost" onClick={removeMarkdownLink}>
+                  Remove
+                </button>
+                <button type="button" className="ghost" onClick={() => setLinkPopover({ open: false })}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {commandPaletteOpen ? (
+        <CommandPalette
+          items={commandItems}
+          onSelect={handleCommandSelect}
+          onClose={() => setCommandPaletteOpen(false)}
+          aggressiveKeyboardCapture
+        />
       ) : null}
     </div>
   );

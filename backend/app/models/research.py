@@ -36,6 +36,7 @@ class ReadingStatus(str, enum.Enum):
 
 
 class NoteType(str, enum.Enum):
+    index = "index"
     observation = "observation"
     discussion = "discussion"
     finding = "finding"

@@ -70,7 +70,7 @@ import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrie
 
 type View = "my-work" | "projects-home" | "research-home" | "teaching-home" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
 type WorkspaceFamily = "projects" | "research" | "teaching";
-type ResearchTabState = "references" | "notes" | "paper" | "iterations" | "overview" | "chat" | "files";
+type ResearchTabState = "references" | "notes" | "paper" | "iterations" | "overview" | "chat" | "files" | "todos";
 type ResearchNavigationState = {
   selectedCollectionId: string | null;
   tab: ResearchTabState;

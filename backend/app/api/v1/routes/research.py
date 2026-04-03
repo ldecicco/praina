@@ -68,8 +68,13 @@ from app.schemas.research import (
     CollectionRead,
     CollectionUpdate,
     NoteCreate,
+    NoteActionItemRead,
+    NoteActionItemUpdate,
     NoteReplyCreate,
     NoteReplyRead,
+    NoteTemplateCreate,
+    NoteTemplateListRead,
+    NoteTemplateRead,
     NoteTagListRead,
     StudyFileListRead,
     StudyFileRead,
@@ -2440,6 +2445,69 @@ def list_notes(
     )
 
 
+@router.get("/{project_id}/research/note-templates", response_model=NoteTemplateListRead)
+def list_note_templates(
+    project_id: uuid.UUID,
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> NoteTemplateListRead:
+    svc = ResearchService(db)
+    items, total = svc.list_note_templates(current_user.id, q=q, page=page, page_size=page_size)
+    return NoteTemplateListRead(
+        items=[_note_template_read(svc, item, current_user) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.post("/{project_id}/research/note-templates", response_model=NoteTemplateRead, status_code=status.HTTP_201_CREATED)
+def create_note_template(
+    project_id: uuid.UUID,
+    payload: NoteTemplateCreate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> NoteTemplateRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.create_note_template(
+            current_user.id,
+            name=payload.name,
+            title=payload.title,
+            content=payload.content,
+            lane=payload.lane,
+            note_type=payload.note_type,
+            tags=payload.tags,
+            is_system=payload.is_system,
+            is_super_admin=current_user.platform_role == "super_admin",
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _note_template_read(svc, item, current_user)
+
+
+@router.delete("/{project_id}/research/note-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_note_template(
+    project_id: uuid.UUID,
+    template_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> None:
+    svc = ResearchService(db)
+    try:
+        svc.delete_note_template(
+            template_id,
+            current_user.id,
+            is_super_admin=current_user.platform_role == "super_admin",
+        )
+    except (NotFoundError, ValidationError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
 @router.get("/{project_id}/research/note-tags", response_model=NoteTagListRead)
 def list_note_tags(
     project_id: uuid.UUID,
@@ -2482,14 +2550,17 @@ def create_note(
     try:
         params = dict(
             title=payload.title,
-            content=payload.content,
-            lane=payload.lane,
-            note_type=payload.note_type,
-            tags=payload.tags,
-            author_member_id=member_id,
-            user_account_id=current_user.id,
-            linked_reference_ids=payload.linked_reference_ids,
-            linked_file_ids=payload.linked_file_ids,
+        content=payload.content,
+        lane=payload.lane,
+        pinned=payload.pinned,
+        starred=payload.starred,
+        note_type=payload.note_type,
+        tags=payload.tags,
+        author_member_id=member_id,
+        user_account_id=current_user.id,
+        linked_reference_ids=payload.linked_reference_ids,
+        linked_file_ids=payload.linked_file_ids,
+        linked_note_ids=payload.linked_note_ids,
         )
         item = (
             svc.create_note_for_space(uuid.UUID(space_id), **params)
@@ -2535,7 +2606,7 @@ def create_note_reply(
         note_id=str(reply.note_id),
         user_account_id=str(reply.user_account_id) if reply.user_account_id else None,
         author_name=current_user.display_name,
-        author_avatar_url=current_user.avatar_path,
+        author_avatar_url=f"/auth/users/{current_user.id}/avatar" if current_user.avatar_path else None,
         content=reply.content,
         linked_reference_ids=svc.get_note_reply_reference_ids(reply.id),
         created_at=reply.created_at,
@@ -2571,6 +2642,7 @@ def update_note(
     payload: NoteUpdate,
     space_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ) -> NoteRead:
     svc = ResearchService(db)
     try:
@@ -2579,9 +2651,13 @@ def update_note(
             content=payload.content,
             collection_id=payload.collection_id,
             lane=payload.lane,
+            pinned=payload.pinned,
+            starred=payload.starred,
             note_type=payload.note_type,
             tags=payload.tags,
             linked_file_ids=payload.linked_file_ids,
+            linked_note_ids=payload.linked_note_ids,
+            sender_user_id=current_user.id,
         )
         item = (
             svc.update_note_for_space(uuid.UUID(space_id), note_id, **params)
@@ -2594,6 +2670,39 @@ def update_note(
         code = 404 if isinstance(exc, NotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     return _note_read(svc, item)
+
+
+@router.patch("/{project_id}/research/notes/actions/{action_item_id}", response_model=NoteActionItemRead)
+def update_note_action_item(
+    project_id: uuid.UUID,
+    action_item_id: uuid.UUID,
+    payload: NoteActionItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> NoteActionItemRead:
+    svc = ResearchService(db)
+    try:
+        item = svc.update_note_action_item(
+            action_item_id,
+            status=payload.status,
+            is_done=payload.is_done,
+        )
+    except (NotFoundError, ValidationError, ValueError) as exc:
+        code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return NoteActionItemRead(
+        id=str(item.id),
+        note_id=str(item.note_id),
+        text=item.text,
+        assignee_user_id=str(item.assignee_user_id) if item.assignee_user_id else None,
+        assignee_name=svc.get_user_display_name(item.assignee_user_id) if item.assignee_user_id else None,
+        assignee_avatar_url=svc.get_user_avatar_url(item.assignee_user_id),
+        due_date=item.due_date,
+        status=item.status.value if hasattr(item.status, "value") else str(item.status),
+        is_done=item.is_done,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
 
 
 @router.delete("/{project_id}/research/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -3112,10 +3221,30 @@ def _note_read(svc: ResearchService, item) -> NoteRead:
         title=item.title,
         content=item.content,
         lane=item.lane,
+        pinned=item.pinned,
+        starred=item.starred,
         note_type=item.note_type.value if hasattr(item.note_type, "value") else str(item.note_type),
         tags=item.tags or [],
         linked_reference_ids=svc.get_note_reference_ids(item.id),
         linked_file_ids=svc.get_note_file_ids(item.id),
+        linked_note_ids=svc.get_note_link_ids(item.id),
+        backlink_note_ids=svc.get_note_backlink_ids(item.id),
+        action_items=[
+            NoteActionItemRead(
+                id=str(action.id),
+                note_id=str(action.note_id),
+                text=action.text,
+                assignee_user_id=str(action.assignee_user_id) if action.assignee_user_id else None,
+                assignee_name=svc.get_user_display_name(action.assignee_user_id) if action.assignee_user_id else None,
+                assignee_avatar_url=svc.get_user_avatar_url(action.assignee_user_id),
+                due_date=action.due_date,
+                status=action.status.value if hasattr(action.status, "value") else str(action.status),
+                is_done=action.is_done,
+                created_at=action.created_at,
+                updated_at=action.updated_at,
+            )
+            for action in svc.list_note_action_items(item.id)
+        ],
         replies=[
             NoteReplyRead(
                 id=str(reply.id),
@@ -3130,6 +3259,28 @@ def _note_read(svc: ResearchService, item) -> NoteRead:
             )
             for reply in svc.list_note_replies(item.id)
         ],
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _note_template_read(svc: ResearchService, item, current_user: UserAccount) -> NoteTemplateRead:
+    creator_id = str(item.created_by_user_id) if item.created_by_user_id else None
+    return NoteTemplateRead(
+        id=str(item.id),
+        name=item.name,
+        title=item.title,
+        content=item.content,
+        lane=item.lane,
+        note_type=item.note_type.value if hasattr(item.note_type, "value") else str(item.note_type),
+        tags=item.tags or [],
+        is_system=bool(item.is_system),
+        created_by_user_id=creator_id,
+        created_by_name=svc.get_user_display_name(item.created_by_user_id) if item.created_by_user_id else None,
+        can_manage=bool(
+            current_user.platform_role == "super_admin"
+            or (not item.is_system and item.created_by_user_id == current_user.id)
+        ),
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

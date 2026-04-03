@@ -6787,6 +6787,24 @@ tr.row-selected {
   color: var(--brand);
 }
 
+.docs-action-btn.active {
+  background: color-mix(in srgb, var(--brand-glow) 78%, var(--surface));
+  color: var(--brand);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 22%, var(--line));
+}
+
+.docs-action-btn[title="Unpin"].active {
+  background: color-mix(in srgb, var(--brand) 14%, var(--surface));
+  color: color-mix(in srgb, var(--brand) 84%, white);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 28%, var(--line));
+}
+
+.docs-action-btn[title="Unstar"].active {
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
+  color: color-mix(in srgb, var(--warning) 82%, white);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 26%, var(--line));
+}
+
 .docs-action-btn.danger:hover {
   background: rgba(239, 83, 80, 0.10);
   color: var(--danger);
@@ -9485,6 +9503,12 @@ tr.row-selected {
   gap: 6px;
 }
 
+.research-log-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .research-log-composer {
   display: flex;
   flex-direction: column;
@@ -9770,6 +9794,13 @@ tr.row-selected {
   transition: border-color var(--t), background var(--t), box-shadow var(--t);
 }
 
+.research-log-card:focus-visible,
+.research-log-card.is-active {
+  outline: none;
+  border-color: color-mix(in srgb, var(--brand) 38%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+
 .research-log-card:hover {
   border-color: var(--line-strong);
   background: var(--surface);
@@ -9786,6 +9817,14 @@ tr.row-selected {
 }
 .research-log-card.log-state-iterated {
   border-left: 3px solid var(--muted);
+}
+.research-log-card.is-pinned {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--brand-subtle) 58%, transparent), transparent 44%),
+    var(--bg-elevated);
+}
+.research-log-card.is-starred {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 14%, transparent);
 }
 .log-chip-unprocessed {
   background: color-mix(in srgb, var(--warning) 14%, var(--surface)) !important;
@@ -9813,6 +9852,7 @@ tr.row-selected {
 }
 .log-group-unprocessed { color: var(--warning); }
 .log-group-processed { color: var(--text-secondary); margin-top: 8px; }
+.log-group-pinned { color: color-mix(in srgb, var(--brand) 80%, white); }
 
 .research-log-select {
   display: inline-flex;
@@ -9930,6 +9970,407 @@ tr.row-selected {
   gap: 10px;
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.research-linked-note-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.research-linked-note-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.research-note-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand-subtle) 55%, transparent);
+}
+
+.research-note-action-list.compact {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.research-note-action-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.research-note-action-item.done .research-note-action-text {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.research-note-action-checkbox {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.research-note-action-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.research-note-action-toggle.done {
+  color: var(--success);
+}
+
+.research-note-action-text {
+  min-width: 0;
+  color: var(--text-bright);
+}
+
+.research-note-action-assignee {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.research-note-action-avatar {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  font-size: 9px;
+}
+
+.research-todo-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 0;
+  min-height: 0;
+  height: calc(100dvh - 200px);
+}
+
+.research-todo-sections {
+  display: grid;
+  gap: 12px;
+  overflow-y: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* ── Kanban board ── */
+.kanban-board {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kanban-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+}
+
+.kanban-col.drop-target {
+  outline: 2px solid color-mix(in srgb, var(--brand) 50%, transparent);
+  outline-offset: -2px;
+}
+
+.kanban-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px;
+}
+
+.kanban-col-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--muted);
+}
+
+.kanban-col-dot.status-open { background: var(--text-secondary); }
+.kanban-col-dot.status-doing { background: var(--warning); }
+.kanban-col-dot.status-done { background: var(--success); }
+
+.kanban-col-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.kanban-col-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.kanban-col-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px 8px;
+  flex: 1 1 0;
+  min-height: 40px;
+  overflow-y: auto;
+}
+
+.kanban-col-empty {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── Kanban card ── */
+.kanban-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  cursor: grab;
+  transition: border-color var(--t), background var(--t), box-shadow var(--t);
+}
+
+.kanban-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.kanban-card:active { cursor: grabbing; }
+
+.kanban-card.dragging {
+  opacity: 0.4;
+}
+
+.kanban-card.done {
+  opacity: 0.6;
+}
+
+.kanban-card.done .kanban-card-title {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.kanban-card-title {
+  color: var(--text-bright);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.kanban-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.kanban-card-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.kanban-card-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.kanban-card-date {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.kanban-card-date.overdue {
+  color: var(--danger);
+}
+
+.kanban-card-avatar.study-avatar {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 10px;
+  margin-left: 0;
+  border: 2px solid var(--bg-elevated);
+  overflow: hidden;
+  border-radius: 50%;
+  aspect-ratio: 1;
+}
+
+/* ── View toggle ── */
+.kanban-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+  border-radius: var(--radius);
+  padding: 2px;
+}
+
+.kanban-view-btn {
+  width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--muted);
+  transition: color var(--t), background var(--t);
+}
+
+.kanban-view-btn.active {
+  color: var(--text-bright);
+  background: var(--surface);
+}
+
+/* ── List view ── */
+.research-todo-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.research-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.kanban-list-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  transition: border-color var(--t), background var(--t), box-shadow var(--t);
+}
+
+.kanban-list-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.kanban-list-card.done {
+  opacity: 0.6;
+}
+
+.kanban-list-card.done .kanban-card-title {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.kanban-list-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kanban-list-card-top .kanban-card-title {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.kanban-list-status-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.kanban-list-card .kanban-card-footer {
+  padding-left: 28px;
+}
+
+.kanban-list-card .kanban-card-source {
+  cursor: pointer;
+}
+
+.kanban-list-card .kanban-card-source:hover {
+  color: var(--brand);
+}
+
+.research-todo-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.research-todo-filter-chip,
+.research-todo-status-btn {
+  cursor: pointer;
+}
+
+.research-todo-filter-chip.active,
+.research-todo-status-btn.active {
+  background: var(--brand-glow);
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--line));
+  color: var(--brand);
+}
+
+.research-todo-state-chip {
+  text-transform: capitalize;
+}
+
+.research-todo-state-chip.status-open {
+  color: var(--text);
+}
+
+.research-todo-state-chip.status-doing {
+  color: var(--warning);
+}
+
+.research-todo-state-chip.status-done {
+  color: var(--success);
+}
+
+.chip.small.overdue {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+@media (max-width: 768px) {
+  .kanban-board {
+    grid-template-columns: 1fr;
+  }
 }
 
 .note-promote-actions {
@@ -13377,6 +13818,87 @@ button.danger:hover:not(:disabled) {
   font-size: 11px;
 }
 
+.research-note-template-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 7, 10, 0.58);
+  backdrop-filter: blur(8px);
+}
+
+.research-note-template-panel,
+.research-note-template-save-card {
+  width: min(760px, 100%);
+  max-height: min(76vh, 820px);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(24, 24, 28, 0.98), rgba(20, 20, 24, 0.98));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+}
+
+.research-note-template-list {
+  display: grid;
+  gap: 10px;
+}
+
+.research-note-template-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+}
+
+.research-note-template-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.research-note-template-card-head strong {
+  color: var(--text-bright);
+  font-size: 13px;
+}
+
+.research-note-template-title {
+  color: var(--text-bright);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.research-note-template-content {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.research-note-template-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.research-note-template-empty {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+  text-align: center;
+}
+
 .study-log-editor-shell {
   min-height: 0;
   height: 100%;
@@ -13408,42 +13930,56 @@ button.danger:hover:not(:disabled) {
 .study-log-editor-suggestions {
   position: fixed;
   z-index: 1200;
-  min-width: 240px;
-  max-width: min(380px, calc(100vw - 24px));
-  max-height: 280px;
-  overflow: auto;
-  display: grid;
-  gap: 4px;
-  padding: 8px;
-  border-radius: 14px;
-  border: 1px solid var(--line);
-  background: rgba(17, 18, 24, 0.96);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(14px);
+  width: min(420px, calc(100vw - 24px));
+  min-width: 280px;
+  max-height: 320px;
+  overflow: hidden;
+}
+
+.study-log-editor-suggestions-head {
+  padding-right: 10px;
+}
+
+.study-log-editor-suggestions-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-bright);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.study-log-editor-suggestions-list {
+  padding: 4px;
 }
 
 .study-log-editor-suggestion {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-bright);
   text-align: left;
-  cursor: pointer;
 }
 
-.study-log-editor-suggestion:hover,
-.study-log-editor-suggestion.active {
-  background: rgba(55, 196, 194, 0.14);
+.study-log-editor-suggestion-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.study-log-editor-suggestion-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .study-log-editor-suggestion small {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .study-log-editor-content {
@@ -13456,8 +13992,11 @@ button.danger:hover:not(:disabled) {
 }
 
 .study-log-editor-citation-token,
+.study-log-editor-member-token,
 .study-log-editor-tag-token,
-.study-log-editor-file-token {
+.study-log-editor-file-token,
+.study-log-editor-note-token,
+.study-log-editor-action-date-token {
   border-radius: 999px;
   padding: 2px 8px;
   box-decoration-break: clone;
@@ -13474,9 +14013,25 @@ button.danger:hover:not(:disabled) {
   color: var(--text-bright);
 }
 
+.study-log-editor-member-token {
+  background: rgba(255, 212, 122, 0.14);
+  color: #ffd88d;
+}
+
 .study-log-editor-file-token {
   background: rgba(122, 211, 238, 0.14);
   color: #9fe8fb;
+}
+
+.study-log-editor-note-token {
+  background: rgba(55, 196, 194, 0.12);
+  color: #a6fffd;
+}
+
+.study-log-editor-action-date-token {
+  background: rgba(84, 174, 111, 0.16);
+  color: #8ee3a8;
+  cursor: pointer;
 }
 
 .study-log-editor-math-token {
@@ -13538,6 +14093,25 @@ button.danger:hover:not(:disabled) {
 .study-log-editor-file-widget-loading {
   color: var(--muted);
   font-size: 12px;
+}
+
+.study-log-editor-action-date-popover {
+  position: fixed;
+  z-index: 1201;
+  width: min(320px, calc(100vw - 24px));
+  overflow: hidden;
+}
+
+.study-log-editor-action-date-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+}
+
+.study-log-editor-action-date-body input[type="date"] {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .research-file-preview-list {

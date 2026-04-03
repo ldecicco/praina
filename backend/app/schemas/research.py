@@ -603,10 +603,13 @@ class NoteCreate(BaseModel):
     content: str
     collection_id: str | None = None
     lane: str | None = None
+    pinned: bool = False
+    starred: bool = False
     note_type: str = "observation"
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)
     linked_file_ids: list[str] = Field(default_factory=list)
+    linked_note_ids: list[str] = Field(default_factory=list)
 
 
 class NoteUpdate(BaseModel):
@@ -614,9 +617,12 @@ class NoteUpdate(BaseModel):
     content: str | None = None
     collection_id: str | None = None
     lane: str | None = None
+    pinned: bool | None = None
+    starred: bool | None = None
     note_type: str | None = None
     tags: list[str] | None = None
     linked_file_ids: list[str] | None = None
+    linked_note_ids: list[str] | None = None
 
 
 class NoteReplyCreate(BaseModel):
@@ -634,6 +640,25 @@ class NoteReplyRead(BaseModel):
     linked_reference_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class NoteActionItemRead(BaseModel):
+    id: str
+    note_id: str
+    text: str
+    assignee_user_id: str | None = None
+    assignee_name: str | None = None
+    assignee_avatar_url: str | None = None
+    due_date: date | None = None
+    status: str = "open"
+    is_done: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteActionItemUpdate(BaseModel):
+    status: str | None = None
+    is_done: bool | None = None
 
 
 class StudyFileRead(BaseModel):
@@ -667,10 +692,15 @@ class NoteRead(BaseModel):
     title: str
     content: str
     lane: str | None = None
+    pinned: bool = False
+    starred: bool = False
     note_type: str
     tags: list[str] = Field(default_factory=list)
     linked_reference_ids: list[str] = Field(default_factory=list)
     linked_file_ids: list[str] = Field(default_factory=list)
+    linked_note_ids: list[str] = Field(default_factory=list)
+    backlink_note_ids: list[str] = Field(default_factory=list)
+    action_items: list[NoteActionItemRead] = Field(default_factory=list)
     replies: list[NoteReplyRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -686,6 +716,46 @@ class NoteTagListRead(BaseModel):
 
 class NoteReferencesPayload(BaseModel):
     reference_ids: list[str] = Field(default_factory=list)
+
+
+class NoteTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    title: str | None = None
+    content: str = ""
+    lane: str | None = None
+    note_type: str = "observation"
+    tags: list[str] = Field(default_factory=list)
+    is_system: bool = False
+
+
+class NoteTemplateUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    title: str | None = None
+    content: str | None = None
+    lane: str | None = None
+    note_type: str | None = None
+    tags: list[str] | None = None
+    is_system: bool | None = None
+
+
+class NoteTemplateRead(BaseModel):
+    id: str
+    name: str
+    title: str | None = None
+    content: str
+    lane: str | None = None
+    note_type: str
+    tags: list[str] = Field(default_factory=list)
+    is_system: bool = False
+    created_by_user_id: str | None = None
+    created_by_name: str | None = None
+    can_manage: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteTemplateListRead(PaginatedResponse):
+    items: list[NoteTemplateRead] = Field(default_factory=list)
 
 
 # ── AI responses ───────────────────────────────────────────────────────

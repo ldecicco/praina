@@ -72,7 +72,9 @@ import type {
   ResearchStudyFile,
   ResearchReference,
   ResearchNote,
+  ResearchNoteActionItem,
   ResearchNoteReply,
+  ResearchNoteTemplate,
   Equipment,
   EquipmentMaterial,
   EquipmentBlocker,
@@ -2624,6 +2626,33 @@ export const api = {
     if (opts?.space_id) q.set("space_id", opts.space_id);
     if (opts?.collection_id) q.set("collection_id", opts.collection_id);
     return request(`/projects/${projectId}/research/note-tags?${q}`);
+  },
+  listResearchNoteTemplates(projectId: string, opts?: { q?: string; page?: number; page_size?: number }): Promise<{ items: ResearchNoteTemplate[]; page: number; page_size: number; total: number }> {
+    const q = new URLSearchParams();
+    if (opts?.q) q.set("q", opts.q);
+    if (opts?.page) q.set("page", String(opts.page));
+    if (opts?.page_size) q.set("page_size", String(opts.page_size));
+    return request(`/projects/${projectId}/research/note-templates?${q}`);
+  },
+  createResearchNoteTemplate(
+    projectId: string,
+    data: { name: string; title?: string | null; content: string; lane?: string | null; note_type?: string; tags?: string[]; is_system?: boolean }
+  ): Promise<ResearchNoteTemplate> {
+    return request(`/projects/${projectId}/research/note-templates`, { method: "POST", body: JSON.stringify(data) });
+  },
+  deleteResearchNoteTemplate(projectId: string, templateId: string): Promise<void> {
+    return request(`/projects/${projectId}/research/note-templates/${templateId}`, { method: "DELETE" });
+  },
+
+  updateResearchNoteActionItem(
+    projectId: string,
+    actionItemId: string,
+    payload: { status?: "open" | "doing" | "done"; is_done?: boolean }
+  ): Promise<ResearchNoteActionItem> {
+    return request(`/projects/${projectId}/research/notes/actions/${actionItemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
   },
   createResearchNote(projectId: string, data: Record<string, unknown>, spaceId?: string): Promise<ResearchNote> {
     const q = spaceId ? `?space_id=${spaceId}` : "";

@@ -6,6 +6,8 @@ type RenderMarkdownOptions = {
   onReferenceClick?: (label: string) => void;
   onTagClick?: (tag: string) => void;
   onFileClick?: (label: string) => void;
+  onNoteClick?: (label: string) => void;
+  onMemberClick?: (handle: string) => void;
 };
 
 function renderMath(expression: string, displayMode: boolean, key: string): ReactNode {
@@ -23,7 +25,7 @@ function renderMath(expression: string, displayMode: boolean, key: string): Reac
 
 function renderInlineText(text: string, options?: RenderMarkdownOptions): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(@\[([^\]]+)\]|!\[([^\]]+)\]|(^|[\s(>])#([A-Za-z0-9][A-Za-z0-9_/-]*))/g;
+  const pattern = /((?:@|%)\[([^\]]+)\]|!\[([^\]]+)\]|\[\[([^\]]+)\]\]|(^|[\s(>])@([A-Za-z0-9][A-Za-z0-9_.-]*)|(^|[\s(>])#([A-Za-z0-9][A-Za-z0-9_/-]*))/g;
   let cursor = 0;
   let key = 0;
 
@@ -81,8 +83,63 @@ function renderInlineText(text: string, options?: RenderMarkdownOptions): ReactN
       continue;
     }
 
-    const prefix = match[4] || "";
-    const tag = match[5] || "";
+    if (match[4]) {
+      const label = match[4];
+      if (start > cursor) {
+        nodes.push(text.slice(cursor, start));
+      }
+      nodes.push(
+        options?.onNoteClick ? (
+          <button
+            key={`markdown-inline-text-${key++}`}
+            type="button"
+            className="mention-chip mention-chip-button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.preventDefault();
+              options.onNoteClick?.(label);
+            }}
+          >
+            {label}
+          </button>
+        ) : (
+          <span key={`markdown-inline-text-${key++}`} className="mention-chip">{label}</span>
+        )
+      );
+      cursor = start + match[0].length;
+      continue;
+    }
+
+    if (match[6]) {
+      const prefix = match[5] || "";
+      const handle = match[6] || "";
+      const tokenStart = start + prefix.length;
+      if (tokenStart > cursor) {
+        nodes.push(text.slice(cursor, tokenStart));
+      }
+      nodes.push(prefix);
+      nodes.push(
+        options?.onMemberClick ? (
+          <button
+            key={`markdown-inline-text-${key++}`}
+            type="button"
+            className="mention-chip mention-chip-button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.preventDefault();
+              options.onMemberClick?.(handle);
+            }}
+          >
+            @{handle}
+          </button>
+        ) : (
+          <span key={`markdown-inline-text-${key++}`} className="mention-chip">@{handle}</span>
+        )
+      );
+      cursor = start + match[0].length;
+      continue;
+    }
+
+    const prefix = match[7] || "";
+    const tag = match[8] || "";
     const tokenStart = start + prefix.length;
     if (tokenStart > cursor) {
       nodes.push(text.slice(cursor, tokenStart));
@@ -115,7 +172,7 @@ function renderInlineText(text: string, options?: RenderMarkdownOptions): ReactN
 
 function renderInlineMarkdown(text: string, options?: RenderMarkdownOptions): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(@\[([^\]]+)\]|!\[([^\]]+)\]|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\$([^$\n]+?)\$)/g;
+  const pattern = /((?:@|%)\[([^\]]+)\]|!\[([^\]]+)\]|\[\[([^\]]+)\]\]|(^|[\s(>])@([A-Za-z0-9][A-Za-z0-9_.-]*)|\[([^\]]+)\]\(((?:https?:\/\/|#)[^\s)]+)\)|\[(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\$([^$\n]+?)\$)/g;
   let cursor = 0;
   let key = 0;
 
@@ -158,8 +215,44 @@ function renderInlineMarkdown(text: string, options?: RenderMarkdownOptions): Re
       ) : (
         <span key={`markdown-inline-${key++}`} className="mention-chip">{label}</span>
       ));
-    } else if (match[4] && match[5]) {
-      const href = match[5];
+    } else if (match[4]) {
+      const label = match[4];
+      nodes.push(options?.onNoteClick ? (
+        <button
+          key={`markdown-inline-${key++}`}
+          type="button"
+          className="mention-chip mention-chip-button"
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            options.onNoteClick?.(label);
+          }}
+        >
+          {label}
+        </button>
+      ) : (
+        <span key={`markdown-inline-${key++}`} className="mention-chip">{label}</span>
+      ));
+    } else if (match[6]) {
+      const prefix = match[5] || "";
+      const handle = match[6];
+      nodes.push(prefix);
+      nodes.push(options?.onMemberClick ? (
+        <button
+          key={`markdown-inline-${key++}`}
+          type="button"
+          className="mention-chip mention-chip-button"
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            options.onMemberClick?.(handle);
+          }}
+        >
+          @{handle}
+        </button>
+      ) : (
+        <span key={`markdown-inline-${key++}`} className="mention-chip">@{handle}</span>
+      ));
+    } else if (match[7] && match[8]) {
+      const href = match[8];
       const external = /^https?:\/\//.test(href);
       nodes.push(
         <a
@@ -168,23 +261,23 @@ function renderInlineMarkdown(text: string, options?: RenderMarkdownOptions): Re
           target={external ? "_blank" : undefined}
           rel={external ? "noreferrer" : undefined}
         >
-          {match[4]}
+          {match[7]}
         </a>
       );
-    } else if (match[6]) {
-      nodes.push(
-        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[6]}`}>
-          [{match[6]}]
-        </a>
-      );
-    } else if (match[7]) {
-      nodes.push(<strong key={`markdown-inline-${key++}`}>{match[7]}</strong>);
-    } else if (match[8]) {
-      nodes.push(<em key={`markdown-inline-${key++}`}>{match[8]}</em>);
     } else if (match[9]) {
-      nodes.push(<code key={`markdown-inline-${key++}`}>{match[9]}</code>);
+      nodes.push(
+        <a key={`markdown-inline-${key++}`} href={`#call-citation-${match[9]}`}>
+          [{match[9]}]
+        </a>
+      );
     } else if (match[10]) {
-      nodes.push(renderMath(match[10], false, `markdown-inline-${key++}`));
+      nodes.push(<strong key={`markdown-inline-${key++}`}>{match[10]}</strong>);
+    } else if (match[11]) {
+      nodes.push(<em key={`markdown-inline-${key++}`}>{match[11]}</em>);
+    } else if (match[12]) {
+      nodes.push(<code key={`markdown-inline-${key++}`}>{match[12]}</code>);
+    } else if (match[13]) {
+      nodes.push(renderMath(match[13], false, `markdown-inline-${key++}`));
     }
     cursor = start + match[0].length;
   }

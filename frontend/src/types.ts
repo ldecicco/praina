@@ -1521,11 +1521,30 @@ export type ResearchNote = {
   title: string;
   content: string;
   lane: string | null;
+  pinned: boolean;
+  starred: boolean;
   note_type: string;
   tags: string[];
   linked_reference_ids: string[];
   linked_file_ids: string[];
+  linked_note_ids: string[];
+  backlink_note_ids: string[];
+  action_items: ResearchNoteActionItem[];
   replies: ResearchNoteReply[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchNoteActionItem = {
+  id: string;
+  note_id: string;
+  text: string;
+  assignee_user_id: string | null;
+  assignee_name: string | null;
+  assignee_avatar_url: string | null;
+  due_date: string | null;
+  status: "open" | "doing" | "done";
+  is_done: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -1538,6 +1557,22 @@ export type ResearchNoteReply = {
   author_avatar_url: string | null;
   content: string;
   linked_reference_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchNoteTemplate = {
+  id: string;
+  name: string;
+  title: string | null;
+  content: string;
+  lane: string | null;
+  note_type: string;
+  tags: string[];
+  is_system: boolean;
+  created_by_user_id: string | null;
+  created_by_name: string | null;
+  can_manage: boolean;
   created_at: string;
   updated_at: string;
 };

@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, Enum, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,6 +45,12 @@ class NoteType(str, enum.Enum):
     action_item = "action_item"
     literature_review = "literature_review"
     conclusion = "conclusion"
+
+
+class NoteActionStatus(str, enum.Enum):
+    open = "open"
+    doing = "doing"
+    done = "done"
 
 
 class OutputStatus(str, enum.Enum):
@@ -109,6 +115,13 @@ research_note_files = Table(
     Base.metadata,
     Column("note_id", UUID(as_uuid=True), ForeignKey("research_notes.id", ondelete="CASCADE"), primary_key=True),
     Column("file_id", UUID(as_uuid=True), ForeignKey("research_study_files.id", ondelete="CASCADE"), primary_key=True),
+)
+
+research_note_links = Table(
+    "research_note_links",
+    Base.metadata,
+    Column("source_note_id", UUID(as_uuid=True), ForeignKey("research_notes.id", ondelete="CASCADE"), primary_key=True),
+    Column("target_note_id", UUID(as_uuid=True), ForeignKey("research_notes.id", ondelete="CASCADE"), primary_key=True),
 )
 
 research_note_reply_references = Table(
@@ -348,10 +361,46 @@ class ResearchNote(Base, IdMixin, TimestampMixin):
     title: Mapped[str] = mapped_column(String(255))
     content: Mapped[str] = mapped_column(Text)
     lane: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    pinned: Mapped[bool] = mapped_column(default=False, index=True)
+    starred: Mapped[bool] = mapped_column(default=False, index=True)
     note_type: Mapped[NoteType] = mapped_column(
         Enum(NoteType, name="note_type"), default=NoteType.observation, index=True,
     )
     tags: Mapped[list | None] = mapped_column(JSONB, default=list)
+
+
+class ResearchNoteTemplate(Base, IdMixin, TimestampMixin):
+    __tablename__ = "research_note_templates"
+
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    lane: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    note_type: Mapped[NoteType] = mapped_column(
+        Enum(NoteType, name="note_type", create_type=False), default=NoteType.observation, index=True,
+    )
+    tags: Mapped[list | None] = mapped_column(JSONB, default=list)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+
+
+class ResearchNoteActionItem(Base, IdMixin, TimestampMixin):
+    __tablename__ = "research_note_action_items"
+
+    note_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_notes.id", ondelete="CASCADE"), index=True
+    )
+    text: Mapped[str] = mapped_column(Text)
+    assignee_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    status: Mapped[NoteActionStatus] = mapped_column(
+        Enum(NoteActionStatus, name="research_note_action_status"), default=NoteActionStatus.open, index=True,
+    )
+    is_done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
 class ResearchNoteReply(Base, IdMixin, TimestampMixin):

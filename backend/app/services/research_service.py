@@ -42,6 +42,7 @@ from app.models.research import (
     OutputStatus,
     CollectionStatus,
     NoteType,
+    NoteActionStatus,
     ReadingStatus,
     ResearchAnnotation,
     ResearchCollection,
@@ -49,6 +50,8 @@ from app.models.research import (
     ResearchStudyFile,
     ResearchSpace,
     ResearchNote,
+    ResearchNoteActionItem,
+    ResearchNoteTemplate,
     ResearchNoteReply,
     ResearchReference,
     bibliography_collection_references,
@@ -61,6 +64,7 @@ from app.models.research import (
     research_collection_wps,
     research_note_references,
     research_note_files,
+    research_note_links,
     research_note_reply_references,
 )
 from app.models.teaching import TeachingProjectBackgroundMaterial
@@ -128,7 +132,7 @@ class ResearchService:
         if not user_id:
             return None
         user = self.db.get(UserAccount, user_id)
-        return user.avatar_path if user and user.avatar_path else None
+        return f"/auth/users/{user_id}/avatar" if user and user.avatar_path else None
 
     def get_team_member_user_id(self, member_id: uuid.UUID | None) -> uuid.UUID | None:
         if not member_id:
@@ -140,6 +144,92 @@ class ResearchService:
         if user_id:
             return self.get_user_display_name(user_id), self.get_user_avatar_url(user_id), user_id
         return self.get_author_name(item.author_member_id), None, None
+
+    def list_note_templates(
+        self,
+        actor_user_id: uuid.UUID,
+        *,
+        q: str | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[list[ResearchNoteTemplate], int]:
+        stmt = select(ResearchNoteTemplate).where(
+            or_(
+                ResearchNoteTemplate.is_system.is_(True),
+                ResearchNoteTemplate.created_by_user_id == actor_user_id,
+            )
+        )
+        if q:
+            term = f"%{q.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    ResearchNoteTemplate.name.ilike(term),
+                    ResearchNoteTemplate.title.ilike(term),
+                    ResearchNoteTemplate.content.ilike(term),
+                )
+            )
+        total = self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        items = self.db.scalars(
+            stmt.order_by(
+                ResearchNoteTemplate.is_system.desc(),
+                func.lower(ResearchNoteTemplate.name),
+                ResearchNoteTemplate.updated_at.desc(),
+            )
+            .offset(max(0, page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        return items, int(total)
+
+    def create_note_template(
+        self,
+        actor_user_id: uuid.UUID,
+        *,
+        name: str,
+        title: str | None = None,
+        content: str = "",
+        lane: str | None = None,
+        note_type: str = "observation",
+        tags: list[str] | None = None,
+        is_system: bool = False,
+        is_super_admin: bool = False,
+    ) -> ResearchNoteTemplate:
+        if is_system and not is_super_admin:
+            raise ValidationError("Only administrators can create system templates.")
+        item = ResearchNoteTemplate(
+            name=name[:160].strip(),
+            title=title[:255].strip() if title else None,
+            content=content.strip(),
+            lane=self._note_lane(lane),
+            note_type=self._note_type(note_type),
+            tags=self._merged_note_tags(content, tags),
+            is_system=bool(is_system),
+            created_by_user_id=actor_user_id,
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def get_note_template(self, template_id: uuid.UUID, actor_user_id: uuid.UUID, *, is_super_admin: bool = False) -> ResearchNoteTemplate:
+        item = self.db.get(ResearchNoteTemplate, template_id)
+        if not item:
+            raise NotFoundError("Template not found.")
+        if item.is_system:
+            return item
+        if is_super_admin or item.created_by_user_id == actor_user_id:
+            return item
+        raise ValidationError("Cannot access this template.")
+
+    def delete_note_template(self, template_id: uuid.UUID, actor_user_id: uuid.UUID, *, is_super_admin: bool = False) -> None:
+        item = self.db.get(ResearchNoteTemplate, template_id)
+        if not item:
+            raise NotFoundError("Template not found.")
+        if item.is_system and not is_super_admin:
+            raise ValidationError("Only administrators can delete system templates.")
+        if not item.is_system and not is_super_admin and item.created_by_user_id != actor_user_id:
+            raise ValidationError("Cannot delete this template.")
+        self.db.delete(item)
+        self.db.commit()
 
     def _space_linked_project_id(self, space_id: uuid.UUID) -> uuid.UUID | None:
         item = self.db.get(ResearchSpace, space_id)
@@ -413,6 +503,216 @@ class ResearchService:
             seen.add(token)
             token_map[token] = user
         return token_map
+
+    _ACTION_DATE_RE = re.compile(r"(?:(?:->)\s*)?(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})")
+
+    def _parse_action_due_date(self, raw: str) -> tuple[str, date | None]:
+        matches = list(self._ACTION_DATE_RE.finditer(raw or ""))
+        match = matches[-1] if matches else None
+        if not match:
+            return raw.strip(), None
+        token = match.group(1).strip()
+        parsed: date | None = None
+        try:
+            if "-" in token:
+                parsed = date.fromisoformat(token)
+            else:
+                day, month, year = token.split("/")
+                parsed = date(int(year), int(month), int(day))
+        except Exception:
+            parsed = None
+        stripped = (raw[: match.start()] + raw[match.end() :]).strip()
+        stripped = re.sub(r"(?:\s*(?:->|by|before|entro|per)\s*)$", "", stripped, flags=re.IGNORECASE).strip()
+        return stripped, parsed
+
+    def _extract_note_action_items(
+        self,
+        content: str,
+        *,
+        collection_id: uuid.UUID | None,
+    ) -> list[dict]:
+        if not content.strip():
+            return []
+        token_map = self._study_member_token_map(collection_id) if collection_id else {}
+        items: list[dict] = []
+        inside_fence = False
+        for raw_line in content.splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("```"):
+                inside_fence = not inside_fence
+                continue
+            if inside_fence:
+                continue
+            match = re.match(r"^\s*(?:[-*+]\s+)?\[( |x|X)\]\s+(.*)$", raw_line)
+            if not match:
+                continue
+            is_done = match.group(1).lower() == "x"
+            body = (match.group(2) or "").strip()
+            if not body:
+                continue
+            body, due_date = self._parse_action_due_date(body)
+            assignee_user = None
+            tokens = [t.strip().lower() for t in self._USER_MENTION_RE.findall(body or "") if t.strip()]
+            for token in tokens:
+                target = token_map.get(token)
+                if target:
+                    assignee_user = target
+                    break
+            text = self._USER_MENTION_RE.sub("", body).strip()
+            text = re.sub(r"\s{2,}", " ", text)
+            if not text:
+                continue
+            items.append(
+                {
+                    "text": text,
+                    "assignee_user_id": assignee_user.id if assignee_user else None,
+                    "due_date": due_date,
+                    "status": NoteActionStatus.done if is_done else NoteActionStatus.open,
+                    "is_done": is_done,
+                }
+            )
+        return items
+
+    @staticmethod
+    def _action_item_signature(item: dict | ResearchNoteActionItem) -> tuple[str, str | None, str | None]:
+        text = (item["text"] if isinstance(item, dict) else item.text).strip().lower()
+        assignee = item["assignee_user_id"] if isinstance(item, dict) else item.assignee_user_id
+        due_date = item["due_date"] if isinstance(item, dict) else item.due_date
+        return (
+            text,
+            str(assignee) if assignee else None,
+            due_date.isoformat() if due_date else None,
+        )
+
+    def _notify_note_action_mentions(
+        self,
+        note: ResearchNote,
+        action_items: list[ResearchNoteActionItem],
+        *,
+        previous_signatures: set[tuple[str, str | None, str | None]],
+        sender_user_id: uuid.UUID | None,
+    ) -> None:
+        if not sender_user_id:
+            return
+        from app.services.notification_service import NotificationService
+
+        sender = self.db.get(UserAccount, sender_user_id)
+        sender_name = (sender.display_name if sender else None) or "Someone"
+        study = self.get_collection_any(note.collection_id) if note.collection_id else None
+        study_title = ((study.title if study else None) or note.title or "study")[:80]
+        notifier = NotificationService(self.db)
+        notified: set[uuid.UUID] = set()
+
+        for item in action_items:
+            signature = self._action_item_signature(item)
+            if (
+                item.status == NoteActionStatus.done
+                or not item.assignee_user_id
+                or item.assignee_user_id == sender_user_id
+                or signature in previous_signatures
+                or item.assignee_user_id in notified
+            ):
+                continue
+            notifier.notify(
+                item.assignee_user_id,
+                project_id=note.project_id,
+                title=f"Assigned in {study_title}",
+                body=f"{sender_name}: {item.text[:220]}",
+                link_type="research_note_action",
+                link_id=note.id,
+            )
+            notified.add(item.assignee_user_id)
+
+    def _sync_note_action_items(
+        self,
+        note_id: uuid.UUID,
+        *,
+        content: str,
+        collection_id: uuid.UUID | None,
+        sender_user_id: uuid.UUID | None = None,
+    ) -> None:
+        note = self.get_note_any(note_id)
+        existing_items = self.list_note_action_items(note_id)
+        existing_by_signature: dict[tuple[str, str | None, str | None], list[ResearchNoteActionItem]] = {}
+        for existing in existing_items:
+            existing_by_signature.setdefault(self._action_item_signature(existing), []).append(existing)
+
+        extracted = self._extract_note_action_items(content, collection_id=collection_id)
+        kept_ids: set[uuid.UUID] = set()
+        created_items: list[ResearchNoteActionItem] = []
+        previous_signatures = set(existing_by_signature.keys())
+
+        for item in extracted:
+            signature = self._action_item_signature(item)
+            bucket = existing_by_signature.get(signature) or []
+            existing = bucket.pop(0) if bucket else None
+            parsed_status = item.get("status") or (NoteActionStatus.done if item.get("is_done") else NoteActionStatus.open)
+            if isinstance(parsed_status, str):
+                parsed_status = NoteActionStatus(parsed_status)
+            if existing:
+                existing.text = item["text"]
+                existing.assignee_user_id = item["assignee_user_id"]
+                existing.due_date = item["due_date"]
+                if parsed_status == NoteActionStatus.done:
+                    existing.status = NoteActionStatus.done
+                    existing.is_done = True
+                elif existing.status != NoteActionStatus.done:
+                    existing.status = parsed_status
+                    existing.is_done = parsed_status == NoteActionStatus.done
+                kept_ids.add(existing.id)
+            else:
+                record = ResearchNoteActionItem(
+                    note_id=note_id,
+                    text=item["text"],
+                    assignee_user_id=item["assignee_user_id"],
+                    due_date=item["due_date"],
+                    status=parsed_status,
+                    is_done=parsed_status == NoteActionStatus.done,
+                )
+                self.db.add(record)
+                self.db.flush()
+                created_items.append(record)
+                kept_ids.add(record.id)
+
+        for existing in existing_items:
+            if existing.id not in kept_ids:
+                self.db.delete(existing)
+
+        self._notify_note_action_mentions(
+            note,
+            [item for item in self.list_note_action_items(note_id) if item.id in kept_ids],
+            previous_signatures=previous_signatures,
+            sender_user_id=sender_user_id,
+        )
+
+    def list_note_action_items(self, note_id: uuid.UUID) -> list[ResearchNoteActionItem]:
+        return list(
+            self.db.scalars(
+                select(ResearchNoteActionItem)
+                .where(ResearchNoteActionItem.note_id == note_id)
+                .order_by(ResearchNoteActionItem.created_at.asc(), ResearchNoteActionItem.id.asc())
+            ).all()
+        )
+
+    def update_note_action_item(
+        self,
+        action_item_id: uuid.UUID,
+        *,
+        status: str | None = None,
+        is_done: bool | None = None,
+    ) -> ResearchNoteActionItem:
+        item = self.db.get(ResearchNoteActionItem, action_item_id)
+        if not item:
+            raise NotFoundError("Action item not found.")
+        if status is not None:
+            item.status = NoteActionStatus(status)
+            item.is_done = item.status == NoteActionStatus.done
+        elif is_done is not None:
+            item.status = NoteActionStatus.done if is_done else NoteActionStatus.open
+            item.is_done = bool(is_done)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
 
     def toggle_study_chat_reaction(
         self,
@@ -4287,7 +4587,7 @@ class ResearchService:
         total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
         items = list(
             self.db.scalars(
-                stmt.order_by(ResearchNote.created_at.desc())
+                stmt.order_by(ResearchNote.pinned.desc(), ResearchNote.starred.desc(), ResearchNote.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             ).all()
@@ -4322,7 +4622,7 @@ class ResearchService:
         total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
         items = list(
             self.db.scalars(
-                stmt.order_by(ResearchNote.created_at.desc())
+                stmt.order_by(ResearchNote.pinned.desc(), ResearchNote.starred.desc(), ResearchNote.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             ).all()
@@ -4355,7 +4655,7 @@ class ResearchService:
         total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
         items = list(
             self.db.scalars(
-                stmt.order_by(ResearchNote.created_at.desc())
+                stmt.order_by(ResearchNote.pinned.desc(), ResearchNote.starred.desc(), ResearchNote.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             ).all()
@@ -4398,12 +4698,15 @@ class ResearchService:
         content: str,
         collection_id: uuid.UUID | None = None,
         lane: str | None = None,
+        pinned: bool = False,
+        starred: bool = False,
         note_type: str = "observation",
         tags: list[str] | None = None,
         author_member_id: uuid.UUID | None = None,
         user_account_id: uuid.UUID | None = None,
         linked_reference_ids: list[str] | None = None,
         linked_file_ids: list[str] | None = None,
+        linked_note_ids: list[str] | None = None,
     ) -> ResearchNote:
         self._get_project(project_id)
         item = ResearchNote(
@@ -4412,6 +4715,8 @@ class ResearchService:
             content=content.strip(),
             collection_id=collection_id,
             lane=self._note_lane(lane),
+            pinned=bool(pinned),
+            starred=bool(starred),
             note_type=self._note_type(note_type),
             tags=self._merged_note_tags(content, tags),
             author_member_id=author_member_id,
@@ -4429,6 +4734,17 @@ class ResearchService:
             for file_id in linked_file_ids:
                 if file_id in allowed_ids:
                     self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        if linked_note_ids:
+            allowed_note_ids = {
+                str(note.id)
+                for note in self.db.scalars(
+                    select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)
+                ).all()
+            }
+            for note_id in linked_note_ids:
+                if note_id in allowed_note_ids and note_id != str(item.id):
+                    self.db.execute(insert(research_note_links).values(source_note_id=item.id, target_note_id=uuid.UUID(note_id)))
+        self._sync_note_action_items(item.id, content=item.content, collection_id=item.collection_id, sender_user_id=user_account_id)
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -4445,6 +4761,8 @@ class ResearchService:
                 content=kwargs["content"].strip(),
                 collection_id=kwargs.get("collection_id"),
                 lane=self._note_lane(kwargs.get("lane")),
+                pinned=bool(kwargs.get("pinned")),
+                starred=bool(kwargs.get("starred")),
                 note_type=self._note_type(kwargs.get("note_type") or "observation"),
                 tags=self._merged_note_tags(kwargs.get("content"), kwargs.get("tags")),
                 author_member_id=kwargs.get("author_member_id"),
@@ -4460,6 +4778,17 @@ class ResearchService:
                 for file_id in kwargs["linked_file_ids"]:
                     if file_id in allowed_ids:
                         self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+            if kwargs.get("linked_note_ids"):
+                allowed_note_ids = {
+                    str(note_id)
+                    for note_id in self.db.scalars(
+                        select(ResearchNote.id).where(ResearchNote.collection_id == kwargs.get("collection_id"))
+                    ).all()
+                }
+                for note_id in kwargs["linked_note_ids"]:
+                    if note_id in allowed_note_ids and note_id != str(item.id):
+                        self.db.execute(insert(research_note_links).values(source_note_id=item.id, target_note_id=uuid.UUID(note_id)))
+            self._sync_note_action_items(item.id, content=item.content, collection_id=item.collection_id, sender_user_id=kwargs.get("user_account_id"))
             self.db.commit()
             self.db.refresh(item)
         item.research_space_id = space_id
@@ -4481,6 +4810,8 @@ class ResearchService:
             content=kwargs["content"].strip(),
             collection_id=collection_id,
             lane=self._note_lane(kwargs.get("lane")),
+            pinned=bool(kwargs.get("pinned")),
+            starred=bool(kwargs.get("starred")),
             note_type=self._note_type(kwargs.get("note_type") or "observation"),
             tags=self._merged_note_tags(kwargs.get("content"), kwargs.get("tags")),
             author_member_id=kwargs.get("author_member_id"),
@@ -4496,6 +4827,17 @@ class ResearchService:
             for file_id in kwargs["linked_file_ids"]:
                 if file_id in allowed_ids:
                     self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        if kwargs.get("linked_note_ids"):
+            allowed_note_ids = {
+                str(note_id)
+                for note_id in self.db.scalars(
+                    select(ResearchNote.id).where(ResearchNote.collection_id == collection_id)
+                ).all()
+            }
+            for note_id in kwargs["linked_note_ids"]:
+                if note_id in allowed_note_ids and note_id != str(item.id):
+                    self.db.execute(insert(research_note_links).values(source_note_id=item.id, target_note_id=uuid.UUID(note_id)))
+        self._sync_note_action_items(item.id, content=item.content, collection_id=item.collection_id, sender_user_id=kwargs.get("user_account_id"))
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -4505,13 +4847,17 @@ class ResearchService:
         project_id: uuid.UUID,
         note_id: uuid.UUID,
         *,
+        sender_user_id: uuid.UUID | None = None,
         title: str | None = None,
         content: str | None = None,
         collection_id: str | None = None,
         lane: str | None = None,
+        pinned: bool | None = None,
+        starred: bool | None = None,
         note_type: str | None = None,
         tags: list[str] | None = None,
         linked_file_ids: list[str] | None = None,
+        linked_note_ids: list[str] | None = None,
     ) -> ResearchNote:
         item = self.get_note(project_id, note_id)
         if title is not None:
@@ -4522,6 +4868,10 @@ class ResearchService:
             item.collection_id = uuid.UUID(collection_id) if collection_id else None
         if lane is not None:
             item.lane = self._note_lane(lane)
+        if pinned is not None:
+            item.pinned = bool(pinned)
+        if starred is not None:
+            item.starred = bool(starred)
         if note_type is not None:
             item.note_type = self._note_type(note_type)
         if tags is not None:
@@ -4534,6 +4884,18 @@ class ResearchService:
             for file_id in linked_file_ids:
                 if file_id in allowed_ids:
                     self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        if linked_note_ids is not None:
+            self.db.execute(delete(research_note_links).where(research_note_links.c.source_note_id == item.id))
+            allowed_note_ids = {
+                str(note_id)
+                for note_id in self.db.scalars(
+                    select(ResearchNote.id).where(ResearchNote.collection_id == item.collection_id)
+                ).all()
+            }
+            for linked_note_id in linked_note_ids:
+                if linked_note_id in allowed_note_ids and linked_note_id != str(item.id):
+                    self.db.execute(insert(research_note_links).values(source_note_id=item.id, target_note_id=uuid.UUID(linked_note_id)))
+        self._sync_note_action_items(item.id, content=item.content, collection_id=item.collection_id, sender_user_id=sender_user_id or item.user_account_id)
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -4550,6 +4912,10 @@ class ResearchService:
             item.collection_id = uuid.UUID(kwargs["collection_id"]) if kwargs["collection_id"] else None
         if kwargs.get("lane") is not None:
             item.lane = self._note_lane(kwargs["lane"])
+        if kwargs.get("pinned") is not None:
+            item.pinned = bool(kwargs["pinned"])
+        if kwargs.get("starred") is not None:
+            item.starred = bool(kwargs["starred"])
         if kwargs.get("note_type") is not None:
             item.note_type = self._note_type(kwargs["note_type"])
         if kwargs.get("tags") is not None:
@@ -4562,6 +4928,23 @@ class ResearchService:
             for file_id in kwargs["linked_file_ids"]:
                 if file_id in allowed_ids:
                     self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        if kwargs.get("linked_note_ids") is not None:
+            self.db.execute(delete(research_note_links).where(research_note_links.c.source_note_id == item.id))
+            allowed_note_ids = {
+                str(note_id)
+                for note_id in self.db.scalars(
+                    select(ResearchNote.id).where(ResearchNote.collection_id == item.collection_id)
+                ).all()
+            }
+            for linked_note_id in kwargs["linked_note_ids"]:
+                if linked_note_id in allowed_note_ids and linked_note_id != str(item.id):
+                    self.db.execute(insert(research_note_links).values(source_note_id=item.id, target_note_id=uuid.UUID(linked_note_id)))
+        self._sync_note_action_items(
+            item.id,
+            content=item.content,
+            collection_id=item.collection_id,
+            sender_user_id=kwargs.get("sender_user_id") or item.user_account_id,
+        )
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -4580,6 +4963,10 @@ class ResearchService:
             item.collection_id = uuid.UUID(kwargs["collection_id"]) if kwargs["collection_id"] else None
         if kwargs.get("lane") is not None:
             item.lane = self._note_lane(kwargs["lane"])
+        if kwargs.get("pinned") is not None:
+            item.pinned = bool(kwargs["pinned"])
+        if kwargs.get("starred") is not None:
+            item.starred = bool(kwargs["starred"])
         if kwargs.get("note_type") is not None:
             item.note_type = self._note_type(kwargs["note_type"])
         if kwargs.get("tags") is not None:
@@ -4592,6 +4979,23 @@ class ResearchService:
             for file_id in kwargs["linked_file_ids"]:
                 if file_id in allowed_ids:
                     self.db.execute(insert(research_note_files).values(note_id=item.id, file_id=uuid.UUID(file_id)))
+        if kwargs.get("linked_note_ids") is not None:
+            self.db.execute(delete(research_note_links).where(research_note_links.c.source_note_id == item.id))
+            allowed_note_ids = {
+                str(note_id)
+                for note_id in self.db.scalars(
+                    select(ResearchNote.id).where(ResearchNote.collection_id == item.collection_id)
+                ).all()
+            }
+            for linked_note_id in kwargs["linked_note_ids"]:
+                if linked_note_id in allowed_note_ids and linked_note_id != str(item.id):
+                    self.db.execute(insert(research_note_links).values(source_note_id=item.id, target_note_id=uuid.UUID(linked_note_id)))
+        self._sync_note_action_items(
+            item.id,
+            content=item.content,
+            collection_id=item.collection_id,
+            sender_user_id=kwargs.get("sender_user_id") or item.user_account_id,
+        )
         self.db.commit()
         self.db.refresh(item)
         return item
@@ -4668,6 +5072,18 @@ class ResearchService:
             select(research_note_files.c.file_id).where(research_note_files.c.note_id == note_id)
         ).all()
         return [str(r[0]) for r in rows]
+
+    def get_note_link_ids(self, note_id: uuid.UUID) -> list[str]:
+        rows = self.db.execute(
+            select(research_note_links.c.target_note_id).where(research_note_links.c.source_note_id == note_id)
+        ).all()
+        return [str(row[0]) for row in rows]
+
+    def get_note_backlink_ids(self, note_id: uuid.UUID) -> list[str]:
+        rows = self.db.execute(
+            select(research_note_links.c.source_note_id).where(research_note_links.c.target_note_id == note_id)
+        ).all()
+        return [str(row[0]) for row in rows]
 
     def list_note_replies(self, note_id: uuid.UUID) -> list[ResearchNoteReply]:
         return list(

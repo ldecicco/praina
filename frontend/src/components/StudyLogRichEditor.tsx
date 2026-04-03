@@ -16,8 +16,13 @@ import {
   faCode,
   faHeading,
   faItalic,
+  faLink,
   faListOl,
   faListUl,
+  faHashtag,
+  faAt,
+  faCalendarDay,
+  faFileLines,
   faQuoteLeft,
   faTable,
 } from "@fortawesome/free-solid-svg-icons";
@@ -29,6 +34,18 @@ type ReferenceSuggestion = {
 };
 
 type FileSuggestion = {
+  id: string;
+  label: string;
+  meta?: string;
+};
+
+type NoteSuggestion = {
+  id: string;
+  label: string;
+  meta?: string;
+};
+
+type MemberSuggestion = {
   id: string;
   label: string;
   meta?: string;
@@ -47,6 +64,39 @@ function isImageMime(mimeType: string | null | undefined): boolean {
 function isCsvMime(mimeType: string | null | undefined, filename: string): boolean {
   const mime = (mimeType || "").toLowerCase();
   return mime.includes("csv") || filename.toLowerCase().endsWith(".csv");
+}
+
+function normalizeActionDateToken(value: string): string | null {
+  const raw = (value || "").trim();
+  if (!raw) return null;
+  try {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return raw;
+    }
+    const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!match) return null;
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const year = Number(match[3]);
+    const date = new Date(year, month - 1, day);
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      return null;
+    }
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  } catch {
+    return null;
+  }
+}
+
+function formatEditorActionDate(value: string): string {
+  const normalized = normalizeActionDateToken(value);
+  if (!normalized) return value;
+  const [year, month, day] = normalized.split("-");
+  return `${Number(day)}/${Number(month)}/${year}`;
 }
 
 function createFilePreviewWidget(
@@ -155,10 +205,24 @@ function createLiveMarkdownTokensExtension(options: {
               const text = node.text;
               const base = pos;
 
-              for (const match of text.matchAll(/@\[[^\]]+\]/g)) {
+              for (const match of text.matchAll(/(?:@|%)\[[^\]]+\]/g)) {
                 const start = base + (match.index ?? 0);
                 const end = start + match[0].length;
                 decorations.push(Decoration.inline(start, end, { class: "study-log-editor-citation-token" }));
+              }
+
+              for (const match of text.matchAll(/(^|[\s(>])@([A-Za-z0-9][A-Za-z0-9_.-]*)/g)) {
+                const prefix = match[1] || "";
+                const handle = match[2] || "";
+                const start = base + (match.index ?? 0) + prefix.length;
+                const end = start + handle.length + 1;
+                decorations.push(Decoration.inline(start, end, { class: "study-log-editor-member-token" }));
+              }
+
+              for (const match of text.matchAll(/\[\[[^\]]+\]\]/g)) {
+                const start = base + (match.index ?? 0);
+                const end = start + match[0].length;
+                decorations.push(Decoration.inline(start, end, { class: "study-log-editor-note-token" }));
               }
 
               for (const match of text.matchAll(/!\[[^\]]+\]/g)) {
@@ -225,6 +289,23 @@ function createLiveMarkdownTokensExtension(options: {
                 decorations.push(Decoration.inline(start, end, { class: "study-log-editor-hidden-token" }));
                 decorations.push(Decoration.widget(start, widget, { side: 0 }));
               }
+
+              for (const match of text.matchAll(/(?:(?:->)\s*)?(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})/g)) {
+                const raw = match[0];
+                const token = match[1] || "";
+                const normalized = normalizeActionDateToken(token);
+                if (!normalized) continue;
+                const start = base + (match.index ?? 0) + raw.lastIndexOf(token);
+                const end = start + token.length;
+                decorations.push(
+                  Decoration.inline(start, end, {
+                    class: "study-log-editor-action-date-token",
+                    "data-date-start": String(start),
+                    "data-date-end": String(end),
+                    "data-date-value": normalized,
+                  }),
+                );
+              }
             });
 
             return DecorationSet.create(state.doc, decorations);
@@ -243,6 +324,8 @@ type Props = {
   onReady?: (editor: Editor | null) => void;
   referenceSuggestions?: ReferenceSuggestion[];
   fileSuggestions?: FileSuggestion[];
+  noteSuggestions?: NoteSuggestion[];
+  memberSuggestions?: MemberSuggestion[];
   linkedFiles?: ResearchStudyFile[];
   projectId?: string | null;
   collectionId?: string | null;
@@ -250,6 +333,7 @@ type Props = {
   tagSuggestions?: string[];
   onReferenceLinked?: (referenceId: string) => void;
   onFileLinked?: (fileId: string) => void;
+  onNoteLinked?: (noteId: string) => void;
   onPasteImage?: (file: File) => Promise<{ id: string; label: string } | null>;
 };
 
@@ -259,10 +343,21 @@ type SuggestionState =
     }
   | {
       open: true;
-      trigger: "@" | "#" | "!";
+      trigger: "@" | "#" | "!" | "%" | "[[";
       query: string;
       rangeFrom: number;
       rangeTo: number;
+      top: number;
+      left: number;
+    };
+
+type ActionDatePopoverState =
+  | { open: false }
+  | {
+      open: true;
+      from: number;
+      to: number;
+      value: string;
       top: number;
       left: number;
     };
@@ -274,6 +369,8 @@ export function StudyLogRichEditor({
   onReady,
   referenceSuggestions = [],
   fileSuggestions = [],
+  noteSuggestions = [],
+  memberSuggestions = [],
   linkedFiles = [],
   projectId,
   collectionId,
@@ -281,12 +378,14 @@ export function StudyLogRichEditor({
   tagSuggestions = [],
   onReferenceLinked,
   onFileLinked,
+  onNoteLinked,
   onPasteImage,
 }: Props) {
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [tableGridHover, setTableGridHover] = useState<[number, number]>([0, 0]);
   const [suggestionState, setSuggestionState] = useState<SuggestionState>({ open: false });
   const [suggestionActiveIndex, setSuggestionActiveIndex] = useState(0);
+  const [actionDatePopover, setActionDatePopover] = useState<ActionDatePopoverState>({ open: false });
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const suggestionStateRef = useRef<SuggestionState>({ open: false });
@@ -409,8 +508,22 @@ export function StudyLogRichEditor({
   }, [tableMenuOpen]);
 
   const filteredReferenceSuggestions =
-    suggestionState.open && suggestionState.trigger === "@"
+    suggestionState.open && suggestionState.trigger === "%"
       ? referenceSuggestions
+          .filter((item) => {
+            const q = suggestionState.query.trim().toLowerCase();
+            if (!q) return true;
+            return (
+              item.label.toLowerCase().includes(q) ||
+              (item.meta || "").toLowerCase().includes(q)
+            );
+          })
+          .slice(0, 8)
+      : [];
+
+  const filteredMemberSuggestions =
+    suggestionState.open && suggestionState.trigger === "@"
+      ? memberSuggestions
           .filter((item) => {
             const q = suggestionState.query.trim().toLowerCase();
             if (!q) return true;
@@ -447,11 +560,29 @@ export function StudyLogRichEditor({
           .slice(0, 8)
       : [];
 
+  const filteredNoteSuggestions =
+    suggestionState.open && suggestionState.trigger === "[["
+      ? noteSuggestions
+          .filter((item) => {
+            const q = suggestionState.query.trim().toLowerCase();
+            if (!q) return true;
+            return (
+              item.label.toLowerCase().includes(q) ||
+              (item.meta || "").toLowerCase().includes(q)
+            );
+          })
+          .slice(0, 8)
+      : [];
+
   const activeSuggestions =
     suggestionState.open && suggestionState.trigger === "@"
+      ? filteredMemberSuggestions.map((item) => ({ key: item.id, label: item.label, meta: item.meta }))
+      : suggestionState.open && suggestionState.trigger === "%"
       ? filteredReferenceSuggestions.map((item) => ({ key: item.id, label: item.label, meta: item.meta }))
       : suggestionState.open && suggestionState.trigger === "!"
       ? filteredFileSuggestions.map((item) => ({ key: item.id, label: item.label, meta: item.meta }))
+      : suggestionState.open && suggestionState.trigger === "[["
+      ? filteredNoteSuggestions.map((item) => ({ key: item.id, label: item.label, meta: item.meta }))
       : filteredTagSuggestions.map((item) => ({ key: item, label: `#${item}`, meta: undefined as string | undefined }));
 
   useEffect(() => {
@@ -487,12 +618,28 @@ export function StudyLogRichEditor({
       }
       const lookbackStart = Math.max(0, from - 80);
       const before = activeEditor.state.doc.textBetween(lookbackStart, from, "\n", " ");
-      const match = before.match(/(?:^|[\s([])([@#!])([A-Za-z0-9_./-]*)$/);
+      const noteMatch = before.match(/\[\[([^[\]]*)$/);
+      if (noteMatch) {
+        const query = noteMatch[1] || "";
+        const rangeFrom = from - query.length - 2;
+        const coords = activeEditor.view.coordsAtPos(from);
+        setSuggestionState({
+          open: true,
+          trigger: "[[",
+          query,
+          rangeFrom,
+          rangeTo: from,
+          top: coords.bottom + 8,
+          left: coords.left,
+        });
+        return;
+      }
+      const match = before.match(/(?:^|[\s([])([@#!%])([A-Za-z0-9_./-]*)$/);
       if (!match) {
         closeSuggestions();
         return;
       }
-      const trigger = match[1] as "@" | "#" | "!";
+      const trigger = match[1] as "@" | "#" | "!" | "%";
       const query = match[2] || "";
       const rangeFrom = from - query.length - 1;
       const coords = activeEditor.view.coordsAtPos(from);
@@ -511,13 +658,25 @@ export function StudyLogRichEditor({
       const state = suggestionStateRef.current;
       if (!state.open) return false;
       if (state.trigger === "@") {
+        const item = filteredMemberSuggestions[index];
+        if (!item) return false;
+        activeEditor
+          .chain()
+          .focus()
+          .deleteRange({ from: state.rangeFrom, to: state.rangeTo })
+          .insertContent(`${item.label} `)
+          .run();
+        setSuggestionState({ open: false });
+        return true;
+      }
+      if (state.trigger === "%") {
         const item = filteredReferenceSuggestions[index];
         if (!item) return false;
         activeEditor
           .chain()
           .focus()
           .deleteRange({ from: state.rangeFrom, to: state.rangeTo })
-          .insertContent(`@[${item.label}] `)
+          .insertContent(`%[${item.label}] `)
           .run();
         onReferenceLinked?.(item.id);
         setSuggestionState({ open: false });
@@ -533,6 +692,19 @@ export function StudyLogRichEditor({
           .insertContent(`![${item.label}] `)
           .run();
         onFileLinked?.(item.id);
+        setSuggestionState({ open: false });
+        return true;
+      }
+      if (state.trigger === "[[") {
+        const item = filteredNoteSuggestions[index];
+        if (!item) return false;
+        activeEditor
+          .chain()
+          .focus()
+          .deleteRange({ from: state.rangeFrom, to: state.rangeTo })
+          .insertContent(`[[${item.label}]] `)
+          .run();
+        onNoteLinked?.(item.id);
         setSuggestionState({ open: false });
         return true;
       }
@@ -581,6 +753,32 @@ export function StudyLogRichEditor({
     function handleDocumentMouseDown(event: MouseEvent) {
       if (shellRef.current?.contains(event.target as Node)) return;
       closeSuggestions();
+      setActionDatePopover({ open: false });
+    }
+
+    function handleEditorClick(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      const token = target?.closest?.(".study-log-editor-action-date-token") as HTMLElement | null;
+      if (!token) {
+        setActionDatePopover({ open: false });
+        return;
+      }
+      const from = Number(token.dataset.dateStart || "");
+      const to = Number(token.dataset.dateEnd || "");
+      const value = token.dataset.dateValue || "";
+      if (!Number.isFinite(from) || !Number.isFinite(to) || !value) {
+        setActionDatePopover({ open: false });
+        return;
+      }
+      const rect = token.getBoundingClientRect();
+      setActionDatePopover({
+        open: true,
+        from,
+        to,
+        value,
+        top: rect.bottom + 8,
+        left: rect.left,
+      });
     }
 
     updateSuggestions();
@@ -600,6 +798,7 @@ export function StudyLogRichEditor({
       editorDom = null;
     }
     editorDom?.addEventListener("keydown", handleKeyDown);
+    editorDom?.addEventListener("click", handleEditorClick);
     document.addEventListener("mousedown", handleDocumentMouseDown);
     return () => {
       activeEditor.off("update", updateSuggestions);
@@ -607,9 +806,24 @@ export function StudyLogRichEditor({
       activeEditor.off("focus", updateSuggestions);
       activeEditor.off("blur", handleBlur);
       editorDom?.removeEventListener("keydown", handleKeyDown);
+      editorDom?.removeEventListener("click", handleEditorClick);
       document.removeEventListener("mousedown", handleDocumentMouseDown);
     };
-  }, [activeSuggestions.length, editor, filteredFileSuggestions, filteredReferenceSuggestions, filteredTagSuggestions, onFileLinked, onReferenceLinked, suggestionActiveIndex]);
+  }, [activeSuggestions.length, editor, filteredFileSuggestions, filteredMemberSuggestions, filteredNoteSuggestions, filteredReferenceSuggestions, filteredTagSuggestions, onFileLinked, onNoteLinked, onReferenceLinked, suggestionActiveIndex]);
+
+  function applyActionDate(value: string) {
+    if (!editor || !actionDatePopover.open) return;
+    const normalized = normalizeActionDateToken(value);
+    if (!normalized) return;
+    const display = formatEditorActionDate(normalized);
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: actionDatePopover.from, to: actionDatePopover.to })
+      .insertContentAt(actionDatePopover.from, display)
+      .run();
+    setActionDatePopover({ open: false });
+  }
 
   return (
     <div ref={shellRef} className="study-log-editor-shell">
@@ -744,24 +958,41 @@ export function StudyLogRichEditor({
       </div>
       {suggestionState.open && activeSuggestions.length > 0 ? (
         <div
-          className="study-log-editor-suggestions"
+          className="study-log-editor-suggestions cmd-palette"
           style={{ top: suggestionState.top, left: suggestionState.left }}
         >
+          <div className="study-log-editor-suggestions-head cmd-palette-input-row">
+            <FontAwesomeIcon icon={triggerIcon(suggestionState.trigger)} className="cmd-palette-search-icon" />
+            <span className="study-log-editor-suggestions-label">
+              {suggestionState.trigger === "@" ? "Members" : suggestionState.trigger === "%" ? "References" : suggestionState.trigger === "#" ? "Tags" : suggestionState.trigger === "!" ? "Files" : "Logs"}
+            </span>
+            <kbd className="cmd-palette-kbd">enter</kbd>
+          </div>
+          <div className="study-log-editor-suggestions-list cmd-palette-list">
           {activeSuggestions.map((item, index) => (
             <button
               key={item.key}
               type="button"
-              className={`study-log-editor-suggestion${index === suggestionActiveIndex ? " active" : ""}`}
+              className={`study-log-editor-suggestion cmd-palette-item${index === suggestionActiveIndex ? " active" : ""}`}
               onMouseDown={(event) => {
                 event.preventDefault();
                 if (suggestionState.trigger === "@") {
+                  const member = filteredMemberSuggestions[index];
+                  if (!member || !editor) return;
+                  editor
+                    .chain()
+                    .focus()
+                    .deleteRange({ from: suggestionState.rangeFrom, to: suggestionState.rangeTo })
+                    .insertContent(`${member.label} `)
+                    .run();
+                } else if (suggestionState.trigger === "%") {
                   const ref = filteredReferenceSuggestions[index];
                   if (!ref || !editor) return;
                   editor
                     .chain()
                     .focus()
                     .deleteRange({ from: suggestionState.rangeFrom, to: suggestionState.rangeTo })
-                    .insertContent(`@[${ref.label}] `)
+                    .insertContent(`%[${ref.label}] `)
                     .run();
                   onReferenceLinked?.(ref.id);
                 } else if (suggestionState.trigger === "!") {
@@ -774,6 +1005,16 @@ export function StudyLogRichEditor({
                     .insertContent(`![${file.label}] `)
                     .run();
                   onFileLinked?.(file.id);
+                } else if (suggestionState.trigger === "[[") {
+                  const note = filteredNoteSuggestions[index];
+                  if (!note || !editor) return;
+                  editor
+                    .chain()
+                    .focus()
+                    .deleteRange({ from: suggestionState.rangeFrom, to: suggestionState.rangeTo })
+                    .insertContent(`[[${note.label}]] `)
+                    .run();
+                  onNoteLinked?.(note.id);
                 } else {
                   const tag = filteredTagSuggestions[index];
                   if (!tag || !editor) return;
@@ -787,12 +1028,45 @@ export function StudyLogRichEditor({
                 setSuggestionState({ open: false });
               }}
             >
-              <span>{item.label}</span>
-              {item.meta ? <small>{item.meta}</small> : null}
+              <FontAwesomeIcon icon={triggerIcon(suggestionState.trigger)} className="cmd-palette-item-icon" />
+              <span className="study-log-editor-suggestion-body">
+                <span className="study-log-editor-suggestion-title">{item.label}</span>
+                {item.meta ? <small>{item.meta}</small> : null}
+              </span>
             </button>
           ))}
+          </div>
+        </div>
+      ) : null}
+      {actionDatePopover.open ? (
+        <div
+          className="study-log-editor-action-date-popover cmd-palette"
+          style={{ top: actionDatePopover.top, left: actionDatePopover.left }}
+        >
+          <div className="study-log-editor-suggestions-head cmd-palette-input-row">
+            <FontAwesomeIcon icon={faCalendarDay} className="cmd-palette-search-icon" />
+            <span className="study-log-editor-suggestions-label">Due Date</span>
+          </div>
+          <div className="study-log-editor-action-date-body">
+            <input
+              type="date"
+              value={actionDatePopover.value}
+              onChange={(event) => applyActionDate(event.target.value)}
+              autoFocus
+            />
+            <button type="button" className="ghost" onClick={() => setActionDatePopover({ open: false })}>
+              Close
+            </button>
+          </div>
         </div>
       ) : null}
     </div>
   );
 }
+  function triggerIcon(trigger: "@" | "#" | "!" | "%" | "[[") {
+    if (trigger === "@") return faAt;
+    if (trigger === "%") return faAt;
+    if (trigger === "#") return faHashtag;
+    if (trigger === "!") return faFileLines;
+    return faLink;
+  }

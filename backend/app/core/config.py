@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -83,9 +84,40 @@ class Settings(BaseSettings):
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:
-        if not self.cors_allowed_origins:
-            return []
-        return [item.strip() for item in self.cors_allowed_origins.split(",") if item.strip()]
+        origins: list[str] = []
+        if self.cors_allowed_origins:
+            origins.extend(item.strip() for item in self.cors_allowed_origins.split(",") if item.strip())
+
+        frontend_origin = self._normalize_origin(self.frontend_app_url)
+        if frontend_origin:
+            origins.append(frontend_origin)
+
+        # Capacitor Android/iOS WebViews do not use the public frontend origin.
+        # Keep the mobile shell able to reach the API without requiring extra
+        # per-environment CORS tuning.
+        origins.extend([
+            "https://localhost",
+            "http://localhost",
+            "capacitor://localhost",
+            "ionic://localhost",
+        ])
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for origin in origins:
+          if origin not in seen:
+              seen.add(origin)
+              deduped.append(origin)
+        return deduped
+
+    @staticmethod
+    def _normalize_origin(url: str | None) -> str | None:
+        if not url:
+            return None
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return None
+        return f"{parsed.scheme}://{parsed.netloc}"
 
 
 @lru_cache

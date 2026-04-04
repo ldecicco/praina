@@ -8,9 +8,7 @@ const config: CapacitorConfig = {
   webDir: "dist",
   server: {
     androidScheme: "https",
-    ...(isDev
-      ? { url: "http://localhost:5173", cleartext: true }
-      : { url: "https://c3lab.poliba.it/praina" }),
+    ...(isDev && { url: "http://localhost:5173", cleartext: true }),
   },
   ios: {
     contentInset: "automatic",

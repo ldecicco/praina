@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 
 import { api } from "../lib/api";
 import type { AuthTokens, MeResponse } from "../types";
@@ -17,11 +18,16 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const isNative = Capacitor.isNativePlatform();
   const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
+    if (isNative) {
+      setRegistrationEnabled(false);
+      return;
+    }
     api.publicConfig().then((cfg) => setRegistrationEnabled(cfg.registration_enabled)).catch(() => setRegistrationEnabled(true));
-  }, []);
+  }, [isNative]);
 
   async function handleSubmit() {
     if (!email || !password || (mode === "register" && !displayName)) return;

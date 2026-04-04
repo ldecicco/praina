@@ -32,7 +32,7 @@ sync_prod() {
 
 build_and_sync() {
   echo "==> Building frontend..."
-  npx vite build
+  npx vite build --mode production
   echo "==> Syncing for production..."
   npx cap sync
   echo "Done."

@@ -99,6 +99,7 @@ const REFRESH_TOKEN_KEY = "auth_refresh_token";
 const RESEARCH_ROUTE_FALLBACK_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 const RESEARCH_TOUR_KEY = "research_tour_version";
 const RESEARCH_TOUR_VERSION = "2026-04-research-v1";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 function normalizeSnapshot(snapshot: AppNavigationSnapshot): string {
   return JSON.stringify(snapshot);
@@ -536,7 +537,9 @@ export default function App() {
   useEffect(() => {
     if (!Capacitor.isNativePlatform() || nativeDebugToastShownRef.current) return;
     nativeDebugToastShownRef.current = true;
-    toast.message("Native app bundle loaded");
+    toast.message("Native app bundle loaded", {
+      description: API_BASE,
+    });
   }, []);
 
   useEffect(() => {
@@ -552,7 +555,7 @@ export default function App() {
     async function setupPush() {
       try {
         toast.message("Push setup start", {
-          description: `platform: ${Capacitor.getPlatform()}`,
+          description: `platform: ${Capacitor.getPlatform()} · api: ${API_BASE}`,
         });
         const permission = await PushNotifications.checkPermissions();
         let receive = permission.receive;

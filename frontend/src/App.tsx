@@ -207,6 +207,7 @@ export default function App() {
   const restoreTargetSnapshotRef = useRef<string | null>(null);
   const [navigationHistoryIndex, setNavigationHistoryIndex] = useState(-1);
   const pushRegistrationAttemptedRef = useRef(false);
+  const nativeDebugToastShownRef = useRef(false);
 
   const currentNavigationSnapshot = useMemo<AppNavigationSnapshot>(() => ({
     view,
@@ -531,6 +532,12 @@ export default function App() {
       removeCapListener?.();
     };
   }, [me, refreshNotifications]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || nativeDebugToastShownRef.current) return;
+    nativeDebugToastShownRef.current = true;
+    toast.message("Native app bundle loaded");
+  }, []);
 
   useEffect(() => {
     if (!me || !authTokens?.access_token || !Capacitor.isNativePlatform() || pushRegistrationAttemptedRef.current) return;

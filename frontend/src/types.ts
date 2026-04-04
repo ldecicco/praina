@@ -1483,7 +1483,7 @@ export type BibliographyGraph = {
 export type CollectionGraphNode = {
   id: string;
   label: string;
-  node_type: "study" | "tag" | "reference" | "log" | string;
+  node_type: "study" | "tag" | "reference" | "log" | "user" | string;
   ref_id: string | null;
   meta: string | null;
 };
@@ -1492,7 +1492,17 @@ export type CollectionGraphEdge = {
   id: string;
   source: string;
   target: string;
-  edge_type: "shares_tag" | "shares_reference" | "contains_log" | "has_tag" | "cites_reference" | "links_log" | string;
+  edge_type:
+    | "shares_tag"
+    | "shares_reference"
+    | "contains_log"
+    | "has_tag"
+    | "cites_reference"
+    | "links_log"
+    | "authored_log"
+    | "mentioned_in_log"
+    | "assigned_action"
+    | string;
 };
 
 export type CollectionGraph = {

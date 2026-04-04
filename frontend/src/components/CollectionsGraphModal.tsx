@@ -17,6 +17,7 @@ import {
   faPlus,
   faShareNodes,
   faThumbtack,
+  faUser,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 
@@ -83,6 +84,7 @@ export function CollectionsGraphModal({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [includeLogs, setIncludeLogs] = useState(true);
+  const [includeUsers, setIncludeUsers] = useState(true);
   const [includeTags, setIncludeTags] = useState(true);
   const [includeReferences, setIncludeReferences] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
@@ -102,6 +104,7 @@ export function CollectionsGraphModal({
       graphData.nodes
         .filter((node) => {
           if (node.node_type === "log") return includeLogs;
+          if (node.node_type === "user") return includeUsers;
           if (node.node_type === "tag") return includeTags;
           if (node.node_type === "reference") return includeReferences;
           return true;
@@ -112,7 +115,7 @@ export function CollectionsGraphModal({
       nodes: graphData.nodes.filter((node) => allowedNodeIds.has(node.id)),
       edges: graphData.edges.filter((edge) => allowedNodeIds.has(edge.source) && allowedNodeIds.has(edge.target)),
     };
-  }, [graphData, includeLogs, includeReferences, includeTags]);
+  }, [graphData, includeLogs, includeReferences, includeTags, includeUsers]);
 
   const selectedNode = useMemo(
     () => filteredGraph.nodes.find((item) => item.id === selectedNodeId) ?? null,
@@ -178,7 +181,7 @@ export function CollectionsGraphModal({
 
     if (filteredGraph.nodes.length === 0) return;
 
-    const graph = new Graph();
+    const graph = new Graph({ multi: true });
     const positions = buildInitialPositions(filteredGraph.nodes.map((item) => item.id));
     const brand = cssVar("--brand", "#3AAFA8");
     const warning = cssVar("--warning", "#D4943A");
@@ -192,11 +195,13 @@ export function CollectionsGraphModal({
           ? rgbaFromHex(brand, 0.84)
           : node.node_type === "log"
             ? rgbaFromHex("#7d84ff", 0.8)
+            : node.node_type === "user"
+              ? rgbaFromHex("#f28c6f", 0.84)
             : node.node_type === "tag"
               ? rgbaFromHex(warning, 0.8)
               : rgbaFromHex("#5da2ff", 0.8);
       const baseSize =
-        node.node_type === "study" ? 10 : node.node_type === "log" ? 6 : node.node_type === "reference" ? 7 : 5;
+        node.node_type === "study" ? 10 : node.node_type === "log" ? 6 : node.node_type === "reference" ? 7 : node.node_type === "user" ? 6 : 5;
       graph.addNode(node.id, {
         label: node.label,
         x: pos.x,
@@ -214,6 +219,12 @@ export function CollectionsGraphModal({
         color:
           edge.edge_type === "shares_reference" || edge.edge_type === "cites_reference"
             ? "rgba(93,162,255,0.18)"
+            : edge.edge_type === "authored_log"
+              ? "rgba(242,140,111,0.24)"
+              : edge.edge_type === "mentioned_in_log"
+                ? "rgba(242,140,111,0.16)"
+                : edge.edge_type === "assigned_action"
+                  ? "rgba(212,148,58,0.24)"
             : edge.edge_type === "links_log"
               ? "rgba(125,132,255,0.22)"
               : edge.edge_type === "contains_log"
@@ -408,6 +419,7 @@ export function CollectionsGraphModal({
           <div className="modal-head-actions">
             <span className="chip small">{nodeCounts.study || 0} studies</span>
             <span className="chip small">{nodeCounts.log || 0} logs</span>
+            <span className="chip small">{nodeCounts.user || 0} users</span>
             {pinnedNodeCount > 0 ? <span className="chip small">{pinnedNodeCount} pinned</span> : null}
             <button type="button" className="ghost docs-action-btn" onClick={onClose} title="Close">
               <FontAwesomeIcon icon={faXmark} />
@@ -418,6 +430,9 @@ export function CollectionsGraphModal({
         <div className="bibliography-graph-toolbar">
           <button type="button" className={`bib-toggle-btn${includeLogs ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeLogs((v) => !v)}>
             Logs{nodeCounts.log ? ` (${nodeCounts.log})` : ""}
+          </button>
+          <button type="button" className={`bib-toggle-btn${includeUsers ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeUsers((v) => !v)}>
+            Users{nodeCounts.user ? ` (${nodeCounts.user})` : ""}
           </button>
           <button type="button" className={`bib-toggle-btn${includeTags ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeTags((v) => !v)}>
             Tags{nodeCounts.tag ? ` (${nodeCounts.tag})` : ""}
@@ -473,6 +488,7 @@ export function CollectionsGraphModal({
             <div className="graph-legend">
               {nodeCounts.study ? <span className="graph-legend-item"><span className="graph-legend-shape shape-circle" style={{ background: cssVar("--brand", "#3AAFA8") }} />Studies</span> : null}
               {nodeCounts.log ? <span className="graph-legend-item"><span className="graph-legend-shape shape-square" style={{ background: "#7d84ff" }} />Logs</span> : null}
+              {nodeCounts.user ? <span className="graph-legend-item"><span className="graph-legend-shape shape-circle" style={{ background: "#f28c6f" }} />Users</span> : null}
               {nodeCounts.tag ? <span className="graph-legend-item"><span className="graph-legend-shape shape-diamond" style={{ background: cssVar("--warning", "#D4943A") }} />Tags</span> : null}
               {nodeCounts.reference ? <span className="graph-legend-item"><span className="graph-legend-shape shape-square" style={{ background: "#5da2ff" }} />References</span> : null}
             </div>
@@ -496,6 +512,8 @@ export function CollectionsGraphModal({
                       const fill =
                         node.nodeType === "study"
                           ? cssVar("--brand", "#3AAFA8")
+                          : node.nodeType === "user"
+                            ? "#f28c6f"
                           : node.nodeType === "tag"
                             ? cssVar("--warning", "#D4943A")
                             : node.nodeType === "log"
@@ -526,6 +544,20 @@ export function CollectionsGraphModal({
                             rx={1}
                             fill={fill}
                             opacity={isSelected ? 1 : 0.78}
+                          />
+                        );
+                      }
+                      if (node.nodeType === "user") {
+                        return (
+                          <circle
+                            key={`minimap-${node.id}`}
+                            cx={cx}
+                            cy={cy}
+                            r={2.2}
+                            fill={fill}
+                            opacity={isSelected ? 1 : 0.82}
+                            stroke={isSelected ? "rgba(255,255,255,0.8)" : "none"}
+                            strokeWidth={isSelected ? 0.8 : 0}
                           />
                         );
                       }
@@ -565,6 +597,13 @@ export function CollectionsGraphModal({
                     </button>
                   </div>
                 ) : null}
+                {selectedNode.node_type === "user" ? (
+                  <div className="bibliography-graph-actions">
+                    <button type="button" className="ghost docs-action-btn" disabled>
+                      <FontAwesomeIcon icon={faUser} /> User
+                    </button>
+                  </div>
+                ) : null}
                 <div className="bibliography-graph-links">
                   <strong>Linked</strong>
                   {relatedNodes.length > 0 ? (
@@ -585,7 +624,7 @@ export function CollectionsGraphModal({
                     </div>
                   ) : (
                     <div className="bibliography-graph-empty">
-                      <FontAwesomeIcon icon={selectedNode.node_type === "tag" ? faHashtag : faShareNodes} />
+                      <FontAwesomeIcon icon={selectedNode.node_type === "tag" ? faHashtag : selectedNode.node_type === "user" ? faUser : faShareNodes} />
                       <span>No linked nodes.</span>
                     </div>
                   )}

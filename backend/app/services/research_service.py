@@ -1841,6 +1841,11 @@ class ResearchService:
                     }
                 )
 
+        collection_token_maps = {
+            collection_id: self._study_member_token_map(collection_id)
+            for collection_id in valid_ids
+        }
+
         note_rows = self.db.execute(
             select(
                 ResearchNote.id,
@@ -1849,13 +1854,29 @@ class ResearchService:
                 ResearchNote.content,
                 ResearchNote.tags,
                 ResearchNote.updated_at,
+                ResearchNote.user_account_id,
             ).where(
                 ResearchNote.collection_id.in_(valid_ids),
                 ResearchNote.note_type != NoteType.index,
             )
         ).all()
         note_by_id: dict[uuid.UUID, dict] = {}
-        for note_id, collection_id, title, content, tags, updated_at in note_rows:
+        user_ids: set[uuid.UUID] = set()
+        authored_edges: list[tuple[uuid.UUID, uuid.UUID]] = []
+        mentioned_edges: list[tuple[uuid.UUID, uuid.UUID]] = []
+        user_stats: dict[uuid.UUID, dict[str, int | set[uuid.UUID]]] = {}
+
+        def touch_user(user_id: uuid.UUID, collection_id: uuid.UUID, key: str) -> None:
+            bucket = user_stats.setdefault(
+                user_id,
+                {"authored": 0, "mentioned": 0, "assigned": 0, "collection_ids": set()},
+            )
+            bucket[key] = int(bucket[key]) + 1
+            collection_ids = bucket["collection_ids"]
+            if isinstance(collection_ids, set):
+                collection_ids.add(collection_id)
+
+        for note_id, collection_id, title, content, tags, updated_at, user_account_id in note_rows:
             if collection_id is None or collection_id not in collection_by_id:
                 continue
             label = (title or "").strip() or "Untitled Log"
@@ -1898,6 +1919,23 @@ class ResearchService:
                         "edge_type": "has_tag",
                     }
                 )
+
+            if user_account_id:
+                user_ids.add(user_account_id)
+                authored_edges.append((user_account_id, note_id))
+                touch_user(user_account_id, collection_id, "authored")
+
+            token_map = collection_token_maps.get(collection_id, {})
+            mentioned_user_ids = {
+                target.id
+                for token in self._USER_MENTION_RE.findall(content or "")
+                for target in [token_map.get(token.strip().lower())]
+                if target
+            }
+            for mentioned_user_id in mentioned_user_ids:
+                user_ids.add(mentioned_user_id)
+                mentioned_edges.append((mentioned_user_id, note_id))
+                touch_user(mentioned_user_id, collection_id, "mentioned")
 
         note_reference_rows = self.db.execute(
             select(research_note_references.c.note_id, research_note_references.c.reference_id)
@@ -1956,6 +1994,96 @@ class ResearchService:
                     "source": source_entry["node_id"],
                     "target": target_entry["node_id"],
                     "edge_type": "links_log",
+                }
+            )
+
+        action_assignee_rows = self.db.execute(
+            select(ResearchNoteActionItem.note_id, ResearchNoteActionItem.assignee_user_id)
+            .select_from(ResearchNoteActionItem)
+            .join(ResearchNote, ResearchNote.id == ResearchNoteActionItem.note_id)
+            .where(
+                ResearchNote.collection_id.in_(valid_ids),
+                ResearchNote.note_type != NoteType.index,
+                ResearchNoteActionItem.assignee_user_id.is_not(None),
+            )
+        ).all()
+        assigned_edges: list[tuple[uuid.UUID, uuid.UUID]] = []
+        for note_id, assignee_user_id in action_assignee_rows:
+            note_entry = note_by_id.get(note_id)
+            if not note_entry or assignee_user_id is None:
+                continue
+            user_ids.add(assignee_user_id)
+            assigned_edges.append((assignee_user_id, note_id))
+            touch_user(assignee_user_id, note_entry["collection_id"], "assigned")
+
+        if user_ids:
+            users = list(self.db.scalars(select(UserAccount).where(UserAccount.id.in_(user_ids))).all())
+            user_lookup = {user.id: user for user in users}
+            for user_id in sorted(user_ids, key=lambda item: (self.get_user_display_name(item) or "").lower()):
+                user = user_lookup.get(user_id)
+                if not user:
+                    continue
+                stats = user_stats.get(
+                    user_id,
+                    {"authored": 0, "mentioned": 0, "assigned": 0, "collection_ids": set()},
+                )
+                meta_bits: list[str] = []
+                if stats["authored"]:
+                    meta_bits.append(f"{stats['authored']} authored")
+                if stats["mentioned"]:
+                    meta_bits.append(f"{stats['mentioned']} mentioned")
+                if stats["assigned"]:
+                    meta_bits.append(f"{stats['assigned']} assigned")
+                collection_ids = stats["collection_ids"]
+                collection_count = len(collection_ids) if isinstance(collection_ids, set) else 0
+                if collection_count:
+                    meta_bits.append(f"{collection_count} studies")
+                add_node(
+                    {
+                        "id": f"user:{user_id}",
+                        "label": user.display_name or user.email.split("@")[0] or "User",
+                        "node_type": "user",
+                        "ref_id": str(user_id),
+                        "meta": " · ".join(meta_bits) if meta_bits else None,
+                    }
+                )
+
+        for user_id, note_id in authored_edges:
+            note_entry = note_by_id.get(note_id)
+            if not note_entry:
+                continue
+            add_edge(
+                {
+                    "id": f"edge:user-authored:{user_id}:{note_id}",
+                    "source": f"user:{user_id}",
+                    "target": note_entry["node_id"],
+                    "edge_type": "authored_log",
+                }
+            )
+
+        for user_id, note_id in mentioned_edges:
+            note_entry = note_by_id.get(note_id)
+            if not note_entry:
+                continue
+            add_edge(
+                {
+                    "id": f"edge:user-mentioned:{user_id}:{note_id}",
+                    "source": f"user:{user_id}",
+                    "target": note_entry["node_id"],
+                    "edge_type": "mentioned_in_log",
+                }
+            )
+
+        for user_id, note_id in assigned_edges:
+            note_entry = note_by_id.get(note_id)
+            if not note_entry:
+                continue
+            add_edge(
+                {
+                    "id": f"edge:user-assigned:{user_id}:{note_id}",
+                    "source": f"user:{user_id}",
+                    "target": note_entry["node_id"],
+                    "edge_type": "assigned_action",
                 }
             )
 

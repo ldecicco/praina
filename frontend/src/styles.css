@@ -13626,6 +13626,11 @@ tr.row-selected {
   color: var(--brand);
 }
 
+.bibliography-graph-node-kind-user {
+  background: color-mix(in srgb, #f28c6f 12%, transparent);
+  color: #f7a58c;
+}
+
 .bibliography-graph-node-kind-reference {
   background: color-mix(in srgb, #5da2ff 12%, transparent);
   color: #7eb7ff;

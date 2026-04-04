@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -45,6 +46,7 @@ MAX_AVATAR_SIZE = 5 * 1024 * 1024  # 5 MB
 STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", "storage"))
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/public-config")
@@ -308,6 +310,7 @@ def send_my_push_test_notification(
     current_user: UserAccount = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    logger.info("push-test requested user_id=%s", current_user.id)
     NotificationService(db).notify(
         current_user.id,
         title="Push test notification",
@@ -325,6 +328,12 @@ def register_my_push_device(
     current_user: UserAccount = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    logger.info(
+        "push-device registration requested user_id=%s platform=%s token_prefix=%s",
+        current_user.id,
+        payload.platform,
+        payload.token[:16],
+    )
     service = AuthService(db)
     try:
         service.upsert_push_device(
@@ -335,7 +344,19 @@ def register_my_push_device(
             app_version=payload.app_version,
         )
     except ValidationError as exc:
+        logger.warning(
+            "push-device registration failed user_id=%s platform=%s error=%s",
+            current_user.id,
+            payload.platform,
+            str(exc),
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    logger.info(
+        "push-device registration stored user_id=%s platform=%s token_prefix=%s",
+        current_user.id,
+        payload.platform,
+        payload.token[:16],
+    )
     return {"ok": True}
 
 

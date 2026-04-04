@@ -544,16 +544,33 @@ export default function App() {
 
     async function setupPush() {
       try {
+        toast.message("Push setup start", {
+          description: `platform: ${Capacitor.getPlatform()}`,
+        });
         const permission = await PushNotifications.checkPermissions();
         let receive = permission.receive;
+        toast.message("Push permission", {
+          description: `status: ${String(receive)}`,
+        });
         if (receive === "prompt") {
           const requested = await PushNotifications.requestPermissions();
           receive = requested.receive;
+          toast.message("Push permission requested", {
+            description: `status: ${String(receive)}`,
+          });
         }
-        if (receive !== "granted") return;
+        if (receive !== "granted") {
+          toast.error("Push permission not granted", {
+            description: String(receive),
+          });
+          return;
+        }
 
         registrationListener = await PushNotifications.addListener("registration", async (token: Token) => {
           if (cancelled) return;
+          toast.message("Push token received", {
+            description: `${token.value.slice(0, 16)}…`,
+          });
           try {
             await api.registerMyPushDevice({
               token: token.value,
@@ -561,27 +578,41 @@ export default function App() {
               device_id: null,
               app_version: "0.1.0",
             });
-          } catch {
-            // keep registration best-effort for now
+            toast.success("Push registered on backend");
+          } catch (error) {
+            toast.error("Push backend registration failed", {
+              description: error instanceof Error ? error.message : "Unknown error",
+            });
           }
         });
 
-        registrationErrorListener = await PushNotifications.addListener("registrationError", () => {
-          // keep best-effort for now
+        registrationErrorListener = await PushNotifications.addListener("registrationError", (error) => {
+          toast.error("Push registration error", {
+            description: typeof error?.error === "string" ? error.error : "Unknown error",
+          });
         });
 
-        receivedListener = await PushNotifications.addListener("pushNotificationReceived", (_notification: PushNotificationSchema) => {
+        receivedListener = await PushNotifications.addListener("pushNotificationReceived", (notification: PushNotificationSchema) => {
+          toast.message("Push received", {
+            description: notification.title || notification.body || "Notification received",
+          });
           void refreshNotifications({ includeList: true });
         });
 
         actionListener = await PushNotifications.addListener("pushNotificationActionPerformed", (notification: ActionPerformed) => {
+          toast.message("Push opened", {
+            description: notification.notification.title || notification.notification.body || "Notification opened",
+          });
           void refreshNotifications({ includeList: true });
           openPushPayload(notification.notification.data);
         });
 
+        toast.message("Push register call");
         await PushNotifications.register();
-      } catch {
-        // ignore until push delivery is fully wired
+      } catch (error) {
+        toast.error("Push setup failed", {
+          description: error instanceof Error ? error.message : "Unknown error",
+        });
       }
     }
 

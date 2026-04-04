@@ -59,10 +59,15 @@ class FirebasePushService:
     ) -> PushSendResult:
         cleaned_tokens = [token.strip() for token in tokens if token and token.strip()]
         if not cleaned_tokens or not self.is_configured():
+            if not cleaned_tokens:
+                logger.info("firebase push skipped: no tokens")
+            else:
+                logger.warning("firebase push skipped: service not configured")
             return PushSendResult(success_count=0, failure_count=0, failures=[])
 
         app = self._get_app()
         if app is None:
+            logger.warning("firebase push skipped: app initialization failed")
             return PushSendResult(success_count=0, failure_count=0, failures=[])
 
         notification = messaging.Notification(title=title[:120], body=body[:240] if body else "")
@@ -72,6 +77,7 @@ class FirebasePushService:
 
         for start in range(0, len(cleaned_tokens), 500):
             batch = cleaned_tokens[start : start + 500]
+            logger.info("firebase push sending batch_size=%s title=%s", len(batch), title[:120])
             message = messaging.MulticastMessage(
                 tokens=batch,
                 notification=notification,
@@ -88,12 +94,23 @@ class FirebasePushService:
 
             success_count += response.success_count
             failure_count += response.failure_count
+            logger.info(
+                "firebase push batch result success=%s failure=%s",
+                response.success_count,
+                response.failure_count,
+            )
             for token, send_response in zip(batch, response.responses):
                 if send_response.success:
                     continue
                 exc = send_response.exception
                 code = getattr(exc, "code", None)
                 message_text = str(exc) if exc else "Unknown FCM send failure."
+                logger.warning(
+                    "firebase push token failure token_prefix=%s code=%s message=%s",
+                    token[:16],
+                    code,
+                    message_text,
+                )
                 failures.append(PushSendFailure(token=token, code=code, message=message_text))
 
         return PushSendResult(success_count=success_count, failure_count=failure_count, failures=failures)

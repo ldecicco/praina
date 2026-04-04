@@ -10,6 +10,7 @@ import {
   faChevronRight,
   faChevronUp,
   faChevronDown,
+  faFile,
   faFileArrowUp,
   faComment,
   faFileExport,
@@ -37,8 +38,10 @@ import { useAutoRefresh } from "../lib/useAutoRefresh";
 import { useStatusToast } from "../lib/useStatusToast";
 import { BibliographyGraphModal } from "./BibliographyGraphModal";
 import { StudyGraphModal } from "./StudyGraphModal";
+import { CollectionsGraphModal } from "./CollectionsGraphModal";
 import { StudyCollabChat } from "./StudyCollabChat";
 import { StudyLogRichEditor } from "./StudyLogRichEditor";
+import { CommandPalette } from "./CommandPalette";
 import { renderMarkdown } from "../lib/renderMarkdown";
 import { formatRelativeTime } from "../lib/formatRelativeTime";
 import { SkeletonTable, SkeletonCards } from "./Skeleton";
@@ -55,6 +58,7 @@ import type {
   Member,
   MeetingRecord,
   Project,
+  CollectionGraph,
   ResearchCollection,
   ResearchCollectionDetail,
   ResearchCollectionMember,
@@ -85,6 +89,8 @@ const NOTE_LANE_LABELS: Record<string, string> = {
 const NOTE_LANE_OPTIONS = Object.entries(NOTE_LANE_LABELS);
 
 type Tab = "references" | "notes" | "paper" | "iterations" | "overview" | "chat" | "files" | "todos";
+type StudyDigestFilter = "all" | "needs-review" | "recent" | "deadlines" | "stale";
+type StudyHomeView = "dashboard" | "studies";
 type CollectionModalMode = "create" | "edit";
 type ReferenceModalMode = "create" | "edit";
 type NoteModalMode = "create" | "edit";
@@ -115,6 +121,50 @@ function toggleListValue(values: string[], value: string): string[] {
 
 function sortedUniqueIds(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function startOfMonth(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), 1);
+}
+
+function addMonths(value: Date, delta: number): Date {
+  return new Date(value.getFullYear(), value.getMonth() + delta, 1);
+}
+
+function formatDeadlinePressure(deadline: Date, now: Date) {
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfDeadline = new Date(deadline);
+  startOfDeadline.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((startOfDeadline.getTime() - startOfToday.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (diffDays < 0) {
+    const overdueDays = Math.abs(diffDays);
+    return {
+      label: overdueDays === 1 ? "1 day overdue" : `${overdueDays} days overdue`,
+      tone: "danger" as const,
+    };
+  }
+  if (diffDays === 0) {
+    return { label: "Today", tone: "danger" as const };
+  }
+  if (diffDays < 7) {
+    return {
+      label: diffDays === 1 ? "1 day left" : `${diffDays} days left`,
+      tone: "danger" as const,
+    };
+  }
+  if (diffDays < 28) {
+    const weeks = Math.ceil(diffDays / 7);
+    return {
+      label: weeks === 1 ? "1 week left" : `${weeks} weeks left`,
+      tone: "warning" as const,
+    };
+  }
+  return {
+    label: `${Math.ceil(diffDays / 7)} weeks left`,
+    tone: "muted" as const,
+  };
 }
 
 function buildNoteModalSnapshot(value: NoteModalSnapshot): NoteModalSnapshot {
@@ -711,6 +761,8 @@ export function ResearchWorkspace({
   onNavigationStateChange,
   openBibliographyReferenceId = null,
   onOpenBibliographyReferenceConsumed,
+  homeViewRequest,
+  homeViewRequestNonce,
   researchTourActive = false,
   researchTourStepId = null,
 }: {
@@ -736,6 +788,8 @@ export function ResearchWorkspace({
   }) => void;
   openBibliographyReferenceId?: string | null;
   onOpenBibliographyReferenceConsumed?: () => void;
+  homeViewRequest?: StudyHomeView;
+  homeViewRequestNonce?: number;
   researchTourActive?: boolean;
   researchTourStepId?: string | null;
 }) {
@@ -804,6 +858,8 @@ export function ResearchWorkspace({
   const [inlineStudyFocus, setInlineStudyFocus] = useState("");
   const [editingStudyTitle, setEditingStudyTitle] = useState(false);
   const [editingStudyFocus, setEditingStudyFocus] = useState(false);
+  const [synthesisExpanded, setSynthesisExpanded] = useState(false);
+  const [overviewLinksExpanded, setOverviewLinksExpanded] = useState(false);
   const [paperTitle, setPaperTitle] = useState("");
   const [paperMotivation, setPaperMotivation] = useState("");
   const [paperVenue, setPaperVenue] = useState("");
@@ -821,6 +877,22 @@ export function ResearchWorkspace({
   const [paperSections, setPaperSections] = useState<ResearchPaperSection[]>([]);
   const [paperExpanded, setPaperExpanded] = useState(false);
   const [paperDirty, setPaperDirty] = useState(false);
+  const [editingPaperTitle, setEditingPaperTitle] = useState(false);
+  const [inlinePaperTitle, setInlinePaperTitle] = useState("");
+  const [editingPaperVenue, setEditingPaperVenue] = useState(false);
+  const [inlinePaperVenue, setInlinePaperVenue] = useState("");
+  const [editingPaperOverleaf, setEditingPaperOverleaf] = useState(false);
+  const [inlinePaperOverleaf, setInlinePaperOverleaf] = useState("");
+  const [editingPaperStatus, setEditingPaperStatus] = useState(false);
+  const [inlinePaperStatus, setInlinePaperStatus] = useState("not_started");
+  const [editingPaperRegistration, setEditingPaperRegistration] = useState(false);
+  const [inlinePaperRegistration, setInlinePaperRegistration] = useState("");
+  const [editingPaperSubmission, setEditingPaperSubmission] = useState(false);
+  const [inlinePaperSubmission, setInlinePaperSubmission] = useState("");
+  const [editingPaperDecision, setEditingPaperDecision] = useState(false);
+  const [inlinePaperDecision, setInlinePaperDecision] = useState("");
+  const [editingPaperMotivation, setEditingPaperMotivation] = useState(false);
+  const [inlinePaperMotivation, setInlinePaperMotivation] = useState("");
 
   const [referenceTitle, setReferenceTitle] = useState("");
   const [referenceAuthors, setReferenceAuthors] = useState("");
@@ -887,6 +959,8 @@ export function ResearchWorkspace({
   const [comparingResults, setComparingResults] = useState(false);
   const [expandedIterationId, setExpandedIterationId] = useState<string | null>(null);
   const [uploadingStudyFile, setUploadingStudyFile] = useState(false);
+  const [filesView, setFilesView] = useState<"grid" | "list">("grid");
+  const [fileSearchOpen, setFileSearchOpen] = useState(false);
 
   const [refSearch, setRefSearch] = useState("");
   const [bibTab, setBibTab] = useState<BibTab>("papers");
@@ -992,6 +1066,9 @@ export function ResearchWorkspace({
   const [bibliographyGraphOpen, setBibliographyGraphOpen] = useState(false);
   const [bibliographyGraphReferences, setBibliographyGraphReferences] = useState<BibliographyReference[]>([]);
   const [studyGraphOpen, setStudyGraphOpen] = useState(false);
+  const [collectionsGraphOpen, setCollectionsGraphOpen] = useState(false);
+  const [collectionsGraphData, setCollectionsGraphData] = useState<CollectionGraph | null>(null);
+  const [loadingCollectionsGraph, setLoadingCollectionsGraph] = useState(false);
   const quickLogInputRef = useRef<HTMLTextAreaElement | null>(null);
   const quickLogFileInputRef = useRef<HTMLInputElement | null>(null);
   const inlineEditFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1000,6 +1077,9 @@ export function ResearchWorkspace({
   const noteModalFileInputRef = useRef<HTMLInputElement | null>(null);
   const noteModalInitialSnapshotRef = useRef<NoteModalSnapshot | null>(null);
   const [studySearchQuery, setStudySearchQuery] = useState("");
+  const [studyDigestFilter, setStudyDigestFilter] = useState<StudyDigestFilter>("all");
+  const [studyHomeView, setStudyHomeView] = useState<StudyHomeView>(isStudent ? "studies" : "dashboard");
+  const [studyHeatmapMonth, setStudyHeatmapMonth] = useState(() => startOfMonth(new Date()));
   const pendingNavigationSyncRef = useRef<string | null>(null);
   const lastAppliedNavigationStateRef = useRef<string | null>(null);
 
@@ -1036,6 +1116,176 @@ export function ResearchWorkspace({
       ),
     [archivedCollections, normalizedStudySearchQuery]
   );
+  const studyDigestData = useMemo(() => {
+    const now = new Date();
+    const nowTime = now.getTime();
+    const deadlineThreshold = nowTime + 30 * 24 * 60 * 60 * 1000;
+    const weekStart = new Date(now);
+    const weekday = weekStart.getDay();
+    const mondayOffset = (weekday + 6) % 7;
+    weekStart.setHours(0, 0, 0, 0);
+    weekStart.setDate(weekStart.getDate() - mondayOffset);
+
+    function parseDate(value: string | null | undefined) {
+      if (!value) return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const items = activeCollections.map((study) => {
+      const updatedAt = parseDate(study.updated_at) ?? new Date(0);
+      const lastIterationAt = parseDate(study.last_reviewed_iteration_at);
+      const deadlineCandidates = [
+        study.registration_deadline ? { label: "Registration", date: parseDate(study.registration_deadline) } : null,
+        study.submission_deadline ? { label: "Submission", date: parseDate(study.submission_deadline) } : null,
+        study.decision_date ? { label: "Decision", date: parseDate(study.decision_date) } : null,
+      ]
+        .filter((value): value is { label: string; date: Date | null } => Boolean(value && value.date))
+        .map((value) => ({ label: value.label, date: value.date as Date }))
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      const upcomingDeadline = deadlineCandidates.find((item) => item.date.getTime() >= nowTime && item.date.getTime() <= deadlineThreshold) ?? null;
+      const overdueDeadline = deadlineCandidates.find((item) => item.date.getTime() < nowTime) ?? null;
+      const recentlyActive = study.recent_log_count > 0;
+      const needsReview = study.needs_review;
+      const staleThreshold = 7 * 24 * 60 * 60 * 1000;
+      const stale = !recentlyActive && (nowTime - updatedAt.getTime()) > staleThreshold && (study.open_action_count + study.doing_action_count) > 0;
+
+      return {
+        study,
+        updatedAt,
+        lastIterationAt,
+        recentlyActive,
+        needsReview,
+        upcomingDeadline,
+        overdueDeadline,
+        stale,
+      };
+    });
+
+    return {
+      weekLabel: weekStart.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }),
+      total: items.length,
+      needsReviewCount: items.filter((item) => item.needsReview).length,
+      recentCount: items.filter((item) => item.recentlyActive).length,
+      deadlineCount: items.filter((item) => item.upcomingDeadline || item.overdueDeadline).length,
+      overdueCount: items.filter((item) => item.study.overdue_action_count > 0).length,
+      staleCount: items.filter((item) => item.stale).length,
+      assignedCount: items.reduce((sum, item) => sum + item.study.assigned_to_me_action_count, 0),
+      items,
+      needsReview: items
+        .filter((item) => item.needsReview)
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+        .slice(0, 4),
+      recent: items
+        .filter((item) => item.recentlyActive)
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+        .slice(0, 4),
+      deadlines: items
+        .filter((item) => item.upcomingDeadline || item.overdueDeadline)
+        .sort((a, b) => {
+          const left = (a.overdueDeadline || a.upcomingDeadline)?.date.getTime() ?? Number.MAX_SAFE_INTEGER;
+          const right = (b.overdueDeadline || b.upcomingDeadline)?.date.getTime() ?? Number.MAX_SAFE_INTEGER;
+          return left - right;
+        })
+        .slice(0, 4),
+      stale: items
+        .filter((item) => item.stale)
+        .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+        .slice(0, 4),
+    };
+  }, [activeCollections]);
+  const visibleActiveCollections = useMemo(() => {
+    return filteredActiveCollections.filter((item) => {
+      const digestItem = studyDigestData.items.find((entry) => entry.study.id === item.id);
+      if (!digestItem) return studyDigestFilter === "all";
+      if (studyDigestFilter === "needs-review") return digestItem.needsReview;
+      if (studyDigestFilter === "recent") return digestItem.recentlyActive;
+      if (studyDigestFilter === "deadlines") return Boolean(digestItem.upcomingDeadline || digestItem.overdueDeadline);
+      if (studyDigestFilter === "stale") return digestItem.stale;
+      return true;
+    });
+  }, [filteredActiveCollections, studyDigestData.items, studyDigestFilter]);
+  const visibleArchivedCollections = useMemo(() => {
+    return filteredArchivedCollections.filter((item) => {
+      const digestItem = studyDigestData.items.find((entry) => entry.study.id === item.id);
+      if (!digestItem) return studyDigestFilter === "all";
+      if (studyDigestFilter === "needs-review") return digestItem.needsReview;
+      if (studyDigestFilter === "recent") return digestItem.recentlyActive;
+      if (studyDigestFilter === "deadlines") return Boolean(digestItem.upcomingDeadline || digestItem.overdueDeadline);
+      if (studyDigestFilter === "stale") return digestItem.stale;
+      return true;
+    });
+  }, [filteredArchivedCollections, studyDigestData.items, studyDigestFilter]);
+  const studyHeatmapData = useMemo(() => {
+    const monthStart = startOfMonth(studyHeatmapMonth);
+    const nextMonth = addMonths(monthStart, 1);
+    const dayCount = Math.max(1, Math.round((nextMonth.getTime() - monthStart.getTime()) / (24 * 60 * 60 * 1000)));
+    const days = Array.from({ length: dayCount }, (_, index) => {
+      const day = new Date(monthStart);
+      day.setDate(monthStart.getDate() + index);
+      const key = day.toISOString().slice(0, 10);
+      return {
+        key,
+        dayNumber: day.getDate(),
+        weekday: day.toLocaleDateString(undefined, { weekday: "short" }),
+        label: day.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      };
+    });
+
+    const rows = filteredActiveCollections
+      .map((study) => {
+        const activityMap = new Map((study.activity_days || []).map((entry) => [entry.date, entry.count]));
+        const deadlineMap = new Map<string, { label: string; tone: "danger" | "warning" | "muted" }[]>();
+        const deadlineCandidates = [
+          study.registration_deadline ? { label: "Registration", raw: study.registration_deadline } : null,
+          study.submission_deadline ? { label: "Submission", raw: study.submission_deadline } : null,
+          study.decision_date ? { label: "Decision", raw: study.decision_date } : null,
+        ].filter((item): item is { label: string; raw: string } => Boolean(item));
+        deadlineCandidates.forEach((item) => {
+          const parsed = new Date(item.raw);
+          if (Number.isNaN(parsed.getTime())) return;
+          const key = parsed.toISOString().slice(0, 10);
+          const pressure = formatDeadlinePressure(parsed, new Date());
+          const bucket = deadlineMap.get(key) ?? [];
+          bucket.push({ label: item.label, tone: pressure.tone });
+          deadlineMap.set(key, bucket);
+        });
+        const values = days.map((day) => activityMap.get(day.key) || 0);
+        return {
+          study,
+          values,
+          deadlines: days.map((day) => deadlineMap.get(day.key) ?? []),
+          total: values.reduce((sum, value) => sum + value, 0),
+        };
+      })
+      .sort((left, right) => {
+        if (right.total !== left.total) return right.total - left.total;
+        return (left.study.title || "").localeCompare(right.study.title || "");
+      });
+
+    const maxCount = rows.reduce((max, row) => Math.max(max, ...row.values), 0);
+    const earliestActivityDate = activeCollections
+      .flatMap((study) => study.activity_days || [])
+      .map((entry) => {
+        const parsed = new Date(entry.date);
+        parsed.setHours(0, 0, 0, 0);
+        return parsed;
+      })
+      .sort((a, b) => a.getTime() - b.getTime())[0] ?? addMonths(startOfMonth(new Date()), -2);
+    const minMonth = startOfMonth(earliestActivityDate);
+    const maxMonth = startOfMonth(new Date());
+
+    return {
+      monthStart,
+      monthLabel: monthStart.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+      days,
+      rows,
+      maxCount,
+      canGoPrev: monthStart.getTime() > minMonth.getTime(),
+      canGoNext: monthStart.getTime() < maxMonth.getTime(),
+    };
+  }, [activeCollections, filteredActiveCollections, studyHeatmapMonth]);
   const readCount = references.filter((item) => item.reading_status === "read" || item.reading_status === "reviewed").length;
   const unreadRefCount = references.filter((item) => item.reading_status === "unread").length;
   const tabAlerts = useMemo(() => {
@@ -1072,6 +1322,11 @@ export function ResearchWorkspace({
     setTab((navigationState.selectedCollectionId ?? null) ? navigationState.tab : "overview");
     setSelectedBibliographyCollectionId(navigationState.selectedBibliographyCollectionId ?? null);
   }, [navigationState]);
+
+  useEffect(() => {
+    if (bibliographyOnly || !homeViewRequest) return;
+    setStudyHomeView(homeViewRequest);
+  }, [bibliographyOnly, homeViewRequest, homeViewRequestNonce]);
 
   useEffect(() => {
     const currentSignature = navigationSignatureForState({
@@ -1324,6 +1579,22 @@ export function ResearchWorkspace({
     setPaperRegistrationDeadline(collectionDetail?.registration_deadline || "");
     setPaperSubmissionDeadline(collectionDetail?.submission_deadline || "");
     setPaperDecisionDate(collectionDetail?.decision_date || "");
+    setInlinePaperTitle(collectionDetail?.target_output_title || "");
+    setInlinePaperMotivation(collectionDetail?.paper_motivation || "");
+    setInlinePaperVenue(collectionDetail?.target_venue || "");
+    setInlinePaperOverleaf(collectionDetail?.overleaf_url || "");
+    setInlinePaperStatus(collectionDetail?.output_status || "not_started");
+    setInlinePaperRegistration(collectionDetail?.registration_deadline || "");
+    setInlinePaperSubmission(collectionDetail?.submission_deadline || "");
+    setInlinePaperDecision(collectionDetail?.decision_date || "");
+    setEditingPaperTitle(false);
+    setEditingPaperVenue(false);
+    setEditingPaperOverleaf(false);
+    setEditingPaperStatus(false);
+    setEditingPaperRegistration(false);
+    setEditingPaperSubmission(false);
+    setEditingPaperDecision(false);
+    setEditingPaperMotivation(false);
     setStudyIterations(collectionDetail?.study_iterations || []);
     setStudyResults(collectionDetail?.study_results || []);
     setResultComparison(null);
@@ -1386,6 +1657,8 @@ export function ResearchWorkspace({
   useEffect(() => {
     function handleStudyPaletteKey(e: KeyboardEvent) {
       if (!showSpaceHome) return;
+      // Skip if a graph modal is open (it has its own Ctrl+F handler)
+      if (document.querySelector(".bibliography-graph-modal")) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -1397,6 +1670,23 @@ export function ResearchWorkspace({
     window.addEventListener("keydown", handleStudyPaletteKey, true);
     return () => window.removeEventListener("keydown", handleStudyPaletteKey, true);
   }, [showSpaceHome]);
+
+  // Ctrl+F on files tab → open file search palette
+  const filesTabActive = !bibliographyOnly && !!selectedCollectionId && tab === "files";
+  useEffect(() => {
+    if (!filesTabActive) return;
+    function handleFileSearchKey(e: KeyboardEvent) {
+      // Skip if a graph modal is open
+      if (document.querySelector(".bibliography-graph-modal")) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setFileSearchOpen(true);
+      }
+    }
+    window.addEventListener("keydown", handleFileSearchKey, true);
+    return () => window.removeEventListener("keydown", handleFileSearchKey, true);
+  }, [filesTabActive]);
 
   useEffect(() => {
     if (studyPaletteOpen) studyPaletteInputRef.current?.focus();
@@ -4029,6 +4319,23 @@ function newStudyResult(): ResearchStudyResult {
     setBibliographyGraphOpen(true);
   }
 
+  async function handleOpenCollectionsGraph() {
+    if (!selectedProjectId) return;
+    const collectionIds = filteredActiveCollections.map((item) => item.id);
+    if (collectionIds.length === 0) return;
+    try {
+      setLoadingCollectionsGraph(true);
+      setError("");
+      const graph = await api.buildResearchCollectionsGraph(selectedProjectId, collectionIds);
+      setCollectionsGraphData(graph);
+      setCollectionsGraphOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load studies graph.");
+    } finally {
+      setLoadingCollectionsGraph(false);
+    }
+  }
+
   async function handleOpenBibliographyCollectionGraph(collectionId: string) {
     try {
       setError("");
@@ -4550,8 +4857,14 @@ function newStudyResult(): ResearchStudyResult {
       })() : null}
 
       {!bibliographyOnly && showSpaceHome ? (
-        <div className="setup-summary-bar" data-tour-id="research-study-home">
-          <div className="workspace-browser-summary-actions">
+        <>
+          <div className="delivery-tabs study-home-tabs" data-tour-id="research-study-home">
+            <button className={`delivery-tab ${studyHomeView === "dashboard" ? "active" : ""}`} onClick={() => setStudyHomeView("dashboard")}>
+              Dashboard
+            </button>
+            <button className={`delivery-tab ${studyHomeView === "studies" ? "active" : ""}`} onClick={() => setStudyHomeView("studies")}>
+              Studies <span className="delivery-tab-count">{studyDigestData.total}</span>
+            </button>
             {activeResearchSpace ? <span className="chip small">{activeResearchSpace.title}</span> : null}
             <div className="topbar-project-search workspace-browser-search">
               <FontAwesomeIcon icon={faSearch} />
@@ -4567,158 +4880,396 @@ function newStudyResult(): ResearchStudyResult {
                 All Studies
               </button>
             ) : null}
+            <button
+              type="button"
+              className="ghost icon-text-button small"
+              onClick={() => void handleOpenCollectionsGraph()}
+              disabled={loadingCollectionsGraph || filteredActiveCollections.length === 0}
+            >
+              <FontAwesomeIcon icon={faShareNodes} /> {loadingCollectionsGraph ? "Loading..." : "Graph"}
+            </button>
             {!isStudent ? (
-              <button type="button" className="meetings-new-btn" onClick={openCreateCollectionModal}>
+              <button type="button" className="meetings-new-btn delivery-tab-action" onClick={openCreateCollectionModal}>
                 <FontAwesomeIcon icon={faPlus} /> New Study
               </button>
             ) : null}
           </div>
-        </div>
+          <div className="setup-summary-bar">
+            <div className="setup-summary-stats">
+              {studyHomeView === "dashboard" ? (
+                <>
+                  <span>{studyDigestData.total} studies</span>
+                  <span className="setup-summary-sep" />
+                  <span>{studyDigestData.needsReviewCount} needs review</span>
+                  <span className="setup-summary-sep" />
+                  <span>{studyDigestData.recentCount} recent</span>
+                  <span className="setup-summary-sep" />
+                  <span>{studyDigestData.deadlineCount} deadlines</span>
+                  {studyDigestData.overdueCount > 0 ? (
+                    <>
+                      <span className="setup-summary-sep" />
+                      <span className="summary-stat-danger">{studyDigestData.overdueCount} overdue</span>
+                    </>
+                  ) : null}
+                  {studyDigestData.staleCount > 0 ? (
+                    <>
+                      <span className="setup-summary-sep" />
+                      <span className="summary-stat-warning">{studyDigestData.staleCount} stale</span>
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <span>{visibleActiveCollections.length} visible studies</span>
+                  {visibleArchivedCollections.length > 0 ? (
+                    <>
+                      <span className="setup-summary-sep" />
+                      <span>{visibleArchivedCollections.length} archived</span>
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        </>
       ) : null}
 
       {error ? <p className="error">{error}</p> : null}
 
       {showSpaceHome ? (
         <div className="workspace-browser-page study-browser-page">
-          {archivedCollections.length > 0 ? (
-            <div className="meetings-toolbar workspace-browser-toolbar">
-              <div className="meetings-filter-group workspace-browser-filter-group">
-                <button type="button" className="chip small" onClick={() => setShowArchived((value) => !value)}>
-                  <FontAwesomeIcon icon={faChevronRight} className={showArchived ? "research-chevron-open" : ""} />
-                  Archived ({filteredArchivedCollections.length})
-                </button>
-              </div>
-            </div>
-          ) : null}
-          {filteredActiveCollections.length === 0 && (!showArchived || filteredArchivedCollections.length === 0) ? (
-            <div className="empty-state-card">
-              <strong>No studies.</strong>
-            </div>
-          ) : (
+          {studyHomeView === "dashboard" ? (
             <>
-              {filteredActiveCollections.length > 0 ? (
-                <div className="workspace-browser-grid" data-tour-id="research-study-grid">
-                  {filteredActiveCollections.map((item) => (
-                    <div
-                      key={item.id}
-                      className="workspace-browser-card study-card"
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Open ${item.title}`}
-                      onClick={() => openStudyFromCard(item.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          openStudyFromCard(item.id);
-                        } else if (event.key.toLowerCase() === "e") {
-                          event.preventDefault();
-                          openEditCollectionFromCard(item);
-                        }
-                      }}
+              <div className="meetings-detail-section study-heatmap-shell">
+                <div className="meetings-detail-head">
+                  <div className="meetings-detail-info">
+                    <strong>Contribution</strong>
+                  </div>
+                  <div className="study-heatmap-month-nav">
+                    <button
+                      type="button"
+                      className="ghost icon-only"
+                      onClick={() => setStudyHeatmapMonth((value) => addMonths(value, -1))}
+                      disabled={!studyHeatmapData.canGoPrev}
+                      aria-label="Previous month"
                     >
-                      <div className="workspace-browser-card-accent" />
-                      <div className="workspace-browser-card-top">
-                        <span className="workspace-browser-icon">
-                          <FontAwesomeIcon icon={faBookOpen} />
-                        </span>
-                        <span className="chip small">Study</span>
-                        <span className={`chip small ${item.status === "active" ? "status-ok" : ""}`}>{item.status}</span>
-                      </div>
-                      <div className="workspace-browser-card-body">
-                        <div className="workspace-browser-card-title">{item.title || "Untitled Study"}</div>
-                        <p>{item.description || item.hypothesis || "No focus"}</p>
-                        {item.space_ids.length > 0 ? (
-                          <div className="research-chip-group">
-                            {item.space_ids.slice(0, 3).map((spaceId) => {
-                              const space = availableResearchSpaces.find((entry) => entry.id === spaceId);
-                              if (!space) return null;
-                              return <span key={`${item.id}-${space.id}`} className="chip small">{space.title}</span>;
-                            })}
-                            {item.space_ids.length > 3 ? <span className="chip small">+{item.space_ids.length - 3}</span> : null}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="workspace-browser-card-foot">
-                        <div className="workspace-browser-meta-stack">
-                          <span className="workspace-browser-meta">{item.reference_count} references</span>
-                          <span className="workspace-browser-meta">{item.note_count} logs</span>
-                          <span className="workspace-browser-meta">{formatRelativeTime(item.updated_at)}</span>
-                        </div>
-                        <div className="workspace-browser-card-actions">
-                          <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditCollectionFromCard(item); }}>
-                            Edit
-                          </button>
-                          <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openStudyFromCard(item.id); }}>
-                            Open
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                      <FontAwesomeIcon icon={faChevronLeft} />
+                    </button>
+                    <button
+                      type="button"
+                      className="study-heatmap-month-label"
+                      onClick={() => setStudyHeatmapMonth(startOfMonth(new Date()))}
+                    >
+                      {studyHeatmapData.monthLabel}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost icon-only"
+                      onClick={() => setStudyHeatmapMonth((value) => addMonths(value, 1))}
+                      disabled={!studyHeatmapData.canGoNext}
+                      aria-label="Next month"
+                    >
+                      <FontAwesomeIcon icon={faChevronRight} />
+                    </button>
+                  </div>
                 </div>
-              ) : null}
-              {showArchived && filteredArchivedCollections.length > 0 ? (
-                <div className="workspace-browser-grid study-browser-archived-grid">
-                  {filteredArchivedCollections.map((item) => (
-                    <div
-                      key={item.id}
-                      className="workspace-browser-card study-card archived"
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Open ${item.title}`}
-                      onClick={() => openStudyFromCard(item.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          openStudyFromCard(item.id);
-                        } else if (event.key.toLowerCase() === "e") {
-                          event.preventDefault();
-                          openEditCollectionFromCard(item);
-                        }
-                      }}
-                    >
-                      <div className="workspace-browser-card-accent" />
-                      <div className="workspace-browser-card-top">
-                        <span className="workspace-browser-icon">
-                          <FontAwesomeIcon icon={faArchive} />
-                        </span>
-                        <span className="chip small">Archived</span>
+                <div className="study-heatmap-wrap">
+                  <div className="study-heatmap-table">
+                    <div className="study-heatmap-header">
+                      <div className="study-heatmap-corner">
+                        <span>Study</span>
                       </div>
-                      <div className="workspace-browser-card-body">
-                        <div className="workspace-browser-card-title">{item.title || "Untitled Study"}</div>
-                        <p>{item.description || item.hypothesis || "No focus"}</p>
-                        {item.space_ids.length > 0 ? (
-                          <div className="research-chip-group">
-                            {item.space_ids.slice(0, 3).map((spaceId) => {
-                              const space = availableResearchSpaces.find((entry) => entry.id === spaceId);
-                              if (!space) return null;
-                              return <span key={`${item.id}-${space.id}`} className="chip small">{space.title}</span>;
-                            })}
-                            {item.space_ids.length > 3 ? <span className="chip small">+{item.space_ids.length - 3}</span> : null}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="workspace-browser-card-foot">
-                        <div className="workspace-browser-meta-stack">
-                          <span className="workspace-browser-meta">{item.reference_count} references</span>
-                          <span className="workspace-browser-meta">{item.note_count} logs</span>
-                          <span className="workspace-browser-meta">{formatRelativeTime(item.updated_at)}</span>
-                        </div>
-                        <div className="workspace-browser-card-actions">
-                          <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditCollectionFromCard(item); }}>
-                            Edit
-                          </button>
-                          <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openStudyFromCard(item.id); }}>
-                            Open
-                          </button>
-                        </div>
+                        <div className="study-heatmap-days study-heatmap-days-head" style={{ gridTemplateColumns: `repeat(${studyHeatmapData.days.length}, 15px)` }}>
+                          {studyHeatmapData.days.map((day) => (
+                          <span
+                            key={day.key}
+                            className={`study-heatmap-day-label${day.key === new Date().toISOString().slice(0, 10) ? " today" : ""}`}
+                            title={day.label}
+                          >
+                            {day.dayNumber}
+                          </span>
+                        ))}
                       </div>
                     </div>
-                  ))}
+                    <div className="study-heatmap-rows">
+                      {studyHeatmapData.rows.map((row) => (
+                        <div key={`heatmap-${row.study.id}`} className="study-heatmap-row">
+                          <button
+                            type="button"
+                            className="study-heatmap-row-label"
+                            onClick={() => openStudyFromCard(row.study.id)}
+                            title={row.study.title || "Untitled Study"}
+                          >
+                            <strong>{row.study.title || "Untitled Study"}</strong>
+                          </button>
+                          <div className="study-heatmap-days study-heatmap-days-row" style={{ gridTemplateColumns: `repeat(${studyHeatmapData.days.length}, 15px)` }}>
+                            {row.values.map((value, index) => {
+                              const intensity = studyHeatmapData.maxCount > 0 ? value / studyHeatmapData.maxCount : 0;
+                              const deadlineMarkers = row.deadlines[index];
+                              const deadlineTone =
+                                deadlineMarkers.some((item) => item.tone === "danger")
+                                  ? "danger"
+                                  : deadlineMarkers.some((item) => item.tone === "warning")
+                                    ? "warning"
+                                    : deadlineMarkers.some((item) => item.tone === "muted")
+                                      ? "muted"
+                                      : null;
+                              return (
+                                <button
+                                  key={`${row.study.id}-${studyHeatmapData.days[index].key}`}
+                                  type="button"
+                                  className={`study-heatmap-cell${value > 0 ? " active" : ""}${deadlineTone ? ` has-deadline deadline-${deadlineTone}` : ""}`}
+                                  style={{
+                                    backgroundColor: value > 0
+                                      ? `color-mix(in srgb, var(--brand) ${Math.max(18, Math.round(intensity * 88))}%, var(--surface))`
+                                      : undefined,
+                                  }}
+                                  title={
+                                    `${row.study.title || "Untitled Study"} · ${studyHeatmapData.days[index].label} · ${value} activities` +
+                                    (deadlineMarkers.length
+                                      ? ` · ${deadlineMarkers.map((item) => item.label).join(", ")} deadline`
+                                      : "")
+                                  }
+                                  onClick={() => openStudyFromCard(row.study.id)}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {!isStudent ? (
+                <div className="study-digest-grid">
+                  <section className="study-digest-col">
+                    <div className="study-digest-col-head">
+                      <span className="study-digest-col-dot dot-warning" />
+                      <span className="study-digest-col-label">Needs review</span>
+                      <span className="study-digest-col-count">{studyDigestData.needsReview.length}</span>
+                    </div>
+                    {studyDigestData.needsReview.length > 0 ? studyDigestData.needsReview.map((item) => (
+                      <button key={`digest-review-${item.study.id}`} type="button" className="study-digest-row" onClick={() => openStudyFromCard(item.study.id)}>
+                        <span className="study-digest-row-title">{item.study.title || "Untitled Study"}</span>
+                        <span className="study-digest-row-meta">
+                          {item.study.recent_log_count} recent logs · {item.study.study_iterations.length} iterations · {item.study.overdue_action_count} overdue actions
+                        </span>
+                      </button>
+                    )) : <span className="study-digest-nil">No studies need review</span>}
+                  </section>
+                  <section className="study-digest-col">
+                    <div className="study-digest-col-head">
+                      <span className="study-digest-col-dot dot-brand" />
+                      <span className="study-digest-col-label">Recent activity</span>
+                      <span className="study-digest-col-count">{studyDigestData.recent.length}</span>
+                    </div>
+                    {studyDigestData.recent.length > 0 ? studyDigestData.recent.map((item) => (
+                      <button key={`digest-recent-${item.study.id}`} type="button" className="study-digest-row" onClick={() => openStudyFromCard(item.study.id)}>
+                        <span className="study-digest-row-title">{item.study.title || "Untitled Study"}</span>
+                        <span className="study-digest-row-meta">
+                          {item.study.reference_count} references · {item.study.recent_log_count} recent logs · updated {formatRelativeTime(item.study.updated_at)}
+                        </span>
+                      </button>
+                    )) : <span className="study-digest-nil">No recent activity</span>}
+                  </section>
+                  <section className="study-digest-col">
+                    <div className="study-digest-col-head">
+                      <span className="study-digest-col-dot dot-danger" />
+                      <span className="study-digest-col-label">Deadlines</span>
+                      <span className="study-digest-col-count">{studyDigestData.deadlineCount}</span>
+                    </div>
+                    {(() => {
+                      const pressureItems = studyDigestData.deadlines.length > 0 ? studyDigestData.deadlines : studyDigestData.items.filter((item) => item.study.overdue_action_count > 0).slice(0, 4);
+                      return pressureItems.length > 0 ? pressureItems.map((item) => {
+                        const deadline = item.overdueDeadline || item.upcomingDeadline;
+                        const isOverdue = item.study.overdue_action_count > 0 || Boolean(item.overdueDeadline);
+                        const deadlinePressure = deadline ? formatDeadlinePressure(deadline.date, new Date()) : null;
+                        return (
+                          <button key={`digest-deadline-${item.study.id}`} type="button" className={`study-digest-row${isOverdue ? " overdue" : ""}`} onClick={() => openStudyFromCard(item.study.id)}>
+                            <span className="study-digest-row-title">{item.study.title || "Untitled Study"}</span>
+                            {deadline && deadlinePressure ? (
+                              <span className={`study-deadline-badge ${deadlinePressure.tone}`}>
+                                {deadlinePressure.label}
+                              </span>
+                            ) : null}
+                            <span className="study-digest-row-meta">
+                              {deadline ? `${deadline.label} ${deadline.date.toLocaleDateString()}` : `${item.study.overdue_action_count} overdue actions`} · {item.study.open_action_count} open · {item.study.doing_action_count} doing
+                            </span>
+                          </button>
+                        );
+                      }) : <span className="study-digest-nil">No upcoming deadlines</span>;
+                    })()}
+                  </section>
+                  <section className="study-digest-col">
+                    <div className="study-digest-col-head">
+                      <span className="study-digest-col-dot dot-muted" />
+                      <span className="study-digest-col-label">Stale</span>
+                      <span className="study-digest-col-count">{studyDigestData.staleCount}</span>
+                    </div>
+                    {studyDigestData.stale.length > 0 ? studyDigestData.stale.map((item) => (
+                      <button key={`digest-stale-${item.study.id}`} type="button" className="study-digest-row stale" onClick={() => openStudyFromCard(item.study.id)}>
+                        <span className="study-digest-row-title">{item.study.title || "Untitled Study"}</span>
+                        <span className="study-digest-row-meta">
+                          {item.study.open_action_count + item.study.doing_action_count} pending actions · updated {formatRelativeTime(item.study.updated_at)}
+                        </span>
+                      </button>
+                    )) : <span className="study-digest-nil">All studies active</span>}
+                  </section>
                 </div>
               ) : null}
             </>
-          )}
+          ) : null}
+          {studyHomeView === "studies" ? (
+            <>
+              <div className="meetings-toolbar workspace-browser-toolbar">
+                <div className="meetings-filter-group workspace-browser-filter-group study-browser-filter-row">
+                  <div className="study-browser-filter-pills">
+                    {([
+                      ["all", "all"],
+                      ["needs-review", "needs review"],
+                      ["recent", "recent activity"],
+                      ["deadlines", "deadlines"],
+                      ["stale", "stale"],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`chip small ${studyDigestFilter === value ? "active" : ""}`}
+                        onClick={() => setStudyDigestFilter(value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {archivedCollections.length > 0 ? (
+                    <button type="button" className="chip small" onClick={() => setShowArchived((value) => !value)}>
+                      <FontAwesomeIcon icon={faChevronRight} className={showArchived ? "research-chevron-open" : ""} />
+                      Archived ({visibleArchivedCollections.length})
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              {visibleActiveCollections.length === 0 && (!showArchived || visibleArchivedCollections.length === 0) ? (
+                <div className="empty-state-card">
+                  <strong>No studies.</strong>
+                </div>
+              ) : (
+                <>
+                  {visibleActiveCollections.length > 0 ? (
+                    <div className="workspace-browser-grid" data-tour-id="research-study-grid">
+                      {visibleActiveCollections.map((item) => (
+                        <div
+                          key={item.id}
+                          className="study-card-v2"
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open ${item.title}`}
+                          onClick={() => openStudyFromCard(item.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openStudyFromCard(item.id);
+                            } else if (event.key.toLowerCase() === "e") {
+                              event.preventDefault();
+                              openEditCollectionFromCard(item);
+                            }
+                          }}
+                        >
+                          <div className="study-card-v2-head">
+                            <strong className="study-card-v2-title">{item.title || "Untitled Study"}</strong>
+                            <div className="study-card-v2-flags">
+                              {item.needs_review ? <span className="study-card-flag flag-warning">needs review</span> : null}
+                              {item.overdue_action_count > 0 ? <span className="study-card-flag flag-danger">{item.overdue_action_count} overdue</span> : null}
+                              {item.recent_log_count > 0 ? <span className="study-card-flag flag-brand">{item.recent_log_count} recent</span> : null}
+                              {item.assigned_to_me_action_count > 0 ? <span className="study-card-flag flag-muted">{item.assigned_to_me_action_count} assigned</span> : null}
+                              {studyDigestData.items.find((d) => d.study.id === item.id)?.stale ? <span className="study-card-flag flag-stale">stale</span> : null}
+                            </div>
+                          </div>
+                          <p className="study-card-v2-desc">{item.description || item.hypothesis || "No focus"}</p>
+                          <div className="study-card-v2-stats">
+                            <span>{item.reference_count} refs</span>
+                            <span>{item.note_count} logs</span>
+                            <span>{item.open_action_count + item.doing_action_count} actions</span>
+                            <span>{formatRelativeTime(item.updated_at)}</span>
+                          </div>
+                          <div className="study-card-v2-foot">
+                            <div className="study-card-v2-chips">
+                              {item.space_ids.slice(0, 2).map((spaceId) => {
+                                const space = availableResearchSpaces.find((entry) => entry.id === spaceId);
+                                if (!space) return null;
+                                return <span key={`${item.id}-${space.id}`} className="chip small">{space.title}</span>;
+                              })}
+                              {item.space_ids.length > 2 ? <span className="chip small">+{item.space_ids.length - 2}</span> : null}
+                            </div>
+                            <div className="study-card-v2-actions">
+                              <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditCollectionFromCard(item); }}>
+                                Edit
+                              </button>
+                              <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openStudyFromCard(item.id); }}>
+                                Open
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {showArchived && visibleArchivedCollections.length > 0 ? (
+                    <div className="workspace-browser-grid study-browser-archived-grid">
+                      {visibleArchivedCollections.map((item) => (
+                        <div
+                          key={item.id}
+                          className="study-card-v2 archived"
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open ${item.title}`}
+                          onClick={() => openStudyFromCard(item.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openStudyFromCard(item.id);
+                            } else if (event.key.toLowerCase() === "e") {
+                              event.preventDefault();
+                              openEditCollectionFromCard(item);
+                            }
+                          }}
+                        >
+                          <div className="study-card-v2-head">
+                            <strong className="study-card-v2-title">{item.title || "Untitled Study"}</strong>
+                            <span className="study-card-flag flag-muted">Archived</span>
+                          </div>
+                          <p className="study-card-v2-desc">{item.description || item.hypothesis || "No focus"}</p>
+                          <div className="study-card-v2-stats">
+                            <span>{item.reference_count} refs</span>
+                            <span>{item.note_count} logs</span>
+                            <span>{formatRelativeTime(item.updated_at)}</span>
+                          </div>
+                          <div className="study-card-v2-foot">
+                            <div className="study-card-v2-chips">
+                              {item.space_ids.slice(0, 2).map((spaceId) => {
+                                const space = availableResearchSpaces.find((entry) => entry.id === spaceId);
+                                if (!space) return null;
+                                return <span key={`${item.id}-${space.id}`} className="chip small">{space.title}</span>;
+                              })}
+                            </div>
+                            <div className="study-card-v2-actions">
+                              <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditCollectionFromCard(item); }}>
+                                Edit
+                              </button>
+                              <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openStudyFromCard(item.id); }}>
+                                Open
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </>
+          ) : null}
         </div>
       ) : null}
 
@@ -4772,6 +5323,9 @@ function newStudyResult(): ResearchStudyResult {
             )}
             {!isStudent ? (
               <div className="study-header-actions">
+                <button type="button" className="ghost docs-action-btn" title="Chat" onClick={() => setTab("chat")}>
+                  <FontAwesomeIcon icon={faComment} />
+                </button>
                 <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
                   <FontAwesomeIcon icon={faPen} />
                 </button>
@@ -4817,6 +5371,9 @@ function newStudyResult(): ResearchStudyResult {
           <FontAwesomeIcon icon={faInbox} /> Inbox <span className="delivery-tab-count">{notes.length}</span>
           {tabAlerts.inboxAlert ? <span className="tab-alert-dot" /> : null}
         </button>
+        <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} data-tour-id="study-iterations-tab" onClick={() => setTab("iterations")}>
+          Iterations <span className="delivery-tab-count">{studyIterations.length}</span>
+        </button>
         <button className={`delivery-tab ${tab === "references" ? "active" : ""}`} data-tour-id="study-references-tab" onClick={() => setTab("references")}>
           References <span className="delivery-tab-count">{references.length}</span>
           {tabAlerts.refsAlert ? <span className="tab-alert-dot tab-alert-info" /> : null}
@@ -4824,12 +5381,6 @@ function newStudyResult(): ResearchStudyResult {
         <button className={`delivery-tab ${tab === "paper" ? "active" : ""}`} data-tour-id="study-paper-tab" onClick={() => setTab("paper")}>
           Paper
           {tabAlerts.paperAlert ? <span className="tab-alert-dot" /> : null}
-        </button>
-        <button className={`delivery-tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>
-          <FontAwesomeIcon icon={faComment} /> Chat
-        </button>
-        <button className={`delivery-tab ${tab === "iterations" ? "active" : ""}`} data-tour-id="study-iterations-tab" onClick={() => setTab("iterations")}>
-          Iterations <span className="delivery-tab-count">{studyIterations.length}</span>
         </button>
         <button className={`delivery-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
           Files <span className="delivery-tab-count">{studyFiles.length}</span>
@@ -4995,6 +5546,25 @@ function newStudyResult(): ResearchStudyResult {
           onOpenIteration={(iterationId) => {
             setStudyGraphOpen(false);
             handleOpenIteration(iterationId);
+          }}
+        />
+      ) : null}
+      {collectionsGraphOpen && collectionsGraphData ? (
+        <CollectionsGraphModal
+          graphData={collectionsGraphData}
+          onClose={() => {
+            setCollectionsGraphOpen(false);
+            setCollectionsGraphData(null);
+          }}
+          onOpenStudy={(studyId) => {
+            setCollectionsGraphOpen(false);
+            setCollectionsGraphData(null);
+            openStudyFromCard(studyId);
+          }}
+          onOpenLog={(logId) => {
+            setCollectionsGraphOpen(false);
+            setCollectionsGraphData(null);
+            handleOpenLinkedNote(logId);
           }}
         />
       ) : null}
@@ -6755,13 +7325,12 @@ function newStudyResult(): ResearchStudyResult {
           </div>
         </div>
 
-        {orderedNotes.length === 0 ? (
-          <p className="empty-message">No logs in this study.</p>
-        ) : (
-          <div className="research-log-stream">
-            {renderDatedNoteSections(orderedNotes)}
-          </div>
-        )}
+        <div className="research-log-stream">
+          {renderDatedNoteSections(orderedNotes)}
+          {orderedNotes.length === 0 ? (
+            <p className="empty-message">No logs in this study.</p>
+          ) : null}
+        </div>
 
         {mentionOpen && mentionAnchor ? (
           <div
@@ -7069,14 +7638,6 @@ function newStudyResult(): ResearchStudyResult {
     ).length;
     const unsupportedClaims = paperClaims.filter((item) => item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
     const weakSections = paperSections.filter((item) => item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
-    const paperHasStructure =
-      Boolean(paperMotivation.trim()) ||
-      Boolean(paperTitle.trim()) ||
-      paperAuthors.length > 0 ||
-      paperQuestions.length > 0 ||
-      paperClaims.length > 0 ||
-      paperSections.length > 0 ||
-      Boolean(paperSubmissionDeadline);
     const nextActions = [
       !paperSubmissionDeadline ? "Set submission deadline" : null,
       !paperMotivation.trim() && gapNotes.length > 0 ? "Draft motivation from gap logs" : null,
@@ -7086,157 +7647,486 @@ function newStudyResult(): ResearchStudyResult {
       unsupportedClaims > 0 ? `Support ${unsupportedClaims} claim${unsupportedClaims !== 1 ? "s" : ""}` : null,
       weakSections > 0 ? `Strengthen ${weakSections} section${weakSections !== 1 ? "s" : ""}` : null,
     ].filter(Boolean) as string[];
+    const paperHeaderSignals = [
+      <span key="status" className="chip small">{paperStatus.replace(/_/g, " ")}</span>,
+      paperSubmissionDeadline ? (
+        <span key="submission" className="chip small">{`Submission ${new Date(paperSubmissionDeadline).toLocaleDateString()}`}</span>
+      ) : null,
+      unprocessedInboxCount > 0 ? (
+        <span key="inbox" className="chip small paper-health-alert">{unprocessedInboxCount} inbox to process</span>
+      ) : null,
+      unsupportedClaims > 0 ? (
+        <span key="unsupported" className="chip small paper-health-alert">{unsupportedClaims} unsupported claims</span>
+      ) : null,
+      weakSections > 0 ? (
+        <span key="weak" className="chip small paper-health-alert">{weakSections} weak sections</span>
+      ) : null,
+    ].filter(Boolean);
+    const primaryNextAction = nextActions[0] || null;
+    const noteLabel = (note: ResearchNote) => note.title?.trim() || deriveLogTitle(note.content) || "Log";
+    const resultLabel = (result: ResearchStudyResult) => result.title?.trim() || "Result";
+    const questionLabel = (question: ResearchPaperQuestion, index: number) => question.text.trim() || `Question ${index + 1}`;
+    const claimLabel = (claim: ResearchPaperClaim, index: number) => claim.text.trim() || `Claim ${index + 1}`;
+    const sectionLabel = (section: ResearchPaperSection, index: number) => section.title.trim() || `Section ${index + 1}`;
+    const noteById = new Map(collectionNotes.map((note) => [note.id, note] as const));
+    const referenceById = new Map(collectionReferences.map((reference) => [reference.id, reference] as const));
+    const resultById = new Map(collectionResults.map((result) => [result.id, result] as const));
+    const questionById = new Map(paperQuestions.map((question) => [question.id, question] as const));
+    const claimById = new Map(paperClaims.map((claim) => [claim.id, claim] as const));
+    const paperEditorReferenceSuggestions = collectionReferences.map((item) => ({
+      id: item.id,
+      label: formatRefLabel(item),
+      meta: item.authors.join(", "),
+    }));
+    const paperEditorFileSuggestions = studyFiles
+      .filter((item) => item.collection_id === selectedCollectionId)
+      .map((item) => ({
+        id: item.id,
+        label: item.original_filename,
+        meta: item.mime_type || undefined,
+      }));
+    const paperEditorFileIds = studyFiles
+      .filter((item) => item.collection_id === selectedCollectionId)
+      .map((item) => item.id);
+    const paperMotivationPreviewFiles = extractMarkdownFileLabels(inlinePaperMotivation)
+      .map((label) => resolveLinkedFileByLabel(label, paperEditorFileIds))
+      .filter((item): item is ResearchStudyFile => Boolean(item))
+      .filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
+    const paperEditorNoteSuggestions = notes
+      .filter((item) => item.collection_id === selectedCollectionId)
+      .map((item) => ({
+        id: item.id,
+        label: item.title || deriveLogTitle(item.content) || "Untitled Log",
+        meta: formatLogTimestamp(item.created_at),
+      }));
+    const paperEditorMemberSuggestions = (collectionDetail.members || []).map((member) => ({
+      id: member.member_id,
+      label: `@${memberMentionHandle(member.member_name)}`,
+      meta: member.member_name,
+    }));
+
+    function commitPaperTitle() {
+      setPaperTitle(inlinePaperTitle.trim());
+      setEditingPaperTitle(false);
+    }
+
+    function commitPaperVenue() {
+      setPaperVenue(inlinePaperVenue.trim());
+      setEditingPaperVenue(false);
+    }
+
+    function commitPaperOverleaf() {
+      setPaperOverleafUrl(inlinePaperOverleaf.trim());
+      setEditingPaperOverleaf(false);
+    }
+
+    function commitPaperStatus() {
+      setPaperStatus(inlinePaperStatus);
+      setEditingPaperStatus(false);
+    }
+
+    function commitPaperRegistration() {
+      setPaperRegistrationDeadline(inlinePaperRegistration);
+      setEditingPaperRegistration(false);
+    }
+
+    function commitPaperSubmission() {
+      setPaperSubmissionDeadline(inlinePaperSubmission);
+      setEditingPaperSubmission(false);
+    }
+
+    function commitPaperDecision() {
+      setPaperDecisionDate(inlinePaperDecision);
+      setEditingPaperDecision(false);
+    }
+
+    function commitPaperMotivation() {
+      setPaperMotivation(inlinePaperMotivation);
+      setEditingPaperMotivation(false);
+    }
+
+    function renderInlineEntities(
+      entries: Array<{ id: string; label: string; onClick?: () => void }>,
+      emptyLabel: string,
+    ) {
+      if (entries.length === 0) {
+        return <span className="paper-inline-empty">{emptyLabel}</span>;
+      }
+      return (
+        <div className="paper-inline-link-list">
+          {entries.map((entry) =>
+            entry.onClick ? (
+              <button key={entry.id} type="button" className="paper-inline-link" onClick={entry.onClick}>
+                {entry.label}
+              </button>
+            ) : (
+              <span key={entry.id} className="paper-inline-link paper-inline-link-static">
+                {entry.label}
+              </span>
+            ),
+          )}
+        </div>
+      );
+    }
 
     return (
       <div className="paper-workspace">
-        <div id="paper-section-meta" className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <strong>Paper</strong>
-            </div>
-            <div className="research-header-actions">
-              {!isStudent ? (
-                <>
-                  <button
-                    type="button"
-                    className="ghost icon-text-button small"
-                    disabled={draftingGapPaper || gapNotes.length === 0}
-                    onClick={() => void handleDraftPaperFromGap()}
-                  >
-                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={draftingGapPaper} /> {draftingGapPaper ? "Drafting..." : "Draft From Gap"}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost icon-text-button small"
-                    disabled={buildingPaperOutline || (paperQuestions.length === 0 && paperClaims.length === 0 && collectionNotes.length === 0 && collectionReferences.length === 0)}
-                    onClick={() => void handleBuildPaperOutline()}
-                  >
-                    <FontAwesomeIcon icon={faMagicWandSparkles} spin={buildingPaperOutline} /> {buildingPaperOutline ? "Building..." : "Build Outline"}
-                  </button>
+        <div className="setup-summary-bar paper-summary-bar">
+          <div className="setup-summary-stats">
+            <span>{paperQuestions.length} questions</span>
+            <span className="setup-summary-sep" />
+            <span>{paperClaims.length} claims</span>
+            <span className="setup-summary-sep" />
+            <span>{paperSections.length} sections</span>
+            <span className="setup-summary-sep" />
+            <span>{collectionResults.length} results</span>
+          </div>
+          <div className="research-header-actions">
+            {!isStudent ? (
+              <>
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  disabled={draftingGapPaper || gapNotes.length === 0}
+                  onClick={() => void handleDraftPaperFromGap()}
+                >
+                  <FontAwesomeIcon icon={faMagicWandSparkles} spin={draftingGapPaper} /> {draftingGapPaper ? "Drafting..." : "Draft From Gap"}
+                </button>
+                <button
+                  type="button"
+                  className="ghost icon-text-button small"
+                  disabled={buildingPaperOutline || (paperQuestions.length === 0 && paperClaims.length === 0 && collectionNotes.length === 0 && collectionReferences.length === 0)}
+                  onClick={() => void handleBuildPaperOutline()}
+                >
+                  <FontAwesomeIcon icon={faMagicWandSparkles} spin={buildingPaperOutline} /> {buildingPaperOutline ? "Building..." : "Build Outline"}
+                </button>
                   <button type="button" className="ghost icon-text-button small" disabled={auditingPaperClaims || paperClaims.length === 0} onClick={() => void handleAuditPaperClaims()}>
                     <FontAwesomeIcon icon={faMagicWandSparkles} spin={auditingPaperClaims} /> {auditingPaperClaims ? "Auditing..." : "Audit Claims"}
                   </button>
                 </>
               ) : null}
-              <button type="button" className="meetings-new-btn" disabled={saving} onClick={() => void handleSavePaperWorkspace()}>
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-          <div className="paper-health-row">
-            <span className={`chip small${!paperSubmissionDeadline ? " paper-health-alert" : ""}`}>
-              {paperSubmissionDeadline ? `Submission ${new Date(paperSubmissionDeadline).toLocaleDateString()}` : "No deadline"}
-            </span>
-            <span className="chip small">{paperAuthors.length} authors</span>
-            <span className="chip small">{paperQuestions.length} questions</span>
-            <span className="chip small">{gapNotes.length} gap logs</span>
-            <span className={`chip small${unsupportedClaims > 0 ? " paper-health-alert" : ""}`}>
-              {unsupportedClaims} unsupported claims
-            </span>
-            <span className={`chip small${weakSections > 0 ? " paper-health-alert" : ""}`}>
-              {weakSections} weak sections
-            </span>
-            <span className={`chip small${unprocessedInboxCount > 0 ? " paper-health-alert" : ""}`}>
-              {unprocessedInboxCount} inbox pending
-            </span>
-          </div>
-          {nextActions.length > 0 ? (
-            <div className="paper-next-actions">
-              {nextActions.slice(0, 4).map((item) => (
-                <span key={item} className="chip small">{item}</span>
-              ))}
-            </div>
-          ) : null}
-          <div className="paper-meta-grid">
-            <label className="full-span">
-              Motivation
-              <textarea rows={4} value={paperMotivation} onChange={(event) => setPaperMotivation(event.target.value)} />
-            </label>
-            <label className="full-span">
-              Paper Title
-              <input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} />
-            </label>
-            <label>
-              Venue
-              <input value={paperVenue} onChange={(event) => setPaperVenue(event.target.value)} />
-            </label>
-            <label>
-              Status
-              <select value={paperStatus} onChange={(event) => setPaperStatus(event.target.value)}>
-                <option value="not_started">Not started</option>
-                <option value="drafting">Drafting</option>
-                <option value="internal_review">Internal review</option>
-                <option value="submitted">Submitted</option>
-                <option value="published">Published</option>
-              </select>
-            </label>
-            <label>
-              Registration Deadline
-              <input type="date" value={paperRegistrationDeadline} onChange={(event) => setPaperRegistrationDeadline(event.target.value)} />
-            </label>
-            <label>
-              Submission Deadline
-              <input type="date" value={paperSubmissionDeadline} onChange={(event) => setPaperSubmissionDeadline(event.target.value)} />
-            </label>
-            <label>
-              Decision Date
-              <input type="date" value={paperDecisionDate} onChange={(event) => setPaperDecisionDate(event.target.value)} />
-            </label>
-            <label className="full-span">
-              Overleaf
-              <input value={paperOverleafUrl} onChange={(event) => setPaperOverleafUrl(event.target.value)} />
-            </label>
           </div>
         </div>
 
-        {(paperExpanded || paperHasStructure) ? (
-          <nav className="paper-subnav">
-            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-meta")?.scrollIntoView({ behavior: "smooth" })}>Metadata</button>
-            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-authors")?.scrollIntoView({ behavior: "smooth" })}>Authors</button>
-            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-qc")?.scrollIntoView({ behavior: "smooth" })}>Questions & Claims</button>
-            <button type="button" className="paper-subnav-link" onClick={() => document.getElementById("paper-section-sections")?.scrollIntoView({ behavior: "smooth" })}>Sections</button>
-          </nav>
-        ) : null}
-
-        {!paperExpanded && !paperHasStructure ? (
-          <div className="meetings-detail-section">
-            <div className="paper-stack">
-              <div className="paper-compact-grid">
-                <label>
-                  Main Question
-                  <textarea
-                    rows={3}
-                    value={paperQuestions[0]?.text || ""}
-                    onChange={(event) =>
-                      setPaperQuestions((items) =>
-                        items.length > 0
-                          ? items.map((item, index) => (index === 0 ? { ...item, text: event.target.value } : item))
-                          : [{ id: crypto.randomUUID(), text: event.target.value, note_ids: [] }]
-                      )
-                    }
-                  />
-                </label>
-              </div>
-              <div className="row-actions">
-                {!isStudent ? (
-                  <button type="button" className="ghost icon-text-button small" onClick={() => void handleGeneratePaperFromStudy()}>
-                    <FontAwesomeIcon icon={faMagicWandSparkles} /> Generate From Study
-                  </button>
-                ) : null}
-                <button type="button" className="meetings-new-btn" onClick={() => setPaperExpanded(true)}>
-                  Open Full Workspace
-                </button>
-              </div>
+        <section className="meetings-detail-section paper-manuscript-block">
+          <div className="paper-manuscript-header">
+            <div className="paper-manuscript-title">
+              <strong>Paper</strong>
+              <div className="paper-health-row">{paperHeaderSignals}</div>
             </div>
           </div>
-        ) : null}
 
-        {paperExpanded || paperHasStructure ? (
-          <>
+          {primaryNextAction ? (
+            <div className="paper-next-action-strip">
+              <button
+                type="button"
+                className="paper-next-action-link"
+                onClick={() => {
+                  if (!paperSubmissionDeadline) return;
+                  if (paperAuthors.length === 0) {
+                    document.querySelector(".paper-author-add-row select")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    return;
+                  }
+                  if (paperQuestions.length === 0) {
+                    document.querySelector(".paper-note-block")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    return;
+                  }
+                }}
+              >
+                {primaryNextAction}
+              </button>
+            </div>
+          ) : null}
 
-        <details id="paper-section-authors" className="research-inline-summary" open>
-          <summary>Authors <span className="delivery-tab-count">{paperAuthors.length}</span></summary>
-          <div className="paper-stack">
+          <div className="paper-manuscript-topline">
+            <div className="paper-inline-form paper-inline-form-title">
+              <span>Title</span>
+              {editingPaperTitle ? (
+                <input
+                  autoFocus
+                  value={inlinePaperTitle}
+                  onChange={(event) => setInlinePaperTitle(event.target.value)}
+                  onBlur={commitPaperTitle}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitPaperTitle();
+                    } else if (event.key === "Escape") {
+                      setInlinePaperTitle(paperTitle);
+                      setEditingPaperTitle(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`paper-inline-value paper-inline-value-title${paperTitle.trim() ? "" : " is-placeholder"}`}
+                  onClick={() => {
+                    setInlinePaperTitle(paperTitle);
+                    setEditingPaperTitle(true);
+                  }}
+                >
+                  {paperTitle.trim() || "Untitled paper"}
+                </button>
+              )}
+            </div>
+            <div className="paper-inline-form">
+              <span>Venue</span>
+              {editingPaperVenue ? (
+                <input
+                  autoFocus
+                  value={inlinePaperVenue}
+                  onChange={(event) => setInlinePaperVenue(event.target.value)}
+                  onBlur={commitPaperVenue}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitPaperVenue();
+                    } else if (event.key === "Escape") {
+                      setInlinePaperVenue(paperVenue);
+                      setEditingPaperVenue(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`paper-inline-value${paperVenue.trim() ? "" : " is-placeholder"}`}
+                  onClick={() => {
+                    setInlinePaperVenue(paperVenue);
+                    setEditingPaperVenue(true);
+                  }}
+                >
+                  {paperVenue.trim() || "Set venue"}
+                </button>
+              )}
+            </div>
+            <div className="paper-inline-form">
+              <span>Overleaf</span>
+              {editingPaperOverleaf ? (
+                <input
+                  autoFocus
+                  value={inlinePaperOverleaf}
+                  onChange={(event) => setInlinePaperOverleaf(event.target.value)}
+                  onBlur={commitPaperOverleaf}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitPaperOverleaf();
+                    } else if (event.key === "Escape") {
+                      setInlinePaperOverleaf(paperOverleafUrl);
+                      setEditingPaperOverleaf(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`paper-inline-value${paperOverleafUrl.trim() ? "" : " is-placeholder"}`}
+                  onClick={() => {
+                    setInlinePaperOverleaf(paperOverleafUrl);
+                    setEditingPaperOverleaf(true);
+                  }}
+                >
+                  {paperOverleafUrl.trim() || "Set overleaf"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="paper-manuscript-meta-row">
+            <div className="paper-compact-field">
+              <span>Status</span>
+              {editingPaperStatus ? (
+                <select
+                  autoFocus
+                  value={inlinePaperStatus}
+                  onChange={(event) => setInlinePaperStatus(event.target.value)}
+                  onBlur={commitPaperStatus}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setInlinePaperStatus(paperStatus);
+                      setEditingPaperStatus(false);
+                    }
+                  }}
+                >
+                  <option value="not_started">Not started</option>
+                  <option value="drafting">Drafting</option>
+                  <option value="internal_review">Internal review</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="published">Published</option>
+                </select>
+              ) : (
+                <button
+                  type="button"
+                  className="paper-inline-chip-button"
+                  onClick={() => {
+                    setInlinePaperStatus(paperStatus);
+                    setEditingPaperStatus(true);
+                  }}
+                >
+                  {paperStatus.replace(/_/g, " ")}
+                </button>
+              )}
+            </div>
+            <div className="paper-compact-field">
+              <span>Registration</span>
+              {editingPaperRegistration ? (
+                <input
+                  autoFocus
+                  type="date"
+                  value={inlinePaperRegistration}
+                  onChange={(event) => setInlinePaperRegistration(event.target.value)}
+                  onBlur={commitPaperRegistration}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setInlinePaperRegistration(paperRegistrationDeadline);
+                      setEditingPaperRegistration(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`paper-inline-chip-button${paperRegistrationDeadline ? "" : " is-placeholder"}`}
+                  onClick={() => {
+                    setInlinePaperRegistration(paperRegistrationDeadline);
+                    setEditingPaperRegistration(true);
+                  }}
+                >
+                  {paperRegistrationDeadline || "Set registration"}
+                </button>
+              )}
+            </div>
+            <div className="paper-compact-field">
+              <span>Submission</span>
+              {editingPaperSubmission ? (
+                <input
+                  autoFocus
+                  type="date"
+                  value={inlinePaperSubmission}
+                  onChange={(event) => setInlinePaperSubmission(event.target.value)}
+                  onBlur={commitPaperSubmission}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setInlinePaperSubmission(paperSubmissionDeadline);
+                      setEditingPaperSubmission(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`paper-inline-chip-button${paperSubmissionDeadline ? "" : " is-placeholder"}`}
+                  onClick={() => {
+                    setInlinePaperSubmission(paperSubmissionDeadline);
+                    setEditingPaperSubmission(true);
+                  }}
+                >
+                  {paperSubmissionDeadline || "Set submission"}
+                </button>
+              )}
+            </div>
+            <div className="paper-compact-field">
+              <span>Decision</span>
+              {editingPaperDecision ? (
+                <input
+                  autoFocus
+                  type="date"
+                  value={inlinePaperDecision}
+                  onChange={(event) => setInlinePaperDecision(event.target.value)}
+                  onBlur={commitPaperDecision}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setInlinePaperDecision(paperDecisionDate);
+                      setEditingPaperDecision(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`paper-inline-chip-button${paperDecisionDate ? "" : " is-placeholder"}`}
+                  onClick={() => {
+                    setInlinePaperDecision(paperDecisionDate);
+                    setEditingPaperDecision(true);
+                  }}
+                >
+                  {paperDecisionDate || "Set decision"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="paper-note-editor-shell">
+            <div className="paper-note-editor-head">
+              <strong>Motivation</strong>
+            </div>
+            {editingPaperMotivation ? (
+              <div className="paper-note-editor-rich">
+                <StudyLogRichEditor
+                  key={`paper-motivation:${selectedCollectionId}:${editingPaperMotivation ? "edit" : "read"}`}
+                  value={inlinePaperMotivation}
+                  placeholder="Write motivation"
+                  onChange={setInlinePaperMotivation}
+                  referenceSuggestions={paperEditorReferenceSuggestions}
+                  fileSuggestions={paperEditorFileSuggestions}
+                  noteSuggestions={paperEditorNoteSuggestions}
+                  memberSuggestions={paperEditorMemberSuggestions}
+                  linkedFiles={paperMotivationPreviewFiles}
+                  projectId={selectedProjectId}
+                  collectionId={selectedCollectionId}
+                  spaceId={activeResearchSpaceId || undefined}
+                  tagSuggestions={noteTagOptions}
+                  onPasteImage={async (file) => {
+                    const created = await handleUploadStudyFile(file);
+                    return created ? { id: created.id, label: created.original_filename } : null;
+                  }}
+                />
+                <div className="paper-note-editor-actions">
+                  <button type="button" className="ghost" onClick={() => { setInlinePaperMotivation(paperMotivation); setEditingPaperMotivation(false); }}>
+                    Cancel
+                  </button>
+                  <button type="button" className="ghost" onClick={commitPaperMotivation}>
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                role="button"
+                tabIndex={0}
+                className={`paper-note-editor-preview${paperMotivation.trim() ? "" : " is-placeholder"}`}
+                onClick={() => {
+                  setInlinePaperMotivation(paperMotivation);
+                  setEditingPaperMotivation(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setInlinePaperMotivation(paperMotivation);
+                    setEditingPaperMotivation(true);
+                  }
+                }}
+              >
+                {paperMotivation.trim()
+                  ? renderMarkdown(paperMotivation, {
+                      onFileClick: (label) => handleOpenLinkedFileByLabel(label, paperEditorFileIds),
+                      onNoteClick: (label) => handleOpenLinkedNoteByLabel(label),
+                    })
+                  : "Write motivation"}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="paper-manuscript-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Authors</strong>
+            </div>
+          </div>
+          <div className="paper-stack paper-stack-plain">
             <div className="paper-author-add-row">
               <select
                 value=""
@@ -7256,11 +8146,9 @@ function newStudyResult(): ResearchStudyResult {
             </div>
             {paperAuthors.length === 0 ? <p className="muted-small">No authors.</p> : null}
             {paperAuthors.map((author, index) => (
-                <div key={author.id} className="paper-item-card paper-author-card">
-                  <div className="paper-item-head">
-                    <strong>
-                      {index + 1}. {author.display_name}
-                    </strong>
+              <div key={author.id} className="paper-note-block paper-note-block-compact">
+                <div className="paper-note-head">
+                  <strong>{index + 1}. {author.display_name}</strong>
                   <div className="paper-author-actions">
                     <button
                       type="button"
@@ -7318,272 +8206,321 @@ function newStudyResult(): ResearchStudyResult {
               </div>
             ))}
           </div>
-        </details>
+        </section>
 
-        <details id="paper-section-qc" className="research-inline-summary" open>
-          <summary>Research Questions & Claims <span className="delivery-tab-count">{paperQuestions.length + paperClaims.length}</span></summary>
-        <div className="paper-columns">
-          <div className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info">
-                <strong>Research Questions</strong>
-              </div>
-              <button type="button" className="meetings-new-btn" onClick={() => setPaperQuestions((items) => [...items, newPaperQuestion()])}>
-                <FontAwesomeIcon icon={faPlus} /> Add
-              </button>
+        <section className="paper-manuscript-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Questions</strong>
             </div>
-            <div className="paper-stack">
-              {paperQuestions.length === 0 ? <p className="muted-small">No questions.</p> : null}
-              {paperQuestions.map((item, index) => (
-                <div key={item.id} className="paper-item-card">
-                  <div className="paper-item-head">
-                    <strong>Question {index + 1}</strong>
-                    <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperQuestions((items) => items.filter((entry) => entry.id !== item.id))}>
-                      <FontAwesomeIcon icon={faXmark} />
-                    </button>
+            <button type="button" className="meetings-new-btn" onClick={() => setPaperQuestions((items) => [...items, newPaperQuestion()])}>
+              <FontAwesomeIcon icon={faPlus} /> Add
+            </button>
+          </div>
+          <div className="paper-stack paper-stack-plain">
+            {paperQuestions.length === 0 ? <p className="muted-small">No questions.</p> : null}
+            {paperQuestions.map((item, index) => (
+              <article key={item.id} className="paper-note-block">
+                <div className="paper-note-head">
+                  <strong>Question {index + 1}</strong>
+                  <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperQuestions((items) => items.filter((entry) => entry.id !== item.id))}>
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+                <textarea
+                  className="paper-note-textarea"
+                  rows={3}
+                  value={item.text}
+                  onChange={(event) =>
+                    setPaperQuestions((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
+                  }
+                />
+                <div className="paper-evidence-summary">
+                  <div className="paper-evidence-line">
+                    <strong>Logs</strong>
+                    {renderInlineEntities(
+                      item.note_ids
+                        .map((noteId) => noteById.get(noteId))
+                        .filter((note): note is ResearchNote => Boolean(note))
+                        .map((note) => ({
+                          id: note.id,
+                          label: noteLabel(note),
+                          onClick: () => {
+                            setTab("notes");
+                            setActiveInboxNoteId(note.id);
+                          },
+                        })),
+                      "No logs linked",
+                    )}
                   </div>
-                  <div className="paper-evidence-strip">
-                    <span className="chip small">{item.note_ids.length} notes</span>
+                </div>
+                <details className="paper-link-details">
+                  <summary className="paper-link-toggle">Edit links</summary>
+                  <div className="paper-link-group">
+                    {collectionNotes.map((note) => (
+                      <label key={`${item.id}-question-note-${note.id}`} className="paper-link-chip">
+                        <input
+                          type="checkbox"
+                          checked={item.note_ids.includes(note.id)}
+                          onChange={() =>
+                            setPaperQuestions((items) =>
+                              items.map((entry) =>
+                                entry.id === item.id ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) } : entry,
+                              ),
+                            )
+                          }
+                        />
+                        <span>{noteLabel(note)}</span>
+                      </label>
+                    ))}
                   </div>
-                  <textarea
-                    rows={3}
-                    value={item.text}
-                    onChange={(event) =>
-                      setPaperQuestions((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
-                    }
-                  />
-                  <details className="paper-link-details">
-                    <summary className="paper-link-toggle">{item.note_ids.length} notes linked</summary>
+                </details>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="paper-manuscript-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Claims</strong>
+            </div>
+            <button type="button" className="meetings-new-btn" onClick={() => setPaperClaims((items) => [...items, newPaperClaim()])}>
+              <FontAwesomeIcon icon={faPlus} /> Add
+            </button>
+          </div>
+          <div className="paper-stack paper-stack-plain">
+            {paperClaims.length === 0 ? <p className="muted-small">No claims.</p> : null}
+            {paperClaims.map((item, index) => (
+              <article key={item.id} className={`paper-note-block${item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? " paper-note-block-alert" : ""}`}>
+                <div className="paper-note-head">
+                  <div className="paper-note-head-main">
+                    <strong>Claim {index + 1}</strong>
+                    <div className="paper-evidence-strip">
+                      <span className="chip small">{item.status.replace(/_/g, " ")}</span>
+                      {item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? (
+                        <span className="chip small paper-health-alert">Missing evidence</span>
+                      ) : null}
+                      {item.audit_status ? (
+                        <span className={`chip small paper-audit-status paper-audit-status-${item.audit_status}`}>{item.audit_status.replace(/_/g, " ")}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperClaims((items) => items.filter((entry) => entry.id !== item.id))}>
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+                <textarea
+                  className="paper-note-textarea"
+                  rows={4}
+                  value={item.text}
+                  onChange={(event) =>
+                    setPaperClaims((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
+                  }
+                />
+                {item.audit_summary ? (
+                  <div className="paper-audit-box">
+                    <p>{item.audit_summary}</p>
+                    <div className="paper-audit-meta">
+                      {item.supporting_reference_ids.length ? <span className="muted-small">{item.supporting_reference_ids.length} supporting references</span> : null}
+                      {item.supporting_note_ids.length ? <span className="muted-small">{item.supporting_note_ids.length} supporting logs</span> : null}
+                      {item.audit_confidence !== null ? <span className="muted-small">{Math.round(item.audit_confidence * 100)}% confidence</span> : null}
+                      {item.audited_at ? <span className="muted-small">{formatRelativeTime(item.audited_at)}</span> : null}
+                    </div>
+                    {item.missing_evidence.length > 0 ? (
+                      <div className="paper-evidence-strip">
+                        {item.missing_evidence.map((entry) => (
+                          <span key={`${item.id}-${entry}`} className="chip small paper-health-alert">{entry}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="paper-evidence-summary">
+                  <div className="paper-evidence-line">
+                    <strong>Questions</strong>
+                    {renderInlineEntities(
+                      item.question_ids
+                        .map((questionId) => questionById.get(questionId))
+                        .filter((question): question is ResearchPaperQuestion => Boolean(question))
+                        .map((question, questionIndex) => ({
+                          id: question.id,
+                          label: questionLabel(question, paperQuestions.findIndex((entry) => entry.id === question.id)),
+                        })),
+                      "No questions linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>References</strong>
+                    {renderInlineEntities(
+                      item.reference_ids
+                        .map((referenceId) => referenceById.get(referenceId))
+                        .filter((reference): reference is ResearchReference => Boolean(reference))
+                        .map((reference) => ({
+                          id: reference.id,
+                          label: reference.title || "Reference",
+                          onClick: () => {
+                            setTab("references");
+                            openEditReferenceModal(reference);
+                          },
+                        })),
+                      "No references linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>Logs</strong>
+                    {renderInlineEntities(
+                      item.note_ids
+                        .map((noteId) => noteById.get(noteId))
+                        .filter((note): note is ResearchNote => Boolean(note))
+                        .map((note) => ({
+                          id: note.id,
+                          label: noteLabel(note),
+                          onClick: () => {
+                            setTab("notes");
+                            setActiveInboxNoteId(note.id);
+                          },
+                        })),
+                      "No logs linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>Results</strong>
+                    {renderInlineEntities(
+                      item.result_ids
+                        .map((resultId) => resultById.get(resultId))
+                        .filter((result): result is ResearchStudyResult => Boolean(result))
+                        .map((result) => ({
+                          id: result.id,
+                          label: resultLabel(result),
+                          onClick: () => setTab("iterations"),
+                        })),
+                      "No results linked",
+                    )}
+                  </div>
+                </div>
+                <details className="paper-link-details">
+                  <summary className="paper-link-toggle">Edit links</summary>
+                  <div className="paper-link-block">
+                    <strong>Questions</strong>
+                    <div className="paper-link-group">
+                      {paperQuestions.map((question) => (
+                        <label key={`${item.id}-${question.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.question_ids.includes(question.id)}
+                            onChange={() =>
+                              setPaperClaims((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) } : entry,
+                                ),
+                              )
+                            }
+                          />
+                          <span>{question.text || "Question"}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>References</strong>
+                    <div className="paper-link-group">
+                      {collectionReferences.map((reference) => (
+                        <label key={`${item.id}-ref-${reference.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.reference_ids.includes(reference.id)}
+                            onChange={() =>
+                              setPaperClaims((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) } : entry,
+                                ),
+                              )
+                            }
+                          />
+                          <span>{reference.title || "Reference"}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="paper-link-block">
+                    <strong>Logs</strong>
                     <div className="paper-link-group">
                       {collectionNotes.map((note) => (
-                        <label key={`${item.id}-question-note-${note.id}`} className="paper-link-chip">
+                        <label key={`${item.id}-note-${note.id}`} className="paper-link-chip">
                           <input
                             type="checkbox"
                             checked={item.note_ids.includes(note.id)}
                             onChange={() =>
-                              setPaperQuestions((items) =>
+                              setPaperClaims((items) =>
                                 items.map((entry) =>
-                                  entry.id === item.id ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) } : entry
-                                )
+                                  entry.id === item.id ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) } : entry,
+                                ),
                               )
                             }
                           />
-                          <span>{note.title || "Note"}</span>
+                          <span>{noteLabel(note)}</span>
                         </label>
                       ))}
                     </div>
-                  </details>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info">
-                <strong>Claims</strong>
-              </div>
-              <button type="button" className="meetings-new-btn" onClick={() => setPaperClaims((items) => [...items, newPaperClaim()])}>
-                <FontAwesomeIcon icon={faPlus} /> Add
-              </button>
-            </div>
-            <div className="paper-stack">
-              {paperClaims.length === 0 ? <p className="muted-small">No claims.</p> : null}
-              {paperClaims.map((item, index) => (
-                <div key={item.id} className={`paper-item-card${item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? " paper-item-card-alert" : ""}`}>
-                  <div className="paper-item-head">
-                    <strong>Claim {index + 1}</strong>
-                    <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperClaims((items) => items.filter((entry) => entry.id !== item.id))}>
-                      <FontAwesomeIcon icon={faXmark} />
-                    </button>
                   </div>
-                  <div className="paper-evidence-strip">
-                    <span className="chip small">{item.question_ids.length} questions</span>
-                    <span className="chip small">{item.reference_ids.length} references</span>
-                    <span className="chip small">{item.note_ids.length} notes</span>
-                    <span className="chip small">{item.result_ids.length} results</span>
-                    {item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? (
-                      <span className="chip small paper-health-alert">Missing evidence</span>
-                    ) : null}
-                    {item.audit_status ? (
-                      <span className={`chip small paper-audit-status paper-audit-status-${item.audit_status}`}>{item.audit_status.replace(/_/g, " ")}</span>
-                    ) : null}
+                  <div className="paper-link-block">
+                    <strong>Results</strong>
+                    <div className="paper-link-group">
+                      {collectionResults.map((result) => (
+                        <label key={`${item.id}-result-${result.id}`} className="paper-link-chip">
+                          <input
+                            type="checkbox"
+                            checked={item.result_ids.includes(result.id)}
+                            onChange={() =>
+                              setPaperClaims((items) =>
+                                items.map((entry) =>
+                                  entry.id === item.id ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) } : entry,
+                                ),
+                              )
+                            }
+                          />
+                          <span>{resultLabel(result)}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                  {item.audit_summary ? (
-                    <div className="paper-audit-box">
-                      <p>{item.audit_summary}</p>
-                      <div className="paper-audit-meta">
-                        {item.supporting_reference_ids.length ? <span className="muted-small">{item.supporting_reference_ids.length} supporting references</span> : null}
-                        {item.supporting_note_ids.length ? <span className="muted-small">{item.supporting_note_ids.length} supporting notes</span> : null}
-                        {item.audit_confidence !== null ? <span className="muted-small">{Math.round(item.audit_confidence * 100)}% confidence</span> : null}
-                        {item.audited_at ? <span className="muted-small">{formatRelativeTime(item.audited_at)}</span> : null}
-                      </div>
-                      {item.missing_evidence.length > 0 ? (
-                        <div className="research-chip-group">
-                          {item.missing_evidence.map((entry) => (
-                            <span key={`${item.id}-${entry}`} className="chip small paper-health-alert">{entry}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <textarea
-                    rows={3}
-                    value={item.text}
-                    onChange={(event) =>
-                      setPaperClaims((items) => items.map((entry) => (entry.id === item.id ? { ...entry, text: event.target.value } : entry)))
-                    }
-                  />
-                  <label>
-                    Status
-                    <select
-                      value={item.status}
-                      onChange={(event) =>
-                        setPaperClaims((items) => items.map((entry) => (entry.id === item.id ? { ...entry, status: event.target.value } : entry)))
-                      }
-                    >
-                      <option value="draft">Draft</option>
-                      <option value="supported">Supported</option>
-                      <option value="missing_evidence">Missing evidence</option>
-                    </select>
-                  </label>
-                  <details className="paper-link-details">
-                    <summary className="paper-link-toggle">
-                      {item.question_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length} evidence links
-                    </summary>
-                    <div className="paper-link-block">
-                      <strong>Questions</strong>
-                      <div className="paper-link-group">
-                        {paperQuestions.map((question) => (
-                          <label key={`${item.id}-${question.id}`} className="paper-link-chip">
-                            <input
-                              type="checkbox"
-                              checked={item.question_ids.includes(question.id)}
-                              onChange={() =>
-                                setPaperClaims((items) =>
-                                  items.map((entry) =>
-                                    entry.id === item.id
-                                      ? { ...entry, question_ids: toggleId(entry.question_ids, question.id) }
-                                      : entry
-                                  )
-                                )
-                              }
-                            />
-                            <span>{question.text || "Question"}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="paper-link-block">
-                      <strong>References</strong>
-                      <div className="paper-link-group">
-                        {collectionReferences.map((reference) => (
-                          <label key={`${item.id}-ref-${reference.id}`} className="paper-link-chip">
-                            <input
-                              type="checkbox"
-                              checked={item.reference_ids.includes(reference.id)}
-                              onChange={() =>
-                                setPaperClaims((items) =>
-                                  items.map((entry) =>
-                                    entry.id === item.id
-                                      ? { ...entry, reference_ids: toggleId(entry.reference_ids, reference.id) }
-                                      : entry
-                                  )
-                                )
-                              }
-                            />
-                            <span>{reference.title || "Reference"}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="paper-link-block">
-                      <strong>Notes</strong>
-                      <div className="paper-link-group">
-                        {collectionNotes.map((note) => (
-                          <label key={`${item.id}-note-${note.id}`} className="paper-link-chip">
-                            <input
-                              type="checkbox"
-                              checked={item.note_ids.includes(note.id)}
-                              onChange={() =>
-                                setPaperClaims((items) =>
-                                  items.map((entry) =>
-                                    entry.id === item.id
-                                      ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) }
-                                      : entry
-                                  )
-                                )
-                              }
-                            />
-                            <span>{note.title || "Note"}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="paper-link-block">
-                      <strong>Results</strong>
-                      <div className="paper-link-group">
-                        {collectionResults.map((result) => (
-                          <label key={`${item.id}-result-${result.id}`} className="paper-link-chip">
-                            <input
-                              type="checkbox"
-                              checked={item.result_ids.includes(result.id)}
-                              onChange={() =>
-                                setPaperClaims((items) =>
-                                  items.map((entry) =>
-                                    entry.id === item.id
-                                      ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) }
-                                      : entry
-                                  )
-                                )
-                              }
-                            />
-                            <span>{result.title || "Result"}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </details>
-                </div>
-              ))}
-            </div>
+                </details>
+              </article>
+            ))}
           </div>
-        </div>
-        </details>
+        </section>
 
-        <details id="paper-section-sections" className="research-inline-summary" open>
-          <summary>Sections <span className="delivery-tab-count">{paperSections.length}</span></summary>
-          <div className="paper-section-action-row">
+        <section className="paper-manuscript-section">
+          <div className="meetings-detail-head">
+            <div className="meetings-detail-info">
+              <strong>Sections</strong>
+            </div>
             <button type="button" className="meetings-new-btn" onClick={() => setPaperSections((items) => [...items, newPaperSection()])}>
               <FontAwesomeIcon icon={faPlus} /> Add Section
             </button>
           </div>
-          <div className="paper-stack">
+          <div className="paper-stack paper-stack-plain">
             {paperSections.length === 0 ? <p className="muted-small">No sections.</p> : null}
-              {paperSections.map((item, index) => (
-              <div
-                key={item.id}
-                className={`paper-item-card${item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? " paper-item-card-alert" : ""}`}
-              >
-                <div className="paper-item-head">
-                  <strong>Section {index + 1}</strong>
+            {paperSections.map((item, index) => (
+              <article key={item.id} className={`paper-note-block${item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? " paper-note-block-alert" : ""}`}>
+                <div className="paper-note-head">
+                  <div className="paper-note-head-main">
+                    <strong>Section {index + 1}</strong>
+                    <div className="paper-evidence-strip">
+                      <span className="chip small">{item.status.replace(/_/g, " ")}</span>
+                      {item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? (
+                        <span className="chip small paper-health-alert">Weak section</span>
+                      ) : null}
+                    </div>
+                  </div>
                   <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => setPaperSections((items) => items.filter((entry) => entry.id !== item.id))}>
                     <FontAwesomeIcon icon={faXmark} />
                   </button>
                 </div>
-                <div className="paper-evidence-strip">
-                  <span className="chip small">{item.question_ids.length} questions</span>
-                  <span className="chip small">{item.claim_ids.length} claims</span>
-                  <span className="chip small">{item.reference_ids.length} references</span>
-                  <span className="chip small">{item.note_ids.length} notes</span>
-                  <span className="chip small">{item.result_ids.length} results</span>
-                  {item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0 ? (
-                    <span className="chip small paper-health-alert">Weak section</span>
-                  ) : null}
-                </div>
-                <div className="paper-section-grid">
-                  <label>
-                    Title
+                <div className="paper-section-inline-row">
+                  <label className="paper-field-block">
+                    <span>Title</span>
                     <input
                       value={item.title}
                       onChange={(event) =>
@@ -7591,8 +8528,8 @@ function newStudyResult(): ResearchStudyResult {
                       }
                     />
                   </label>
-                  <label>
-                    Status
+                  <label className="paper-field-block">
+                    <span>Status</span>
                     <select
                       value={item.status}
                       onChange={(event) =>
@@ -7605,10 +8542,84 @@ function newStudyResult(): ResearchStudyResult {
                     </select>
                   </label>
                 </div>
+                <div className="paper-evidence-summary">
+                  <div className="paper-evidence-line">
+                    <strong>Questions</strong>
+                    {renderInlineEntities(
+                      item.question_ids
+                        .map((questionId) => questionById.get(questionId))
+                        .filter((question): question is ResearchPaperQuestion => Boolean(question))
+                        .map((question) => ({
+                          id: question.id,
+                          label: question.text || "Question",
+                        })),
+                      "No questions linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>Claims</strong>
+                    {renderInlineEntities(
+                      item.claim_ids
+                        .map((claimId) => claimById.get(claimId))
+                        .filter((claim): claim is ResearchPaperClaim => Boolean(claim))
+                        .map((claim) => ({
+                          id: claim.id,
+                          label: claim.text || "Claim",
+                        })),
+                      "No claims linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>References</strong>
+                    {renderInlineEntities(
+                      item.reference_ids
+                        .map((referenceId) => referenceById.get(referenceId))
+                        .filter((reference): reference is ResearchReference => Boolean(reference))
+                        .map((reference) => ({
+                          id: reference.id,
+                          label: reference.title || "Reference",
+                          onClick: () => {
+                            setTab("references");
+                            openEditReferenceModal(reference);
+                          },
+                        })),
+                      "No references linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>Logs</strong>
+                    {renderInlineEntities(
+                      item.note_ids
+                        .map((noteId) => noteById.get(noteId))
+                        .filter((note): note is ResearchNote => Boolean(note))
+                        .map((note) => ({
+                          id: note.id,
+                          label: noteLabel(note),
+                          onClick: () => {
+                            setTab("notes");
+                            setActiveInboxNoteId(note.id);
+                          },
+                        })),
+                      "No logs linked",
+                    )}
+                  </div>
+                  <div className="paper-evidence-line">
+                    <strong>Results</strong>
+                    {renderInlineEntities(
+                      item.result_ids
+                        .map((resultId) => resultById.get(resultId))
+                        .filter((result): result is ResearchStudyResult => Boolean(result))
+                        .map((result) => ({
+                          id: result.id,
+                          label: resultLabel(result),
+                          onClick: () => setTab("iterations"),
+                        })),
+                      "No results linked",
+                    )}
+                  </div>
+                </div>
                 <details className="paper-link-details">
-                  <summary className="paper-link-toggle">
-                    {item.question_ids.length + item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length} evidence links
-                  </summary>
+                  <summary className="paper-link-toggle">Edit links</summary>
                   <div className="paper-link-block">
                     <strong>Questions</strong>
                     <div className="paper-link-group">
@@ -7643,12 +8654,12 @@ function newStudyResult(): ResearchStudyResult {
                     </div>
                   </div>
                   <div className="paper-link-block">
-                    <strong>Notes</strong>
+                    <strong>Logs</strong>
                     <div className="paper-link-group">
                       {collectionNotes.map((note) => (
                         <label key={`${item.id}-section-note-${note.id}`} className="paper-link-chip">
                           <input type="checkbox" checked={item.note_ids.includes(note.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, note_ids: toggleId(entry.note_ids, note.id) } : entry))} />
-                          <span>{note.title || "Note"}</span>
+                          <span>{noteLabel(note)}</span>
                         </label>
                       ))}
                     </div>
@@ -7659,18 +8670,16 @@ function newStudyResult(): ResearchStudyResult {
                       {collectionResults.map((result) => (
                         <label key={`${item.id}-section-result-${result.id}`} className="paper-link-chip">
                           <input type="checkbox" checked={item.result_ids.includes(result.id)} onChange={() => setPaperSections((items) => items.map((entry) => entry.id === item.id ? { ...entry, result_ids: toggleId(entry.result_ids, result.id) } : entry))} />
-                          <span>{result.title || "Result"}</span>
+                          <span>{resultLabel(result)}</span>
                         </label>
                       ))}
                     </div>
                   </div>
                 </details>
-              </div>
+              </article>
             ))}
           </div>
-        </details>
-          </>
-        ) : null}
+        </section>
       </div>
     );
   }
@@ -7700,13 +8709,32 @@ function newStudyResult(): ResearchStudyResult {
     if (!selectedCollectionId) {
       return <p className="empty-message">Select a study to manage its files.</p>;
     }
+
+    const fileSearchItems = studyFiles.map((file) => ({
+      id: file.id,
+      label: file.original_filename,
+      icon: faFile,
+      section: file.mime_type || undefined,
+    }));
+
     return (
-      <div className="workspace-browser-page study-files-page">
-        <div className="workspace-browser-summary">
-          <div className="workspace-browser-stats">
+      <div className="study-files-shell">
+        <div className="setup-summary-bar">
+          <div className="setup-summary-stats">
             <span>{studyFiles.length} file{studyFiles.length === 1 ? "" : "s"}</span>
           </div>
-          <div className="workspace-browser-actions">
+          <div className="workspace-browser-summary-actions">
+            <div className="kanban-view-toggle">
+              <button type="button" className={`ghost icon-only kanban-view-btn${filesView === "grid" ? " active" : ""}`} onClick={() => setFilesView("grid")} title="Grid view">
+                <FontAwesomeIcon icon={faGrip} />
+              </button>
+              <button type="button" className={`ghost icon-only kanban-view-btn${filesView === "list" ? " active" : ""}`} onClick={() => setFilesView("list")} title="List view">
+                <FontAwesomeIcon icon={faList} />
+              </button>
+            </div>
+            <button type="button" className="ghost icon-text-button small" onClick={() => setFileSearchOpen(true)} title="Search files (Ctrl+F)">
+              <FontAwesomeIcon icon={faSearch} /> Search
+            </button>
             <input
               ref={quickLogFileInputRef}
               type="file"
@@ -7726,40 +8754,59 @@ function newStudyResult(): ResearchStudyResult {
             </button>
           </div>
         </div>
+
         {studyFiles.length === 0 ? (
           <p className="empty-message">No files in this study.</p>
-        ) : (
-          <div className="workspace-browser-grid study-files-grid">
+        ) : filesView === "grid" ? (
+          <div className="files-grid">
             {studyFiles.map((file) => (
-              <div key={file.id} className="workspace-browser-card study-file-card">
-                <div className="workspace-browser-card-top">
-                  <span className="workspace-browser-icon">
-                    <FontAwesomeIcon icon={faFileArrowUp} />
-                  </span>
-                  <span className="chip small">{formatFileSize(file.file_size_bytes)}</span>
+              <div key={file.id} className="file-card" role="button" tabIndex={0} onClick={() => void handleOpenStudyFile(file)}>
+                <div className="file-card-head">
+                  <FontAwesomeIcon icon={faFile} className="file-card-icon" />
+                  <span className="file-card-size">{formatFileSize(file.file_size_bytes)}</span>
                 </div>
-                <div className="workspace-browser-card-body">
-                  <strong>{file.original_filename}</strong>
-                  <p>{file.uploaded_by_name || "Unknown uploader"}</p>
+                <strong className="file-card-name">{file.original_filename}</strong>
+                <div className="file-card-meta">
+                  <span>{file.uploaded_by_name || "Unknown"}</span>
+                  <span>{formatRelativeTime(file.created_at)}</span>
                 </div>
-                <div className="workspace-browser-card-foot">
-                  <div className="workspace-browser-meta-stack">
-                    <span className="workspace-browser-meta">{file.mime_type || "application/octet-stream"}</span>
-                    <span className="workspace-browser-meta">{formatRelativeTime(file.created_at)}</span>
-                  </div>
-                  <div className="workspace-browser-card-actions">
-                    <button type="button" className="ghost" onClick={() => void handleOpenStudyFile(file)}>
-                      Open
-                    </button>
-                    <button type="button" onClick={() => void handleDeleteStudyFile(file.id)}>
-                      Delete
-                    </button>
-                  </div>
+                <div className="file-card-actions">
+                  <button type="button" className="ghost" tabIndex={-1} onClick={(e) => { e.stopPropagation(); void handleOpenStudyFile(file); }}>Open</button>
+                  {!isStudent ? <button type="button" className="ghost" tabIndex={-1} onClick={(e) => { e.stopPropagation(); void handleDeleteStudyFile(file.id); }}>Delete</button> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="files-list">
+            {studyFiles.map((file) => (
+              <div key={file.id} className="file-list-row" role="button" tabIndex={0} onClick={() => void handleOpenStudyFile(file)}>
+                <FontAwesomeIcon icon={faFile} className="file-list-icon" />
+                <strong className="file-list-name">{file.original_filename}</strong>
+                <span className="file-list-meta">{formatFileSize(file.file_size_bytes)}</span>
+                <span className="file-list-meta">{file.uploaded_by_name || "Unknown"}</span>
+                <span className="file-list-meta">{formatRelativeTime(file.created_at)}</span>
+                <div className="file-list-actions">
+                  <button type="button" className="ghost" tabIndex={-1} onClick={(e) => { e.stopPropagation(); void handleOpenStudyFile(file); }}>Open</button>
+                  {!isStudent ? <button type="button" className="ghost" tabIndex={-1} onClick={(e) => { e.stopPropagation(); void handleDeleteStudyFile(file.id); }}>Delete</button> : null}
                 </div>
               </div>
             ))}
           </div>
         )}
+
+        {fileSearchOpen ? (
+          <CommandPalette
+            items={fileSearchItems}
+            onSelect={(id) => {
+              setFileSearchOpen(false);
+              const file = studyFiles.find((f) => f.id === id);
+              if (file) void handleOpenStudyFile(file);
+            }}
+            onClose={() => setFileSearchOpen(false)}
+            aggressiveKeyboardCapture
+          />
+        ) : null}
       </div>
     );
   }
@@ -8365,9 +9412,6 @@ function newStudyResult(): ResearchStudyResult {
 
     const synthesis = parseSynthesisPayload(collectionDetail.ai_synthesis);
     const collectionNotes = notes.filter((item) => item.collection_id === selectedCollectionId);
-    const recentNotes = [...collectionNotes].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
-    const recentReferences = [...references].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
-    const recentResults = sortedStudyResults().slice(0, 4);
     const unprocessedInboxCount = collectionNotes.filter(
       (note) =>
         !paperQuestions.some((item) => item.note_ids.includes(note.id)) &&
@@ -8376,32 +9420,34 @@ function newStudyResult(): ResearchStudyResult {
     ).length;
     const unsupportedClaims = paperClaims.filter((item) => item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
     const weakSections = paperSections.filter((item) => item.claim_ids.length + item.reference_ids.length + item.note_ids.length + item.result_ids.length === 0).length;
-    const nextActions = [
-      !paperSubmissionDeadline ? "Set the paper submission deadline." : null,
-      unprocessedInboxCount > 0 ? `Process ${unprocessedInboxCount} inbox item${unprocessedInboxCount !== 1 ? "s" : ""}.` : null,
-      studyResults.length === 0 ? "Create the first result from an iteration review." : null,
-      unsupportedClaims > 0 ? `Add evidence for ${unsupportedClaims} unsupported claim${unsupportedClaims !== 1 ? "s" : ""}.` : null,
-      weakSections > 0 ? `Strengthen ${weakSections} weak section${weakSections !== 1 ? "s" : ""}.` : null,
-      references.length === 0 ? "Import the first references from Bibliography." : null,
-    ].filter(Boolean) as string[];
 
-    const actionTargets: Record<string, Tab> = {
-      deadline: "paper",
-      inbox: "notes",
-      result: "iterations",
-      claim: "paper",
-      section: "paper",
-      reference: "references",
-    };
-    function actionTab(text: string): Tab {
-      for (const [key, tab] of Object.entries(actionTargets)) {
-        if (text.toLowerCase().includes(key)) return tab;
-      }
-      return "overview";
-    }
+    const attentionItems = [
+      !paperSubmissionDeadline ? { text: "Set the paper submission deadline", level: "alert" as const, tab: "paper" as Tab } : null,
+      unprocessedInboxCount > 0 ? { text: `${unprocessedInboxCount} inbox item${unprocessedInboxCount !== 1 ? "s" : ""} to process`, level: "warn" as const, tab: "notes" as Tab } : null,
+      studyResults.length === 0 ? { text: "No results yet — create one from an iteration review", level: "info" as const, tab: "iterations" as Tab } : null,
+      unsupportedClaims > 0 ? { text: `${unsupportedClaims} claim${unsupportedClaims !== 1 ? "s" : ""} need${unsupportedClaims === 1 ? "s" : ""} evidence`, level: "alert" as const, tab: "paper" as Tab } : null,
+      weakSections > 0 ? { text: `${weakSections} section${weakSections !== 1 ? "s" : ""} need${weakSections === 1 ? "s" : ""} more support`, level: "alert" as const, tab: "paper" as Tab } : null,
+      references.length === 0 ? { text: "Import your first references from Bibliography", level: "info" as const, tab: "references" as Tab } : null,
+    ].filter(Boolean) as { text: string; level: "alert" | "warn" | "info"; tab: Tab }[];
+
+    // Unified recent activity feed
+    const recentActivity: { id: string; kind: "result" | "reference" | "log"; title: string; meta: string; date: string; tab: Tab }[] = [
+      ...sortedStudyResults().slice(0, 3).map((r) => ({ id: r.id, kind: "result" as const, title: r.title, meta: r.summary || "No summary", date: r.updated_at || r.created_at || "", tab: "iterations" as Tab })),
+      ...[...references].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 3).map((r) => ({ id: r.id, kind: "reference" as const, title: r.title, meta: r.authors.join(", ") || "—", date: r.created_at, tab: "references" as Tab })),
+      ...[...collectionNotes].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 3).map((n) => ({ id: n.id, kind: "log" as const, title: n.title, meta: n.author_name || "—", date: n.created_at, tab: "notes" as Tab })),
+    ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+
+    // Context links summary
+    const linkChips: { label: string; code: string }[] = [
+      ...collectionDetail.wp_ids.map((id) => { const item = wps.find((e) => e.id === id); return item ? { label: "WP", code: item.code } : null; }).filter(Boolean) as { label: string; code: string }[],
+      ...collectionDetail.task_ids.map((id) => { const item = tasks.find((e) => e.id === id); return item ? { label: "Task", code: item.code } : null; }).filter(Boolean) as { label: string; code: string }[],
+      ...collectionDetail.deliverable_ids.map((id) => { const item = deliverables.find((e) => e.id === id); return item ? { label: "Del", code: item.code } : null; }).filter(Boolean) as { label: string; code: string }[],
+    ];
+    const hasLinks = linkChips.length > 0 || collectionDetail.meetings.length > 0;
 
     return (
-      <div className="research-overview">
+      <div className="ov2">
+        {/* ── Focus ── */}
         {editingStudyFocus ? (
           <input
             className="study-overview-description-input"
@@ -8434,330 +9480,208 @@ function newStudyResult(): ResearchStudyResult {
           </p>
         )}
 
-        <div className="overview-stat-grid">
-          <button type="button" className={`overview-stat-box${!paperSubmissionDeadline ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>
-            <span className="overview-stat-value">{paperSubmissionDeadline ? new Date(paperSubmissionDeadline).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</span>
-            <span className="overview-stat-label">Deadline</span>
-          </button>
-          <button type="button" className="overview-stat-box" onClick={() => setTab("references")}>
-            <span className="overview-stat-value">{references.length}</span>
-            <span className="overview-stat-label">References</span>
-          </button>
-          <button type="button" className={`overview-stat-box${unprocessedInboxCount > 0 ? " stat-warn" : ""}`} onClick={() => setTab("notes")}>
-            <span className="overview-stat-value">{collectionNotes.length}</span>
-            <span className="overview-stat-label">Inbox{unprocessedInboxCount > 0 ? ` (${unprocessedInboxCount} new)` : ""}</span>
-          </button>
-          <button type="button" className="overview-stat-box" onClick={() => setTab("iterations")}>
-            <span className="overview-stat-value">{studyResults.length}</span>
-            <span className="overview-stat-label">Results</span>
-          </button>
-          <button type="button" className={`overview-stat-box${unsupportedClaims > 0 ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>
-            <span className="overview-stat-value">{paperClaims.length}</span>
-            <span className="overview-stat-label">Claims{unsupportedClaims > 0 ? ` (${unsupportedClaims} weak)` : ""}</span>
-          </button>
-          <button type="button" className={`overview-stat-box${weakSections > 0 ? " stat-alert" : ""}`} onClick={() => setTab("paper")}>
-            <span className="overview-stat-value">{paperSections.length}</span>
-            <span className="overview-stat-label">Sections{weakSections > 0 ? ` (${weakSections} weak)` : ""}</span>
-          </button>
-        </div>
-
-        {nextActions.length > 0 ? (
-          <div className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info">
-                <strong>Next Actions</strong>
-              </div>
-            </div>
-            <div className="overview-action-list">
-              {nextActions.map((item) => (
-                <button key={item} type="button" className={`overview-action-item${item.includes("unsupported") || item.includes("weak") || item.includes("deadline") ? " action-alert" : ""}`} onClick={() => setTab(actionTab(item))}>
-                  <span className="overview-action-dot" />
-                  {item}
-                  <FontAwesomeIcon icon={faChevronRight} className="overview-action-arrow" />
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="meetings-detail-section">
-            <div className="overview-action-list">
-              <p className="muted-small" style={{ padding: "8px 14px" }}>Study is in a good state.</p>
-            </div>
-          </div>
-        )}
-
-        <div className="paper-columns overview-recents">
-          <div className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info"><strong>Recent Results</strong></div>
-              <button type="button" className="ghost icon-text-button small" onClick={() => setTab("iterations")}>View all</button>
-            </div>
-            <div className="paper-stack">
-              {recentResults.length === 0 ? <p className="muted-small">No results.</p> : null}
-              {recentResults.map((result) => (
-                <button key={result.id} type="button" className="paper-item-card overview-clickable" onClick={() => setTab("iterations")}>
-                  <strong>{result.title}</strong>
-                  <span className="muted-small">{result.summary || "No summary."}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info"><strong>Recent References</strong></div>
-              <button type="button" className="ghost icon-text-button small" onClick={() => setTab("references")}>View all</button>
-            </div>
-            <div className="paper-stack">
-              {recentReferences.length === 0 ? <p className="muted-small">No references.</p> : null}
-              {recentReferences.map((reference) => (
-                <button key={reference.id} type="button" className="paper-item-card overview-clickable" onClick={() => setTab("references")}>
-                  <strong>{reference.title}</strong>
-                  <span className="muted-small">{reference.authors.join(", ") || "-"}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="meetings-detail-section">
-            <div className="meetings-detail-head">
-              <div className="meetings-detail-info"><strong>Recent Inbox</strong></div>
-              <button type="button" className="ghost icon-text-button small" onClick={() => setTab("notes")}>View all</button>
-            </div>
-            <div className="paper-stack">
-              {recentNotes.length === 0 ? <p className="muted-small">No inbox items.</p> : null}
-              {recentNotes.map((note) => (
-                <button key={note.id} type="button" className="paper-item-card overview-clickable" onClick={() => setTab("notes")}>
-                  <strong>{note.title}</strong>
-                  <span className="muted-small">{formatRelativeTime(note.created_at)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <FontAwesomeIcon icon={faLink} />
-              <strong>Context Links</strong>
-            </div>
-            {!isStudent ? (
-              <button type="button" className="meetings-new-btn" onClick={openWbsModal}>
-                <FontAwesomeIcon icon={faPen} /> Edit
+        {/* ── Summary line ── */}
+        <div className="ov2-summary">
+          <button type="button" className="ov2-summary-item" onClick={() => setTab("references")}>{references.length} refs</button>
+          <span className="ov2-dot" />
+          <button type="button" className="ov2-summary-item" onClick={() => setTab("notes")}>{collectionNotes.length} logs</button>
+          <span className="ov2-dot" />
+          <button type="button" className="ov2-summary-item" onClick={() => setTab("iterations")}>{studyResults.length} results</button>
+          <span className="ov2-dot" />
+          <button type="button" className="ov2-summary-item" onClick={() => setTab("paper")}>{paperClaims.length} claims</button>
+          <span className="ov2-dot" />
+          <button type="button" className="ov2-summary-item" onClick={() => setTab("paper")}>{paperSections.length} sections</button>
+          {paperSubmissionDeadline ? (
+            <>
+              <span className="ov2-dot" />
+              <button type="button" className="ov2-summary-item" onClick={() => setTab("paper")}>
+                deadline {new Date(paperSubmissionDeadline).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
               </button>
-            ) : null}
-          </div>
-          <div className="research-overview-body">
-            <div className="research-chip-group">
-              {collectionDetail.wp_ids.map((id) => {
-                const item = wps.find((entry) => entry.id === id);
-                return item ? (
-                  <span key={id} className="chip small">
-                    <span className="chip-type-label">WP</span> {item.code}
-                  </span>
-                ) : null;
-              })}
-              {collectionDetail.task_ids.map((id) => {
-                const item = tasks.find((entry) => entry.id === id);
-                return item ? (
-                  <span key={id} className="chip small">
-                    <span className="chip-type-label">Task</span> {item.code}
-                  </span>
-                ) : null;
-              })}
-              {collectionDetail.deliverable_ids.map((id) => {
-                const item = deliverables.find((entry) => entry.id === id);
-                return item ? (
-                  <span key={id} className="chip small">
-                    <span className="chip-type-label">Del</span> {item.code}
-                  </span>
-                ) : null;
-              })}
-              {collectionDetail.wp_ids.length === 0 &&
-              collectionDetail.task_ids.length === 0 &&
-              collectionDetail.deliverable_ids.length === 0 &&
-              collectionDetail.meetings.length === 0 ? (
-                <span className="muted-small">No links.</span>
-              ) : null}
-            </div>
-            {collectionDetail.meetings.length > 0 ? (
-              <div className="research-meeting-list">
-                {collectionDetail.meetings.map((meeting) => (
-                  <div key={meeting.id} className="research-meeting-row">
-                    <span className="chip small">
-                      <FontAwesomeIcon icon={faCalendarDay} /> {meeting.title}
-                    </span>
-                    <span className="muted-small">{new Date(meeting.starts_at).toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
+            </>
+          ) : null}
         </div>
 
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <FontAwesomeIcon icon={faUsers} />
-              <strong>Team Members</strong>
-              <span className="delivery-tab-count">{collectionDetail.members.length}</span>
-            </div>
-            {!isStudent ? (
-              <button type="button" className="meetings-new-btn" onClick={() => setMemberModalOpen(true)}>
-                <FontAwesomeIcon icon={faPlus} /> Add
+        {/* ── AI Synthesis ── */}
+        {!isStudent ? (
+          <section className="ov2-section">
+            <div className="ov2-section-head">
+              <span className="ov2-section-label">Synthesis</span>
+              {collectionDetail.ai_synthesis_at ? <span className="ov2-section-meta">{formatRelativeTime(collectionDetail.ai_synthesis_at)}</span> : null}
+              <button type="button" className="ghost icon-text-button small" disabled={synthesizing} onClick={handleSynthesize}>
+                <FontAwesomeIcon icon={faMagicWandSparkles} /> {synthesizing ? "Running…" : "Synthesize"}
               </button>
-            ) : null}
-          </div>
-          {collectionDetail.members.length === 0 ? (
-            <p className="muted-small research-overview-body">No members.</p>
-          ) : (
-            <div className="research-member-list">
-              {collectionDetail.members.map((member: ResearchCollectionMember) => (
-                <div key={member.id} className="research-member-row">
-                  <div>
-                    <strong>{member.member_name}</strong>
-                    <span className="muted-small research-inline-meta">{member.organization_short_name}</span>
-                  </div>
-                  {!isStudent ? (
-                    <div className="research-member-actions">
-                      <select value={member.role} onChange={(event) => void handleUpdateMemberRole(member.id, event.target.value)}>
-                        <option value="lead">Lead</option>
-                        <option value="contributor">Contributor</option>
-                        <option value="reviewer">Reviewer</option>
-                      </select>
-                      <button type="button" className="ghost docs-action-btn" title="Remove" onClick={() => handleRemoveMember(member.id)}>
-                        <FontAwesomeIcon icon={faXmark} />
+            </div>
+            {collectionDetail.ai_synthesis && synthesis ? (
+              <div className="ov2-synthesis">
+                <p className="ov2-synthesis-summary">{synthesis.summary || collectionDetail.ai_synthesis}</p>
+                {(synthesis.findings?.length || synthesis.knowledge_state?.length || synthesis.open_questions?.length || synthesis.decisions?.length || synthesis.tasks?.length || synthesis.evidence?.length || synthesis.discussion_points?.length) ? (
+                  <>
+                    {!synthesisExpanded ? (
+                      <button type="button" className="ghost icon-text-button small" onClick={() => setSynthesisExpanded(true)}>
+                        <FontAwesomeIcon icon={faChevronDown} /> Show details
                       </button>
-                    </div>
-                  ) : (
-                    <span className="chip small">{member.role}</span>
-                  )}
+                    ) : (
+                      <>
+                        <button type="button" className="ghost icon-text-button small" onClick={() => setSynthesisExpanded(false)}>
+                          <FontAwesomeIcon icon={faChevronUp} /> Hide details
+                        </button>
+                        <div className="ov2-synthesis-details">
+                          {synthesis.findings?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Findings</strong>
+                              <ul>{synthesis.findings.map((item) => <li key={item}>{item}</li>)}</ul>
+                            </div>
+                          ) : null}
+                          {synthesis.knowledge_state?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Knowledge State</strong>
+                              <ul>{synthesis.knowledge_state.map((item) => <li key={item}>{item}</li>)}</ul>
+                            </div>
+                          ) : null}
+                          {synthesis.open_questions?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Open Questions</strong>
+                              <ul>{synthesis.open_questions.map((item) => <li key={item}>{item}</li>)}</ul>
+                            </div>
+                          ) : null}
+                          {synthesis.decisions?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Decisions</strong>
+                              <ul>{synthesis.decisions.map((item) => <li key={item}>{item}</li>)}</ul>
+                            </div>
+                          ) : null}
+                          {synthesis.discussion_points?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Discussions</strong>
+                              <ul>{synthesis.discussion_points.map((item) => <li key={item}>{item}</li>)}</ul>
+                            </div>
+                          ) : null}
+                          {synthesis.tasks?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Tasks</strong>
+                              <ul>{synthesis.tasks.map((item) => <li key={item}>{item}</li>)}</ul>
+                            </div>
+                          ) : null}
+                          {synthesis.output_readiness ? (
+                            <div className="ov2-synth-group">
+                              <strong>Output Readiness — {synthesis.output_readiness.status || "Unknown"}</strong>
+                              <ul>
+                                {synthesis.output_readiness.missing?.map((item) => <li key={item}>Missing: {item}</li>)}
+                                {synthesis.output_readiness.next_actions?.map((item) => <li key={item}>Next: {item}</li>)}
+                              </ul>
+                            </div>
+                          ) : null}
+                          {synthesis.evidence?.length ? (
+                            <div className="ov2-synth-group">
+                              <strong>Evidence</strong>
+                              <ul>{synthesis.evidence.map((item, i) => <li key={`ev-${i}`}>{item.claim}{item.sources?.length ? ` — ${item.sources.join(", ")}` : ""}</li>)}</ul>
+                            </div>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            ) : (
+              <p className="ov2-empty">No synthesis yet. Click Synthesize to generate one.</p>
+            )}
+          </section>
+        ) : null}
+
+        {/* ── Attention ── */}
+        {attentionItems.length > 0 ? (
+          <section className="ov2-section">
+            <div className="ov2-section-head">
+              <span className="ov2-section-label">Attention</span>
+              <span className="ov2-section-meta">{attentionItems.length} item{attentionItems.length !== 1 ? "s" : ""}</span>
+            </div>
+            <div className="ov2-attention-list">
+              {attentionItems.map((item) => (
+                <button key={item.text} type="button" className={`ov2-attention-card level-${item.level}`} onClick={() => setTab(item.tab)}>
+                  <span className="ov2-attention-dot" />
+                  <span className="ov2-attention-text">{item.text}</span>
+                  <FontAwesomeIcon icon={faChevronRight} className="ov2-attention-arrow" />
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {/* ── What's Moving ── */}
+        {recentActivity.length > 0 ? (
+          <section className="ov2-section">
+            <div className="ov2-section-head">
+              <span className="ov2-section-label">What's Moving</span>
+            </div>
+            <div className="ov2-activity-list">
+              {recentActivity.map((item) => (
+                <button key={`${item.kind}-${item.id}`} type="button" className="ov2-activity-row" onClick={() => setTab(item.tab)}>
+                  <span className={`ov2-activity-kind kind-${item.kind}`}>{item.kind}</span>
+                  <strong className="ov2-activity-title">{item.title}</strong>
+                  <span className="ov2-activity-meta">{item.meta}</span>
+                  <span className="ov2-activity-time">{formatRelativeTime(item.date)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {/* ── Team ── */}
+        <section className="ov2-section">
+          <div className="ov2-section-head">
+            <span className="ov2-section-label">Team</span>
+            <span className="ov2-section-meta">{collectionDetail.members.length}</span>
+            {!isStudent ? (
+              <button type="button" className="ghost icon-text-button small" onClick={() => setMemberModalOpen(true)}>
+                <FontAwesomeIcon icon={faPlus} /> Manage
+              </button>
+            ) : null}
+          </div>
+          {collectionDetail.members.length > 0 ? (
+            <div className="ov2-team-row">
+              {collectionDetail.members.map((member: ResearchCollectionMember) => (
+                <div key={member.id} className="ov2-team-member">
+                  <LogAvatar name={member.member_name} avatarUrl={member.avatar_url} />
+                  <div className="ov2-team-info">
+                    <strong>{member.member_name}</strong>
+                    <span>{member.role}</span>
+                  </div>
                 </div>
               ))}
             </div>
+          ) : (
+            <p className="ov2-empty">No members yet.</p>
           )}
-        </div>
+        </section>
 
-        {!isStudent ? (
-        <div className="meetings-detail-section">
-          <div className="meetings-detail-head">
-            <div className="meetings-detail-info">
-              <FontAwesomeIcon icon={faMagicWandSparkles} />
-              <strong>AI Synthesis</strong>
-            </div>
-            <button type="button" className="meetings-new-btn" disabled={synthesizing} onClick={handleSynthesize}>
-              {synthesizing ? "Synthesizing..." : "Synthesize"}
+        {/* ── Links (collapsed) ── */}
+        {hasLinks || !isStudent ? (
+          <section className="ov2-section ov2-links-section">
+            <button type="button" className="ov2-links-toggle" onClick={() => setOverviewLinksExpanded((v) => !v)}>
+              <FontAwesomeIcon icon={faLink} />
+              <span className="ov2-section-label">Links</span>
+              {linkChips.length > 0 ? <span className="ov2-section-meta">{linkChips.map((c) => `${c.label} ${c.code}`).join(", ")}{collectionDetail.meetings.length > 0 ? ` · ${collectionDetail.meetings.length} meeting${collectionDetail.meetings.length !== 1 ? "s" : ""}` : ""}</span> : <span className="ov2-section-meta">None</span>}
+              <FontAwesomeIcon icon={overviewLinksExpanded ? faChevronUp : faChevronDown} className="ov2-links-chevron" />
             </button>
-          </div>
-          <div className="research-overview-body">
-            {collectionDetail.ai_synthesis ? (
-              <>
-                {synthesis?.summary ? <p className="research-synthesis-text">{synthesis.summary}</p> : <p className="research-synthesis-text">{collectionDetail.ai_synthesis}</p>}
-                {synthesis?.knowledge_state?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Knowledge State</strong>
-                    <div className="research-bullet-stack">
-                      {synthesis.knowledge_state.map((item) => (
-                        <span key={item} className="chip small">{item}</span>
-                      ))}
-                    </div>
-                  </div>
+            {overviewLinksExpanded ? (
+              <div className="ov2-links-body">
+                <div className="research-chip-group">
+                  {linkChips.map((c, i) => (
+                    <span key={`lk-${i}`} className="chip small"><span className="chip-type-label">{c.label}</span> {c.code}</span>
+                  ))}
+                  {collectionDetail.meetings.map((meeting) => (
+                    <span key={meeting.id} className="chip small"><FontAwesomeIcon icon={faCalendarDay} /> {meeting.title}</span>
+                  ))}
+                </div>
+                {!isStudent ? (
+                  <button type="button" className="ghost icon-text-button small" onClick={openWbsModal}>
+                    <FontAwesomeIcon icon={faPen} /> Edit links
+                  </button>
                 ) : null}
-                {synthesis?.findings?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Findings</strong>
-                    <div className="research-bullet-stack">
-                      {synthesis.findings.map((item) => (
-                        <span key={item} className="chip small">{item}</span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {synthesis?.discussion_points?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Discussions</strong>
-                    <div className="research-bullet-stack">
-                      {synthesis.discussion_points.map((item) => (
-                        <span key={item} className="chip small">{item}</span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {synthesis?.decisions?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Decisions</strong>
-                    <div className="research-bullet-stack">
-                      {synthesis.decisions.map((item) => (
-                        <span key={item} className="chip small">{item}</span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {synthesis?.tasks?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Tasks</strong>
-                    <div className="research-bullet-stack">
-                      {synthesis.tasks.map((item) => (
-                        <span key={item} className="chip small">{item}</span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {synthesis?.output_readiness ? (
-                  <div className="research-synthesis-group">
-                    <strong>Output Readiness</strong>
-                    <div className="research-meta-grid">
-                      <span className="muted-small">Status: {synthesis.output_readiness.status || "-"}</span>
-                    </div>
-                    {synthesis.output_readiness.missing?.length ? (
-                      <div className="research-bullet-stack">
-                        {synthesis.output_readiness.missing.map((item) => (
-                          <span key={item} className="chip small">{item}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {synthesis.output_readiness.next_actions?.length ? (
-                      <div className="research-bullet-stack">
-                        {synthesis.output_readiness.next_actions.map((item) => (
-                          <span key={item} className="chip small">{item}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {synthesis?.open_questions?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Open Questions</strong>
-                    <div className="research-bullet-stack">
-                      {synthesis.open_questions.map((item) => (
-                        <span key={item} className="chip small">{item}</span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {synthesis?.evidence?.length ? (
-                  <div className="research-synthesis-group">
-                    <strong>Evidence</strong>
-                    <div className="research-evidence-list">
-                      {synthesis.evidence.map((item, index) => (
-                        <div key={`${item.claim || "claim"}-${index}`} className="research-evidence-row">
-                          <span>{item.claim || "-"}</span>
-                          {item.sources?.length ? <span className="muted-small">{item.sources.join(", ")}</span> : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {collectionDetail.ai_synthesis_at ? (
-                  <span className="muted-small">Generated {formatRelativeTime(collectionDetail.ai_synthesis_at)}</span>
-                ) : null}
-              </>
-            ) : (
-              <p className="muted-small">No synthesis.</p>
-            )}
-          </div>
-        </div>
+              </div>
+            ) : null}
+          </section>
         ) : null}
       </div>
     );

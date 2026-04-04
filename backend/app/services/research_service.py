@@ -7,14 +7,14 @@ import uuid
 import io
 from xml.etree import ElementTree as ET
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import BinaryIO
 from urllib.parse import quote
 
 import logging
 import httpx
 
-from sqlalchemy import Text, cast, delete, func, insert, or_, select
+from sqlalchemy import Text, cast, case, delete, func, insert, or_, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -1653,7 +1653,10 @@ class ResearchService:
     def _note_count(self, collection_id: uuid.UUID) -> int:
         return int(
             self.db.scalar(
-                select(func.count()).select_from(ResearchNote).where(ResearchNote.collection_id == collection_id)
+                select(func.count()).select_from(ResearchNote).where(
+                    ResearchNote.collection_id == collection_id,
+                    ResearchNote.note_type != NoteType.index,
+                )
             ) or 0
         )
 
@@ -1665,6 +1668,453 @@ class ResearchService:
                 )
             ) or 0
         )
+
+    def build_collection_graph(
+        self,
+        collection_ids: list[uuid.UUID],
+        *,
+        project_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+    ) -> dict[str, list[dict]]:
+        if not collection_ids:
+            return {"nodes": [], "edges": []}
+
+        stmt = select(ResearchCollection).where(ResearchCollection.id.in_(collection_ids))
+        if project_id and project_id != GLOBAL_RESEARCH_PROJECT_ID:
+            self._get_project(project_id)
+            stmt = stmt.where(ResearchCollection.project_id == project_id)
+        if user_id:
+            user_collection_ids = select(ResearchCollectionMember.collection_id).where(
+                (ResearchCollectionMember.user_account_id == user_id)
+                | (ResearchCollectionMember.member_id.in_(
+                    select(TeamMember.id).where(TeamMember.user_account_id == user_id)
+                ))
+            ).scalar_subquery()
+            stmt = stmt.where(ResearchCollection.id.in_(user_collection_ids))
+
+        collections = list(self.db.scalars(stmt).all())
+        if not collections:
+            return {"nodes": [], "edges": []}
+
+        valid_ids = [item.id for item in collections]
+        collection_by_id = {item.id: item for item in collections}
+        nodes: list[dict] = []
+        edges: list[dict] = []
+        node_ids: set[str] = set()
+        edge_ids: set[str] = set()
+
+        def add_node(node: dict) -> None:
+            if node["id"] in node_ids:
+                return
+            node_ids.add(node["id"])
+            nodes.append(node)
+
+        def add_edge(edge: dict) -> None:
+            if edge["id"] in edge_ids or edge["source"] == edge["target"]:
+                return
+            edge_ids.add(edge["id"])
+            edges.append(edge)
+
+        for collection in collections:
+            add_node(
+                {
+                    "id": f"study:{collection.id}",
+                    "label": collection.title or "Untitled Study",
+                    "node_type": "study",
+                    "ref_id": str(collection.id),
+                    "meta": collection.updated_at.isoformat() if collection.updated_at else None,
+                }
+            )
+
+        tag_buckets: dict[str, dict] = {}
+        for collection in collections:
+            for raw_tag in collection.tags or []:
+                label = str(raw_tag).strip()
+                if not label:
+                    continue
+                key = label.lower()
+                bucket = tag_buckets.setdefault(key, {"label": label, "collection_ids": set()})
+                bucket["collection_ids"].add(collection.id)
+
+        note_tag_rows = self.db.execute(
+            select(ResearchNote.collection_id, ResearchNote.tags)
+            .where(
+                ResearchNote.collection_id.in_(valid_ids),
+                ResearchNote.note_type != NoteType.index,
+            )
+        ).all()
+        for collection_id, tags in note_tag_rows:
+            if collection_id is None:
+                continue
+            for raw_tag in tags or []:
+                label = str(raw_tag).strip()
+                if not label:
+                    continue
+                key = label.lower()
+                bucket = tag_buckets.setdefault(key, {"label": label, "collection_ids": set()})
+                bucket["collection_ids"].add(collection_id)
+
+        reference_buckets: dict[str, dict] = {}
+        reference_node_ids_by_key: dict[str, str] = {}
+        tag_node_ids_by_key: dict[str, str] = {}
+        reference_rows = self.db.execute(
+            select(
+                ResearchReference.collection_id,
+                ResearchReference.id,
+                ResearchReference.bibliography_reference_id,
+                ResearchReference.doi,
+                ResearchReference.title,
+                ResearchReference.year,
+                ResearchReference.authors,
+            ).where(ResearchReference.collection_id.in_(valid_ids))
+        ).all()
+        for collection_id, reference_id, bibliography_reference_id, doi, title, year, authors in reference_rows:
+            if collection_id is None:
+                continue
+            normalized_title = (title or "").strip().lower()
+            key = (
+                f"bib:{bibliography_reference_id}"
+                if bibliography_reference_id
+                else f"doi:{str(doi).strip().lower()}"
+                if doi
+                else f"title:{normalized_title}"
+                if normalized_title
+                else None
+            )
+            if not key:
+                continue
+            lead_author = (authors or [None])[0]
+            lead_label = str(lead_author).split(" ")[-1] if lead_author else "Reference"
+            bucket = reference_buckets.setdefault(
+                key,
+                {
+                    "label": title or (f"{lead_label} {year}" if year else lead_label),
+                    "ref_id": str(reference_id),
+                    "collection_ids": set(),
+                },
+            )
+            bucket["collection_ids"].add(collection_id)
+
+        for tag_key, bucket in tag_buckets.items():
+            tag_node_ids_by_key[tag_key] = f"tag:{tag_key}"
+            add_node(
+                {
+                    "id": tag_node_ids_by_key[tag_key],
+                    "label": f"#{bucket['label']}",
+                    "node_type": "tag",
+                    "ref_id": bucket["label"],
+                    "meta": f"{len(bucket['collection_ids'])} studies",
+                }
+            )
+            for collection_id in bucket["collection_ids"]:
+                if collection_id not in collection_by_id:
+                    continue
+                add_edge(
+                    {
+                        "id": f"edge:tag:{tag_key}:{collection_id}",
+                        "source": f"study:{collection_id}",
+                        "target": tag_node_ids_by_key[tag_key],
+                        "edge_type": "shares_tag",
+                    }
+                )
+
+        for reference_key, bucket in reference_buckets.items():
+            reference_node_ids_by_key[reference_key] = f"reference:{reference_key}"
+            add_node(
+                {
+                    "id": reference_node_ids_by_key[reference_key],
+                    "label": bucket["label"],
+                    "node_type": "reference",
+                    "ref_id": bucket["ref_id"],
+                    "meta": f"{len(bucket['collection_ids'])} studies",
+                }
+            )
+            for collection_id in bucket["collection_ids"]:
+                if collection_id not in collection_by_id:
+                    continue
+                add_edge(
+                    {
+                        "id": f"edge:reference:{reference_key}:{collection_id}",
+                        "source": f"study:{collection_id}",
+                        "target": reference_node_ids_by_key[reference_key],
+                        "edge_type": "shares_reference",
+                    }
+                )
+
+        note_rows = self.db.execute(
+            select(
+                ResearchNote.id,
+                ResearchNote.collection_id,
+                ResearchNote.title,
+                ResearchNote.content,
+                ResearchNote.tags,
+                ResearchNote.updated_at,
+            ).where(
+                ResearchNote.collection_id.in_(valid_ids),
+                ResearchNote.note_type != NoteType.index,
+            )
+        ).all()
+        note_by_id: dict[uuid.UUID, dict] = {}
+        for note_id, collection_id, title, content, tags, updated_at in note_rows:
+            if collection_id is None or collection_id not in collection_by_id:
+                continue
+            label = (title or "").strip() or "Untitled Log"
+            meta_bits = [collection_by_id[collection_id].title or "Untitled Study"]
+            if updated_at:
+                meta_bits.append(updated_at.date().isoformat())
+            node_id = f"log:{note_id}"
+            note_by_id[note_id] = {
+                "node_id": node_id,
+                "collection_id": collection_id,
+                "tags": [str(item).strip() for item in (tags or []) if str(item).strip()],
+            }
+            add_node(
+                {
+                    "id": node_id,
+                    "label": label,
+                    "node_type": "log",
+                    "ref_id": str(note_id),
+                    "meta": " · ".join(meta_bits),
+                }
+            )
+            add_edge(
+                {
+                    "id": f"edge:study-log:{collection_id}:{note_id}",
+                    "source": f"study:{collection_id}",
+                    "target": node_id,
+                    "edge_type": "contains_log",
+                }
+            )
+            for tag_label in note_by_id[note_id]["tags"]:
+                tag_key = tag_label.lower()
+                tag_node_id = tag_node_ids_by_key.get(tag_key)
+                if not tag_node_id:
+                    continue
+                add_edge(
+                    {
+                        "id": f"edge:log-tag:{note_id}:{tag_key}",
+                        "source": node_id,
+                        "target": tag_node_id,
+                        "edge_type": "has_tag",
+                    }
+                )
+
+        note_reference_rows = self.db.execute(
+            select(research_note_references.c.note_id, research_note_references.c.reference_id)
+            .select_from(
+                research_note_references.join(
+                    ResearchReference,
+                    ResearchReference.id == research_note_references.c.reference_id,
+                )
+            )
+            .where(ResearchReference.collection_id.in_(valid_ids))
+        ).all()
+        reference_key_by_id: dict[uuid.UUID, str] = {}
+        for _, reference_id, bibliography_reference_id, doi, title, _, _ in reference_rows:
+            normalized_title = (title or "").strip().lower()
+            key = (
+                f"bib:{bibliography_reference_id}"
+                if bibliography_reference_id
+                else f"doi:{str(doi).strip().lower()}"
+                if doi
+                else f"title:{normalized_title}"
+                if normalized_title
+                else None
+            )
+            if key:
+                reference_key_by_id[reference_id] = key
+        for note_id, reference_id in note_reference_rows:
+            note_entry = note_by_id.get(note_id)
+            reference_key = reference_key_by_id.get(reference_id)
+            reference_node_id = reference_node_ids_by_key.get(reference_key or "")
+            if not note_entry or not reference_node_id:
+                continue
+            add_edge(
+                {
+                    "id": f"edge:log-reference:{note_id}:{reference_id}",
+                    "source": note_entry["node_id"],
+                    "target": reference_node_id,
+                    "edge_type": "cites_reference",
+                }
+            )
+
+        note_link_rows = self.db.execute(
+            select(research_note_links.c.source_note_id, research_note_links.c.target_note_id)
+            .where(
+                research_note_links.c.source_note_id.in_(note_by_id.keys()),
+                research_note_links.c.target_note_id.in_(note_by_id.keys()),
+            )
+        ).all()
+        for source_note_id, target_note_id in note_link_rows:
+            source_entry = note_by_id.get(source_note_id)
+            target_entry = note_by_id.get(target_note_id)
+            if not source_entry or not target_entry:
+                continue
+            add_edge(
+                {
+                    "id": f"edge:log-link:{source_note_id}:{target_note_id}",
+                    "source": source_entry["node_id"],
+                    "target": target_entry["node_id"],
+                    "edge_type": "links_log",
+                }
+            )
+
+        return {"nodes": nodes, "edges": edges}
+
+    def collection_health_summaries(
+        self,
+        collection_ids: list[uuid.UUID],
+        *,
+        viewer_user_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, dict]:
+        if not collection_ids:
+            return {}
+
+        recent_threshold = datetime.now(timezone.utc) - timedelta(days=7)
+        today = date.today()
+
+        recent_logs = {
+            collection_id: int(count or 0)
+            for collection_id, count in self.db.execute(
+                select(ResearchNote.collection_id, func.count())
+                .where(
+                    ResearchNote.collection_id.in_(collection_ids),
+                    ResearchNote.updated_at >= recent_threshold,
+                    ResearchNote.note_type != NoteType.index,
+                )
+                .group_by(ResearchNote.collection_id)
+            ).all()
+            if collection_id is not None
+        }
+
+        assigned_case = (
+            (ResearchNoteActionItem.status != NoteActionStatus.done)
+            & (ResearchNoteActionItem.assignee_user_id == viewer_user_id)
+            if viewer_user_id
+            else False
+        )
+        action_rows = {
+            collection_id: {
+                "open_action_count": int(open_count or 0),
+                "doing_action_count": int(doing_count or 0),
+                "overdue_action_count": int(overdue_count or 0),
+                "assigned_to_me_action_count": int(assigned_count or 0),
+            }
+            for collection_id, open_count, doing_count, overdue_count, assigned_count in self.db.execute(
+                select(
+                    ResearchNote.collection_id,
+                    func.count(case((ResearchNoteActionItem.status == NoteActionStatus.open, 1))),
+                    func.count(case((ResearchNoteActionItem.status == NoteActionStatus.doing, 1))),
+                    func.count(
+                        case(
+                            (
+                                (ResearchNoteActionItem.status != NoteActionStatus.done)
+                                & (ResearchNoteActionItem.due_date.is_not(None))
+                                & (ResearchNoteActionItem.due_date < today),
+                                1,
+                            )
+                        )
+                    ),
+                    func.count(case((assigned_case, 1))),
+                )
+                .select_from(ResearchNoteActionItem)
+                .join(ResearchNote, ResearchNote.id == ResearchNoteActionItem.note_id)
+                .where(ResearchNote.collection_id.in_(collection_ids))
+                .group_by(ResearchNote.collection_id)
+            ).all()
+            if collection_id is not None
+        }
+
+        activity_days: dict[uuid.UUID, dict[str, int]] = {}
+
+        def add_activity(collection_id: uuid.UUID | None, day_value, count_value) -> None:
+            if collection_id is None or day_value is None:
+                return
+            day_key = day_value.isoformat() if hasattr(day_value, "isoformat") else str(day_value)
+            bucket = activity_days.setdefault(collection_id, {})
+            bucket[day_key] = bucket.get(day_key, 0) + int(count_value or 0)
+
+        note_activity_rows = self.db.execute(
+            select(
+                ResearchNote.collection_id,
+                func.date(ResearchNote.updated_at),
+                func.count(),
+            )
+            .where(
+                ResearchNote.collection_id.in_(collection_ids),
+                ResearchNote.updated_at >= recent_threshold,
+                ResearchNote.note_type != NoteType.index,
+            )
+            .group_by(ResearchNote.collection_id, func.date(ResearchNote.updated_at))
+        ).all()
+        for collection_id, day_value, count_value in note_activity_rows:
+            add_activity(collection_id, day_value, count_value)
+
+        reply_activity_rows = self.db.execute(
+            select(
+                ResearchNote.collection_id,
+                func.date(ResearchNoteReply.created_at),
+                func.count(),
+            )
+            .select_from(ResearchNoteReply)
+            .join(ResearchNote, ResearchNote.id == ResearchNoteReply.note_id)
+            .where(
+                ResearchNote.collection_id.in_(collection_ids),
+                ResearchNoteReply.created_at >= recent_threshold,
+            )
+            .group_by(ResearchNote.collection_id, func.date(ResearchNoteReply.created_at))
+        ).all()
+        for collection_id, day_value, count_value in reply_activity_rows:
+            add_activity(collection_id, day_value, count_value)
+
+        reference_activity_rows = self.db.execute(
+            select(
+                ResearchReference.collection_id,
+                func.date(ResearchReference.created_at),
+                func.count(),
+            )
+            .where(
+                ResearchReference.collection_id.in_(collection_ids),
+                ResearchReference.created_at >= recent_threshold,
+            )
+            .group_by(ResearchReference.collection_id, func.date(ResearchReference.created_at))
+        ).all()
+        for collection_id, day_value, count_value in reference_activity_rows:
+            add_activity(collection_id, day_value, count_value)
+
+        file_activity_rows = self.db.execute(
+            select(
+                ResearchStudyFile.collection_id,
+                func.date(ResearchStudyFile.created_at),
+                func.count(),
+            )
+            .where(
+                ResearchStudyFile.collection_id.in_(collection_ids),
+                ResearchStudyFile.created_at >= recent_threshold,
+            )
+            .group_by(ResearchStudyFile.collection_id, func.date(ResearchStudyFile.created_at))
+        ).all()
+        for collection_id, day_value, count_value in file_activity_rows:
+            add_activity(collection_id, day_value, count_value)
+
+        summaries: dict[uuid.UUID, dict] = {}
+        for collection_id in collection_ids:
+            summaries[collection_id] = {
+                "recent_log_count": recent_logs.get(collection_id, 0),
+                "open_action_count": 0,
+                "doing_action_count": 0,
+                "overdue_action_count": 0,
+                "assigned_to_me_action_count": 0,
+                "last_reviewed_iteration_at": None,
+                "needs_review": False,
+                "activity_days": [],
+            }
+            summaries[collection_id].update(action_rows.get(collection_id, {}))
+            summaries[collection_id]["activity_days"] = [
+                {"date": day_key, "count": count}
+                for day_key, count in sorted(activity_days.get(collection_id, {}).items())
+            ]
+        return summaries
 
     def _ref_note_count(self, reference_id: uuid.UUID) -> int:
         return int(

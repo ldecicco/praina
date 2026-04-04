@@ -249,6 +249,14 @@ class CollectionRead(BaseModel):
     reference_count: int = 0
     note_count: int = 0
     member_count: int = 0
+    recent_log_count: int = 0
+    open_action_count: int = 0
+    doing_action_count: int = 0
+    overdue_action_count: int = 0
+    assigned_to_me_action_count: int = 0
+    last_reviewed_iteration_at: datetime | None = None
+    needs_review: bool = False
+    activity_days: list[dict] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -491,6 +499,30 @@ class BibliographyGraphEdgeRead(BaseModel):
 class BibliographyGraphRead(BaseModel):
     nodes: list[BibliographyGraphNodeRead] = Field(default_factory=list)
     edges: list[BibliographyGraphEdgeRead] = Field(default_factory=list)
+
+
+class CollectionGraphRequest(BaseModel):
+    collection_ids: list[str] = Field(default_factory=list)
+
+
+class CollectionGraphNodeRead(BaseModel):
+    id: str
+    label: str
+    node_type: str
+    ref_id: str | None = None
+    meta: str | None = None
+
+
+class CollectionGraphEdgeRead(BaseModel):
+    id: str
+    source: str
+    target: str
+    edge_type: str
+
+
+class CollectionGraphRead(BaseModel):
+    nodes: list[CollectionGraphNodeRead] = Field(default_factory=list)
+    edges: list[CollectionGraphEdgeRead] = Field(default_factory=list)
 
 
 class BibliographyCollectionCreate(BaseModel):

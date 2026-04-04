@@ -6,6 +6,7 @@ import asyncio
 import json
 import uuid
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
@@ -58,6 +59,10 @@ from app.schemas.research import (
     BibtexImportPayload,
     BibtexImportRead,
     CollectionCreate,
+    CollectionGraphEdgeRead,
+    CollectionGraphNodeRead,
+    CollectionGraphRead,
+    CollectionGraphRequest,
     CollectionDetailRead,
     CollectionMeetingPayload,
     CollectionMeetingRead,
@@ -300,11 +305,53 @@ def list_collections(
             )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    health_map = svc.collection_health_summaries([c.id for c in items], viewer_user_id=current_user.id)
     return CollectionListRead(
-        items=[_collection_read(svc, c) for c in items],
+        items=[_collection_read(svc, c, health=health_map.get(c.id)) for c in items],
         page=page,
         page_size=page_size,
         total=total,
+    )
+
+
+@router.post("/{project_id}/research/study-graph", response_model=CollectionGraphRead)
+def build_collection_graph(
+    project_id: uuid.UUID,
+    payload: CollectionGraphRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+) -> CollectionGraphRead:
+    svc = ResearchService(db)
+    user_id_filter = current_user.id if current_user.platform_role == "student" else None
+    try:
+        graph = svc.build_collection_graph(
+            [uuid.UUID(item) for item in payload.collection_ids],
+            project_id=None if project_id == GLOBAL_RESEARCH_PROJECT_ID else project_id,
+            user_id=user_id_filter,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid collection UUID.") from exc
+
+    return CollectionGraphRead(
+        nodes=[
+            CollectionGraphNodeRead(
+                id=node["id"],
+                label=node["label"],
+                node_type=node["node_type"],
+                ref_id=node.get("ref_id"),
+                meta=node.get("meta"),
+            )
+            for node in graph["nodes"]
+        ],
+        edges=[
+            CollectionGraphEdgeRead(
+                id=edge["id"],
+                source=edge["source"],
+                target=edge["target"],
+                edge_type=edge["edge_type"],
+            )
+            for edge in graph["edges"]
+        ],
     )
 
 
@@ -2973,8 +3020,41 @@ def _research_space_read(item) -> ResearchSpaceRead:
     )
 
 
-def _collection_read(svc: ResearchService, item) -> CollectionRead:
+def _collection_read(svc: ResearchService, item, *, health: dict | None = None) -> CollectionRead:
+    def _datetime_cmp_value(value: datetime | None) -> float | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.timestamp()
+        return value.astimezone().timestamp()
+
     space_ids = [str(space_id) for space_id in svc.collection_space_ids(item.id)]
+    summary = dict(health or {})
+    last_reviewed_iteration_at = summary.get("last_reviewed_iteration_at")
+    if last_reviewed_iteration_at is None:
+        for raw in item.study_iterations or []:
+            raw_value = None
+            if isinstance(raw, dict):
+                raw_value = raw.get("reviewed_at") or raw.get("end_date") or raw.get("start_date")
+            elif hasattr(raw, "reviewed_at"):
+                raw_value = getattr(raw, "reviewed_at", None) or getattr(raw, "end_date", None) or getattr(raw, "start_date", None)
+            if not raw_value:
+                continue
+            if isinstance(raw_value, datetime):
+                candidate = raw_value
+            else:
+                try:
+                    candidate = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if last_reviewed_iteration_at is None or candidate > last_reviewed_iteration_at:
+                last_reviewed_iteration_at = candidate
+    recent_log_count = int(summary.get("recent_log_count") or 0)
+    needs_review = bool(summary.get("needs_review"))
+    if not needs_review and recent_log_count > 0:
+        updated_cmp = _datetime_cmp_value(item.updated_at)
+        reviewed_cmp = _datetime_cmp_value(last_reviewed_iteration_at)
+        needs_review = reviewed_cmp is None or (updated_cmp is not None and updated_cmp > reviewed_cmp)
     return CollectionRead(
         id=str(item.id),
         research_space_id=str(item.research_space_id) if item.research_space_id else None,
@@ -3006,6 +3086,14 @@ def _collection_read(svc: ResearchService, item) -> CollectionRead:
         reference_count=svc._reference_count(item.id),
         note_count=svc._note_count(item.id),
         member_count=svc._member_count(item.id),
+        recent_log_count=recent_log_count,
+        open_action_count=int(summary.get("open_action_count") or 0),
+        doing_action_count=int(summary.get("doing_action_count") or 0),
+        overdue_action_count=int(summary.get("overdue_action_count") or 0),
+        assigned_to_me_action_count=int(summary.get("assigned_to_me_action_count") or 0),
+        last_reviewed_iteration_at=last_reviewed_iteration_at,
+        needs_review=needs_review,
+        activity_days=list(summary.get("activity_days") or []),
         created_at=item.created_at,
         updated_at=item.updated_at,
     )

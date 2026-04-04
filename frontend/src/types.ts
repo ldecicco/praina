@@ -1245,6 +1245,14 @@ export type ResearchCollection = {
   reference_count: number;
   note_count: number;
   member_count: number;
+  recent_log_count: number;
+  open_action_count: number;
+  doing_action_count: number;
+  overdue_action_count: number;
+  assigned_to_me_action_count: number;
+  last_reviewed_iteration_at: string | null;
+  needs_review: boolean;
+  activity_days: Array<{ date: string; count: number }>;
   created_at: string;
   updated_at: string;
 };
@@ -1470,6 +1478,26 @@ export type BibliographyGraphEdge = {
 export type BibliographyGraph = {
   nodes: BibliographyGraphNode[];
   edges: BibliographyGraphEdge[];
+};
+
+export type CollectionGraphNode = {
+  id: string;
+  label: string;
+  node_type: "study" | "tag" | "reference" | "log" | string;
+  ref_id: string | null;
+  meta: string | null;
+};
+
+export type CollectionGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  edge_type: "shares_tag" | "shares_reference" | "contains_log" | "has_tag" | "cites_reference" | "links_log" | string;
+};
+
+export type CollectionGraph = {
+  nodes: CollectionGraphNode[];
+  edges: CollectionGraphEdge[];
 };
 
 export type BibliographyIdentifierImportResult = {

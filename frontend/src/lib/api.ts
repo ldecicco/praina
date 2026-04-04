@@ -57,6 +57,7 @@ import type {
   SearchResponse,
   BibliographyDuplicateMatch,
   BibliographyGraph,
+  CollectionGraph,
   BibliographyNote,
   BibliographyReference,
   BibliographyCollection,
@@ -2269,6 +2270,12 @@ export const api = {
     if (opts?.page) q.set("page", String(opts.page));
     if (opts?.page_size) q.set("page_size", String(opts.page_size));
     return request(`/projects/${projectId}/research/collections?${q}`);
+  },
+  buildResearchCollectionsGraph(projectId: string, collectionIds: string[]): Promise<CollectionGraph> {
+    return request(`/projects/${projectId}/research/study-graph`, {
+      method: "POST",
+      body: JSON.stringify({ collection_ids: collectionIds }),
+    });
   },
   listResearchSpaces(opts?: { page?: number; page_size?: number }): Promise<{ items: ResearchSpace[]; page: number; page_size: number; total: number }> {
     const q = new URLSearchParams();

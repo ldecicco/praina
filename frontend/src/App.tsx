@@ -71,6 +71,7 @@ import type { AppNotification, AuthTokens, MeResponse, Project, ProposalCallBrie
 type View = "my-work" | "projects-home" | "research-home" | "teaching-home" | "dashboard" | "call" | "proposal" | "submission" | "delivery" | "workbench" | "meetings" | "project-chat" | "assistant" | "wizard" | "matrix" | "documents" | "planning" | "admin" | "todos" | "search" | "research" | "teaching" | "courses" | "resources" | "bibliography";
 type WorkspaceFamily = "projects" | "research" | "teaching";
 type ResearchTabState = "references" | "notes" | "paper" | "iterations" | "overview" | "chat" | "files" | "todos";
+type StudyHomeView = "dashboard" | "studies";
 type ResearchNavigationState = {
   selectedCollectionId: string | null;
   tab: ResearchTabState;
@@ -147,6 +148,8 @@ export default function App() {
     () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_RESEARCH_SPACE_KEY) || "" : "")
   );
   const [researchNavigationState, setResearchNavigationState] = useState<ResearchNavigationState>(defaultResearchNavigationState);
+  const [researchHomeViewRequest, setResearchHomeViewRequest] = useState<StudyHomeView>(isStudent ? "studies" : "dashboard");
+  const [researchHomeViewRequestNonce, setResearchHomeViewRequestNonce] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
   );
@@ -691,6 +694,10 @@ export default function App() {
           tab: "chat",
           selectedBibliographyCollectionId: null,
         });
+      } else {
+        setResearchNavigationState(defaultResearchNavigationState);
+        setResearchHomeViewRequest(isStudent ? "studies" : "dashboard");
+        setResearchHomeViewRequestNonce((current) => current + 1);
       }
     }
     setWorkspaceFamily(targetFamily);
@@ -1301,7 +1308,7 @@ export default function App() {
                   return (
                     <div
                       key={space.id}
-                      className="workspace-browser-card research-space"
+                      className="study-card-v2"
                       role="button"
                       tabIndex={0}
                       aria-label={`Open ${space.title}`}
@@ -1316,32 +1323,22 @@ export default function App() {
                         }
                       }}
                     >
-                      <div className="workspace-browser-card-accent" />
-                      <div className="workspace-browser-card-top">
-                        <span className="workspace-browser-icon">
-                          <FontAwesomeIcon icon={faFlask} />
-                        </span>
-                        <span className="chip small">Space</span>
-                        {linkedProject ? <span className="chip small">{linkedProject.code}</span> : <span className="chip small">Unlinked</span>}
+                      <div className="study-card-v2-head">
+                        <strong className="study-card-v2-title">{space.title || "Untitled Space"}</strong>
+                        <div className="study-card-v2-flags">
+                          {linkedProject ? <span className="study-card-flag flag-brand">{linkedProject.code}</span> : <span className="study-card-flag flag-muted">Unlinked</span>}
+                        </div>
                       </div>
-                      <div className="workspace-browser-card-body">
-                        <div className="workspace-browser-card-title">{space.title || "Untitled Space"}</div>
-                        {space.focus ? <p>{space.focus}</p> : <p>{linkedProject?.title || "No linked project"}</p>}
-                      </div>
-                      <div className="workspace-browser-card-foot">
-                        <span className="workspace-browser-meta">{linkedProject?.title || "No linked project"}</span>
-                        <div className="workspace-browser-card-actions">
+                      <p className="study-card-v2-desc">{space.focus || linkedProject?.title || "No linked project"}</p>
+                      <div className="study-card-v2-foot">
+                        <div className="study-card-v2-chips">
+                          {linkedProject ? <span className="chip small">{linkedProject.title}</span> : null}
+                        </div>
+                        <div className="study-card-v2-actions">
                           <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openEditResearchSpaceModal(space); }}>
                             Edit
                           </button>
-                          <button
-                            type="button"
-                            tabIndex={-1}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openSpace();
-                            }}
-                          >
+                          <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openSpace(); }}>
                             Open
                           </button>
                         </div>
@@ -1354,7 +1351,7 @@ export default function App() {
                   return (
                   <div
                     key={project.id}
-                    className={`workspace-browser-card ${isTeachingBrowser ? "teaching-project" : "funded-project"}`}
+                    className="study-card-v2"
                     role="button"
                     tabIndex={0}
                     aria-label={`Open ${project.title}`}
@@ -1369,32 +1366,23 @@ export default function App() {
                       }
                     }}
                   >
-                    <div className="workspace-browser-card-accent" />
-                    <div className="workspace-browser-card-top">
-                      <span className="workspace-browser-icon">
-                        <FontAwesomeIcon icon={isTeachingBrowser ? faGraduationCap : faSitemap} />
-                      </span>
-                      <span className="chip small">{isTeachingBrowser ? "Teaching" : project.project_kind}</span>
-                      <span className="chip small">{project.code}</span>
+                    <div className="study-card-v2-head">
+                      <strong className="study-card-v2-title">{project.title || "Untitled Project"}</strong>
+                      <div className="study-card-v2-flags">
+                        <span className="study-card-flag flag-brand">{project.code}</span>
+                      </div>
                     </div>
-                    <div className="workspace-browser-card-body">
-                      <div className="workspace-browser-card-title">{project.title || "Untitled Project"}</div>
-                      <p>{project.description || project.status}</p>
-                    </div>
-                    <div className="workspace-browser-card-foot">
-                      <span className="workspace-browser-meta">{project.status}</span>
-                      <div className="workspace-browser-card-actions">
+                    <p className="study-card-v2-desc">{project.description || project.status}</p>
+                    <div className="study-card-v2-foot">
+                      <div className="study-card-v2-chips">
+                        <span className="chip small">{isTeachingBrowser ? "Teaching" : project.project_kind}</span>
+                        <span className="chip small">{project.status}</span>
+                      </div>
+                      <div className="study-card-v2-actions">
                         <button type="button" className="ghost" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openProjectSettings(project.id); }}>
                           Edit
                         </button>
-                        <button
-                          type="button"
-                          tabIndex={-1}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openProject();
-                          }}
-                        >
+                        <button type="button" tabIndex={-1} onClick={(event) => { event.stopPropagation(); openProject(); }}>
                           Open
                         </button>
                       </div>
@@ -1750,6 +1738,8 @@ export default function App() {
               onNavigationStateChange={handleResearchNavigationStateChange}
               isAdmin={isSuperAdmin}
               isStudent={isStudent}
+              homeViewRequest={researchHomeViewRequest}
+              homeViewRequestNonce={researchHomeViewRequestNonce}
               researchTourActive={researchTourOpen}
               researchTourStepId={currentResearchTourStep?.target || null}
             />

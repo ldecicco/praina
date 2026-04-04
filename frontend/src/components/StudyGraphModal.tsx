@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import Sigma from "sigma";
@@ -6,9 +6,15 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBookOpen,
   faCalendarDay,
+  faCompress,
   faFileArrowUp,
   faFileLines,
   faHashtag,
+  faMagnifyingGlass,
+  faMinus,
+  faPause,
+  faPlay,
+  faPlus,
   faShareNodes,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
@@ -19,6 +25,21 @@ import type {
   ResearchStudyFile,
   ResearchStudyIteration,
 } from "../types";
+import {
+  cssVar,
+  rgbaFromHex,
+  drawGraphLabel,
+  buildInitialPositions,
+  computeNodeSize,
+  setupHoverTracking,
+  setupNodeDrag,
+  applyGraphReducers,
+  zoomToNode,
+  zoomIn,
+  zoomOut,
+  zoomFit,
+} from "../lib/graphUtils";
+import { CommandPalette } from "./CommandPalette";
 
 type StudyGraphNodeType = "log" | "tag" | "reference" | "file" | "iteration";
 
@@ -36,100 +57,6 @@ type StudyGraphEdge = {
   target: string;
   edgeType: "tagged" | "cites" | "attaches" | "links_to" | "in_iteration";
 };
-
-function cssVar(name: string, fallback: string): string {
-  if (typeof window === "undefined") return fallback;
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value || fallback;
-}
-
-function rgbaFromHex(value: string, alpha: number): string {
-  const normalized = value.trim();
-  if (!normalized.startsWith("#")) {
-    return `rgba(17, 17, 19, ${alpha})`;
-  }
-  const hex = normalized.slice(1);
-  const full = hex.length === 3
-    ? hex.split("").map((char) => `${char}${char}`).join("")
-    : hex;
-  const red = Number.parseInt(full.slice(0, 2), 16);
-  const green = Number.parseInt(full.slice(2, 4), 16);
-  const blue = Number.parseInt(full.slice(4, 6), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-}
-
-function drawRoundedRect(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number
-) {
-  const r = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + r, y);
-  context.arcTo(x + width, y, x + width, y + height, r);
-  context.arcTo(x + width, y + height, x, y + height, r);
-  context.arcTo(x, y + height, x, y, r);
-  context.arcTo(x, y, x + width, y, r);
-  context.closePath();
-}
-
-function drawGraphLabel(
-  context: CanvasRenderingContext2D,
-  data: {
-    label?: string | null;
-    size?: number;
-    color?: string;
-    x?: number;
-    y?: number;
-  }
-) {
-  if (!data.label || typeof data.x !== "number" || typeof data.y !== "number") return;
-
-  const bg = cssVar("--bg", "#111113");
-  const textBright = cssVar("--text-bright", "#ededf0");
-  const size = typeof data.size === "number" ? data.size : 10;
-  const fontSize = Math.max(11, Math.round(size * 0.92));
-  const padX = 8;
-  const padY = 5;
-  const radius = 7;
-
-  context.font = `600 ${fontSize}px var(--font), sans-serif`;
-  const metrics = context.measureText(data.label);
-  const textWidth = metrics.width;
-  const boxWidth = textWidth + padX * 2;
-  const boxHeight = fontSize + padY * 2;
-  const x = data.x + size + 8;
-  const y = data.y - boxHeight / 2;
-
-  context.save();
-  context.shadowColor = rgbaFromHex(bg, 0.46);
-  context.shadowBlur = 22;
-  context.fillStyle = rgbaFromHex(bg, 0.84);
-  drawRoundedRect(context, x, y, boxWidth, boxHeight, radius);
-  context.fill();
-  context.shadowBlur = 0;
-  context.strokeStyle = rgbaFromHex(data.color || cssVar("--brand", "#3AAFA8"), 0.34);
-  context.lineWidth = 1;
-  drawRoundedRect(context, x, y, boxWidth, boxHeight, radius);
-  context.stroke();
-  context.fillStyle = textBright;
-  context.textBaseline = "middle";
-  context.fillText(data.label, x + padX, y + boxHeight / 2);
-  context.restore();
-}
-
-function buildInitialPositions(ids: string[]) {
-  const total = Math.max(ids.length, 1);
-  return new Map(
-    ids.map((id, index) => {
-      const angle = (Math.PI * 2 * index) / total;
-      return [id, { x: Math.cos(angle) * 12, y: Math.sin(angle) * 12 }];
-    })
-  );
-}
 
 function formatReferenceLabel(reference: ResearchReference): string {
   const author = reference.authors[0]?.split(" ").slice(-1)[0] || "Ref";
@@ -204,19 +131,8 @@ function buildStudyGraphData({
 
     if (includeTags) {
       note.tags.forEach((tag) => {
-        addNode({
-          id: `tag:${tag.toLowerCase()}`,
-          label: `#${tag}`,
-          nodeType: "tag",
-          refId: tag,
-          meta: null,
-        });
-        addEdge({
-          id: `edge:tag:${note.id}:${tag.toLowerCase()}`,
-          source: `log:${note.id}`,
-          target: `tag:${tag.toLowerCase()}`,
-          edgeType: "tagged",
-        });
+        addNode({ id: `tag:${tag.toLowerCase()}`, label: `#${tag}`, nodeType: "tag", refId: tag, meta: null });
+        addEdge({ id: `edge:tag:${note.id}:${tag.toLowerCase()}`, source: `log:${note.id}`, target: `tag:${tag.toLowerCase()}`, edgeType: "tagged" });
       });
     }
 
@@ -224,19 +140,8 @@ function buildStudyGraphData({
       note.linked_reference_ids.forEach((referenceId) => {
         const reference = referenceMap.get(referenceId);
         if (!reference) return;
-        addNode({
-          id: `reference:${reference.id}`,
-          label: reference.title || formatReferenceLabel(reference),
-          nodeType: "reference",
-          refId: reference.id,
-          meta: reference.year ? String(reference.year) : null,
-        });
-        addEdge({
-          id: `edge:ref:${note.id}:${reference.id}`,
-          source: `log:${note.id}`,
-          target: `reference:${reference.id}`,
-          edgeType: "cites",
-        });
+        addNode({ id: `reference:${reference.id}`, label: reference.title || formatReferenceLabel(reference), nodeType: "reference", refId: reference.id, meta: reference.year ? String(reference.year) : null });
+        addEdge({ id: `edge:ref:${note.id}:${reference.id}`, source: `log:${note.id}`, target: `reference:${reference.id}`, edgeType: "cites" });
       });
     }
 
@@ -244,46 +149,19 @@ function buildStudyGraphData({
       note.linked_file_ids.forEach((fileId) => {
         const file = fileMap.get(fileId);
         if (!file) return;
-        addNode({
-          id: `file:${file.id}`,
-          label: file.original_filename,
-          nodeType: "file",
-          refId: file.id,
-          meta: file.mime_type || null,
-        });
-        addEdge({
-          id: `edge:file:${note.id}:${file.id}`,
-          source: `log:${note.id}`,
-          target: `file:${file.id}`,
-          edgeType: "attaches",
-        });
+        addNode({ id: `file:${file.id}`, label: file.original_filename, nodeType: "file", refId: file.id, meta: file.mime_type || null });
+        addEdge({ id: `edge:file:${note.id}:${file.id}`, source: `log:${note.id}`, target: `file:${file.id}`, edgeType: "attaches" });
       });
     }
 
     uniqueById(note.linked_note_ids.map((id) => ({ id }))).forEach(({ id: linkedNoteId }) => {
-      addEdge({
-        id: `edge:note:${note.id}:${linkedNoteId}`,
-        source: `log:${note.id}`,
-        target: `log:${linkedNoteId}`,
-        edgeType: "links_to",
-      });
+      addEdge({ id: `edge:note:${note.id}:${linkedNoteId}`, source: `log:${note.id}`, target: `log:${linkedNoteId}`, edgeType: "links_to" });
     });
 
     if (includeIterations) {
       (iterationByNoteId.get(note.id) || []).forEach((iteration) => {
-        addNode({
-          id: `iteration:${iteration.id}`,
-          label: iteration.title || "Iteration",
-          nodeType: "iteration",
-          refId: iteration.id,
-          meta: iteration.end_date || iteration.start_date || null,
-        });
-        addEdge({
-          id: `edge:iteration:${note.id}:${iteration.id}`,
-          source: `log:${note.id}`,
-          target: `iteration:${iteration.id}`,
-          edgeType: "in_iteration",
-        });
+        addNode({ id: `iteration:${iteration.id}`, label: iteration.title || "Iteration", nodeType: "iteration", refId: iteration.id, meta: iteration.end_date || iteration.start_date || null });
+        addEdge({ id: `edge:iteration:${note.id}:${iteration.id}`, source: `log:${note.id}`, target: `iteration:${iteration.id}`, edgeType: "in_iteration" });
       });
     }
   });
@@ -318,11 +196,15 @@ export function StudyGraphModal({
   const rendererRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [includeTags, setIncludeTags] = useState(true);
   const [includeReferences, setIncludeReferences] = useState(true);
   const [includeFiles, setIncludeFiles] = useState(true);
   const [includeIterations, setIncludeIterations] = useState(true);
   const [focusMode, setFocusMode] = useState(Boolean(initialNodeId));
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [physicsRunning, setPhysicsRunning] = useState(true);
+  const physicsRef = useRef<{ running: boolean; raf: number | null }>({ running: true, raf: null });
 
   const graphData = useMemo(
     () =>
@@ -336,12 +218,12 @@ export function StudyGraphModal({
         includeFiles,
         includeIterations,
       }),
-    [notes, references, files, iterations, includeTags, includeReferences, includeFiles, includeIterations]
+    [notes, references, files, iterations, includeTags, includeReferences, includeFiles, includeIterations],
   );
 
   const selectedNode = useMemo(
     () => graphData.nodes.find((item) => item.id === selectedNodeId) ?? null,
-    [graphData.nodes, selectedNodeId]
+    [graphData.nodes, selectedNodeId],
   );
 
   const relatedNodes = useMemo(() => {
@@ -351,13 +233,22 @@ export function StudyGraphModal({
       if (edge.source !== selectedNode.id && edge.target !== selectedNode.id) return;
       const neighborId = edge.source === selectedNode.id ? edge.target : edge.source;
       const neighbor = graphData.nodes.find((item) => item.id === neighborId);
-      if (!neighbor) return;
-      if (!neighbors.has(neighborId)) {
-        neighbors.set(neighborId, { node: neighbor, edgeType: edge.edgeType });
-      }
+      if (!neighbor || neighbors.has(neighborId)) return;
+      neighbors.set(neighborId, { node: neighbor, edgeType: edge.edgeType });
     });
     return Array.from(neighbors.values()).sort((a, b) => a.node.label.localeCompare(b.node.label));
   }, [graphData.edges, graphData.nodes, selectedNode]);
+
+  const searchItems = useMemo(
+    () => graphData.nodes.map((n) => ({ id: n.id, label: n.label, icon: faShareNodes, section: n.nodeType })),
+    [graphData.nodes],
+  );
+
+  const nodeCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    graphData.nodes.forEach((n) => { c[n.nodeType] = (c[n.nodeType] || 0) + 1; });
+    return c;
+  }, [graphData.nodes]);
 
   useEffect(() => {
     const preferredId = initialNodeId && graphData.nodes.some((item) => item.id === initialNodeId)
@@ -367,11 +258,28 @@ export function StudyGraphModal({
     setFocusMode(Boolean(preferredId));
   }, [graphData.nodes, initialNodeId]);
 
+  // Ctrl+F search
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setSearchOpen(true);
+      }
+    }
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
+  }, []);
+
+  // Build graph
   useEffect(() => {
     if (!containerRef.current) return;
     rendererRef.current?.kill();
     rendererRef.current = null;
     graphRef.current = null;
+    if (physicsRef.current.raf) cancelAnimationFrame(physicsRef.current.raf);
+    physicsRef.current.raf = null;
+
     if (graphData.nodes.length === 0) return;
 
     const graph = new Graph();
@@ -379,7 +287,6 @@ export function StudyGraphModal({
     const brand = cssVar("--brand", "#3AAFA8");
     const success = cssVar("--success", "#2ec97a");
     const warning = cssVar("--warning", "#e5a913");
-    const textSecondary = cssVar("--text-secondary", "#8e8e9a");
     const textBright = cssVar("--text-bright", "#ededf0");
     const surface = cssVar("--surface-3", "#323236");
 
@@ -395,19 +302,13 @@ export function StudyGraphModal({
               : node.nodeType === "file"
                 ? rgbaFromHex("#ce82ff", 0.76)
                 : rgbaFromHex(success, 0.82);
-      const size =
-        node.nodeType === "log"
-          ? 13
-          : node.nodeType === "iteration"
-            ? 11
-            : node.nodeType === "reference"
-              ? 10
-              : 8;
+      const baseSize =
+        node.nodeType === "log" ? 9 : node.nodeType === "iteration" ? 7 : node.nodeType === "reference" ? 7 : 5;
       graph.addNode(node.id, {
         label: node.label,
         x: pos.x,
         y: pos.y,
-        size,
+        size: baseSize,
         color,
         type: "circle",
         nodeType: node.nodeType,
@@ -433,14 +334,16 @@ export function StudyGraphModal({
       });
     });
 
+    // Degree-based sizing
+    graph.forEachNode((nodeId) => {
+      const baseSize = graph.getNodeAttribute(nodeId, "size") as number;
+      graph.setNodeAttribute(nodeId, "size", computeNodeSize(graph, nodeId, baseSize));
+    });
+
     if (graph.order > 1) {
       forceAtlas2.assign(graph, {
-        iterations: 120,
-        settings: {
-          gravity: 1,
-          scalingRatio: 9,
-          slowDown: 1.8,
-        },
+        iterations: 50,
+        settings: { gravity: 1, scalingRatio: 9, slowDown: 1.8 },
       });
     }
 
@@ -458,53 +361,80 @@ export function StudyGraphModal({
 
     graphRef.current = graph;
     rendererRef.current = renderer;
+
     renderer.on("clickNode", ({ node }) => setSelectedNodeId(node));
     renderer.on("clickStage", () => setSelectedNodeId(null));
+    renderer.on("doubleClickNode", ({ node }) => {
+      const nd = graphData.nodes.find((n) => n.id === node);
+      if (nd?.refId) {
+        if (nd.nodeType === "log") onOpenNote(nd.refId);
+        if (nd.nodeType === "reference") onOpenReference(nd.refId);
+        if (nd.nodeType === "file") onOpenFile(nd.refId);
+        if (nd.nodeType === "iteration") onOpenIteration(nd.refId);
+      }
+    });
+
+    const cleanupHover = setupHoverTracking(renderer, setHoveredNodeId);
+    const cleanupDrag = setupNodeDrag(renderer, graph, new Set());
     renderer.getCamera().animatedReset({ duration: 250 });
 
+    // Live physics
+    const fa2Settings = { gravity: 1, scalingRatio: 9, slowDown: 8 };
+    physicsRef.current.running = true;
+    setPhysicsRunning(true);
+
+    function physicsStep() {
+      if (!physicsRef.current.running || !graphRef.current) return;
+      forceAtlas2.assign(graphRef.current, { iterations: 1, settings: fa2Settings });
+      physicsRef.current.raf = requestAnimationFrame(physicsStep);
+    }
+    physicsRef.current.raf = requestAnimationFrame(physicsStep);
+
+    const autoStop = setTimeout(() => {
+      physicsRef.current.running = false;
+      setPhysicsRunning(false);
+    }, 4000);
+
     return () => {
+      clearTimeout(autoStop);
+      if (physicsRef.current.raf) cancelAnimationFrame(physicsRef.current.raf);
+      physicsRef.current.raf = null;
+      cleanupHover();
+      cleanupDrag();
       renderer.kill();
       rendererRef.current = null;
       graphRef.current = null;
     };
   }, [graphData]);
 
+  // Apply reducers
   useEffect(() => {
     const renderer = rendererRef.current;
     const graph = graphRef.current;
     if (!renderer || !graph) return;
-    const muted = cssVar("--muted", "#6e6e7a");
-    const neighborIds = new Set(
-      selectedNodeId && graph.hasNode(selectedNodeId) ? graph.neighbors(selectedNodeId) : []
-    );
-    renderer.setSetting("nodeReducer", (node, data) => {
-      if (!selectedNodeId) return data;
-      if (!focusMode) {
-        if (node === selectedNodeId) {
-          return { ...data, size: (typeof data.size === "number" ? data.size : 10) + 3, zIndex: 1 };
-        }
-        if (neighborIds.has(node)) {
-          return { ...data, zIndex: 1 };
-        }
-        return data;
+    applyGraphReducers(renderer, graph, { hoveredNode: hoveredNodeId, selectedNode: selectedNodeId, focusMode });
+  }, [hoveredNodeId, selectedNodeId, focusMode]);
+
+  const handleSelectNode = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    const renderer = rendererRef.current;
+    const graph = graphRef.current;
+    if (renderer && graph) zoomToNode(renderer, graph, nodeId);
+  }, []);
+
+  function togglePhysics() {
+    const next = !physicsRef.current.running;
+    physicsRef.current.running = next;
+    setPhysicsRunning(next);
+    if (next && graphRef.current) {
+      function step() {
+        if (!physicsRef.current.running || !graphRef.current) return;
+        forceAtlas2.assign(graphRef.current, { iterations: 1, settings: { gravity: 1, scalingRatio: 9, slowDown: 8 } });
+        physicsRef.current.raf = requestAnimationFrame(step);
       }
-      if (node === selectedNodeId) {
-        return { ...data, size: (typeof data.size === "number" ? data.size : 10) + 3, zIndex: 1 };
-      }
-      if (neighborIds.has(node)) return { ...data, zIndex: 1 };
-      return { ...data, color: muted, label: "" };
-    });
-    renderer.setSetting("edgeReducer", (edge, data) => {
-      if (!selectedNodeId) return data;
-      if (!focusMode) return data;
-      const extremities = graph.extremities(edge);
-      if (extremities.includes(selectedNodeId)) {
-        return { ...data, hidden: false, size: (typeof data.size === "number" ? data.size : 1.2) + 0.5 };
-      }
-      return { ...data, hidden: true };
-    });
-    renderer.refresh();
-  }, [selectedNodeId, focusMode]);
+      physicsRef.current.raf = requestAnimationFrame(step);
+    }
+  }
 
   function openSelectedNode() {
     if (!selectedNode?.refId) return;
@@ -515,12 +445,13 @@ export function StudyGraphModal({
   }
 
   return (
+    <>
     <div className="modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="modal-card bibliography-graph-modal study-graph-modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>Graph</h3>
           <div className="modal-head-actions">
-            <span className="chip small">{notes.length} logs</span>
+            <span className="chip small">{nodeCounts.log || 0} logs</span>
             <button type="button" className="ghost docs-action-btn" onClick={onClose} title="Close">
               <FontAwesomeIcon icon={faXmark} />
             </button>
@@ -528,11 +459,22 @@ export function StudyGraphModal({
         </div>
 
         <div className="bibliography-graph-toolbar">
-          <button type="button" className={`bib-toggle-btn${includeTags ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeTags((value) => !value)}>Tags</button>
-          <button type="button" className={`bib-toggle-btn${includeReferences ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeReferences((value) => !value)}>References</button>
-          <button type="button" className={`bib-toggle-btn${includeFiles ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeFiles((value) => !value)}>Files</button>
-          <button type="button" className={`bib-toggle-btn${includeIterations ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeIterations((value) => !value)}>Iterations</button>
+          <button type="button" className={`bib-toggle-btn${includeTags ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeTags((v) => !v)}>
+            Tags{nodeCounts.tag ? ` (${nodeCounts.tag})` : ""}
+          </button>
+          <button type="button" className={`bib-toggle-btn${includeReferences ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeReferences((v) => !v)}>
+            References{nodeCounts.reference ? ` (${nodeCounts.reference})` : ""}
+          </button>
+          <button type="button" className={`bib-toggle-btn${includeFiles ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeFiles((v) => !v)}>
+            Files{nodeCounts.file ? ` (${nodeCounts.file})` : ""}
+          </button>
+          <button type="button" className={`bib-toggle-btn${includeIterations ? " bib-toggle-btn-active" : ""}`} onClick={() => setIncludeIterations((v) => !v)}>
+            Iterations{nodeCounts.iteration ? ` (${nodeCounts.iteration})` : ""}
+          </button>
           <span className="study-graph-toolbar-spacer" />
+          <button type="button" className="ghost icon-only graph-toolbar-icon" onClick={() => setSearchOpen(true)} title="Search nodes (Ctrl+F)">
+            <FontAwesomeIcon icon={faMagnifyingGlass} />
+          </button>
           <button type="button" className={`bib-toggle-btn${!focusMode ? " bib-toggle-btn-active" : ""}`} onClick={() => setFocusMode(false)}>All</button>
           <button type="button" className={`bib-toggle-btn${focusMode ? " bib-toggle-btn-active" : ""}`} onClick={() => selectedNodeId && setFocusMode(true)} disabled={!selectedNodeId}>Focus</button>
         </div>
@@ -541,6 +483,23 @@ export function StudyGraphModal({
           <div className="bibliography-graph-canvas-wrap">
             {graphData.nodes.length === 0 ? <div className="bibliography-graph-state">No graph nodes.</div> : null}
             <div className={`bibliography-graph-canvas${graphData.nodes.length === 0 ? " hidden" : ""}`} ref={containerRef} />
+
+            <div className="graph-zoom-controls">
+              <button type="button" className="graph-zoom-btn" onClick={() => rendererRef.current && zoomIn(rendererRef.current)} title="Zoom in"><FontAwesomeIcon icon={faPlus} /></button>
+              <button type="button" className="graph-zoom-btn" onClick={() => rendererRef.current && zoomOut(rendererRef.current)} title="Zoom out"><FontAwesomeIcon icon={faMinus} /></button>
+              <button type="button" className="graph-zoom-btn" onClick={() => rendererRef.current && zoomFit(rendererRef.current)} title="Fit to view"><FontAwesomeIcon icon={faCompress} /></button>
+              <button type="button" className={`graph-zoom-btn${physicsRunning ? " graph-zoom-btn-active" : ""}`} onClick={togglePhysics} title={physicsRunning ? "Pause physics" : "Resume physics"}>
+                <FontAwesomeIcon icon={physicsRunning ? faPause : faPlay} />
+              </button>
+            </div>
+
+            <div className="graph-legend">
+              {nodeCounts.log ? <span className="graph-legend-item"><span className="graph-legend-dot" style={{ background: cssVar("--brand", "#3AAFA8") }} />Logs</span> : null}
+              {nodeCounts.tag ? <span className="graph-legend-item"><span className="graph-legend-dot" style={{ background: cssVar("--warning", "#e5a913") }} />Tags</span> : null}
+              {nodeCounts.reference ? <span className="graph-legend-item"><span className="graph-legend-dot" style={{ background: "#5da2ff" }} />References</span> : null}
+              {nodeCounts.file ? <span className="graph-legend-item"><span className="graph-legend-dot" style={{ background: "#ce82ff" }} />Files</span> : null}
+              {nodeCounts.iteration ? <span className="graph-legend-item"><span className="graph-legend-dot" style={{ background: cssVar("--success", "#2ec97a") }} />Iterations</span> : null}
+            </div>
           </div>
 
           <aside className="bibliography-graph-detail">
@@ -587,7 +546,7 @@ export function StudyGraphModal({
                           key={`${selectedNode.id}-${node.id}`}
                           type="button"
                           className="ghost bibliography-graph-link-item"
-                          onClick={() => setSelectedNodeId(node.id)}
+                          onClick={() => handleSelectNode(node.id)}
                         >
                           <span className="bibliography-graph-link-title">{node.label}</span>
                           <span className="bibliography-graph-link-meta">
@@ -598,13 +557,7 @@ export function StudyGraphModal({
                     </div>
                   ) : (
                     <div className="bibliography-graph-empty">
-                      <FontAwesomeIcon
-                        icon={
-                          selectedNode.nodeType === "tag"
-                            ? faHashtag
-                            : faShareNodes
-                        }
-                      />
+                      <FontAwesomeIcon icon={selectedNode.nodeType === "tag" ? faHashtag : faShareNodes} />
                       <span>No linked nodes.</span>
                     </div>
                   )}
@@ -619,6 +572,17 @@ export function StudyGraphModal({
           </aside>
         </div>
       </div>
+
     </div>
+
+      {searchOpen ? (
+        <CommandPalette
+          items={searchItems}
+          onSelect={(id) => { setSearchOpen(false); setFocusMode(true); handleSelectNode(id); }}
+          onClose={() => setSearchOpen(false)}
+          aggressiveKeyboardCapture
+        />
+      ) : null}
+    </>
   );
 }

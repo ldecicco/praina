@@ -62,6 +62,18 @@ class UserAccount(Base, IdMixin, TimestampMixin):
     telegram_link_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class UserPushDevice(Base, IdMixin, TimestampMixin):
+    __tablename__ = "user_push_devices"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    device_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    app_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
 class ProjectMembership(Base, IdMixin, TimestampMixin):
     __tablename__ = "project_memberships"
 

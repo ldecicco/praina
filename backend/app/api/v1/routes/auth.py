@@ -18,6 +18,7 @@ from app.schemas.auth import (
     MembershipWithUserRead,
     MembershipRead,
     PasswordChangeRequest,
+    PushDeviceUpsertRequest,
     TelegramDiscoveryStartRead,
     TelegramLinkStateRead,
     TelegramPreferencesUpdateRequest,
@@ -297,7 +298,44 @@ def send_my_telegram_test_notification(
         body="If you received this message in Telegram, the integration is working.",
         link_type=None,
         link_id=None,
+        forward_push=False,
     )
+    return {"ok": True}
+
+
+@router.post("/me/push/test")
+def send_my_push_test_notification(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    NotificationService(db).notify(
+        current_user.id,
+        title="Push test notification",
+        body="If this arrived on your phone, Firebase push is working.",
+        link_type=None,
+        link_id=None,
+        forward_telegram=False,
+    )
+    return {"ok": True}
+
+
+@router.post("/me/push-device")
+def register_my_push_device(
+    payload: PushDeviceUpsertRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    service = AuthService(db)
+    try:
+        service.upsert_push_device(
+            current_user.id,
+            token=payload.token,
+            platform=payload.platform,
+            device_id=payload.device_id,
+            app_version=payload.app_version,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"ok": True}
 
 

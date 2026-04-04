@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
-from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount
+from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount, UserPushDevice
 from app.models.organization import TeamMember
 from app.models.project import Project, ProjectKind
 from app.models.course import Course, CourseTeachingAssistant
@@ -190,6 +190,65 @@ class AuthService:
         self.db.commit()
         self.db.refresh(user)
         return user
+
+    def upsert_push_device(
+        self,
+        user_id: uuid.UUID,
+        *,
+        token: str,
+        platform: str,
+        device_id: str | None = None,
+        app_version: str | None = None,
+    ) -> UserPushDevice:
+        user = self.get_user_by_id(user_id)
+        cleaned_token = token.strip()
+        cleaned_platform = platform.strip().lower()
+        if not cleaned_token:
+            raise ValidationError("Push token is required.")
+        if cleaned_platform not in {"android", "ios"}:
+            raise ValidationError("Invalid push platform.")
+
+        existing = self.db.scalar(select(UserPushDevice).where(UserPushDevice.token == cleaned_token))
+        if existing:
+            existing.user_id = user.id
+            existing.platform = cleaned_platform
+            existing.device_id = device_id.strip() if device_id else None
+            existing.app_version = app_version.strip() if app_version else None
+            existing.enabled = True
+            existing.last_seen_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(existing)
+            return existing
+
+        item = UserPushDevice(
+            user_id=user.id,
+            token=cleaned_token,
+            platform=cleaned_platform,
+            device_id=device_id.strip() if device_id else None,
+            app_version=app_version.strip() if app_version else None,
+            enabled=True,
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def disable_push_device_tokens(self, tokens: list[str]) -> int:
+        cleaned_tokens = [token.strip() for token in tokens if token and token.strip()]
+        if not cleaned_tokens:
+            return 0
+        items = list(
+            self.db.scalars(
+                select(UserPushDevice).where(UserPushDevice.token.in_(cleaned_tokens))
+            ).all()
+        )
+        if not items:
+            return 0
+        for item in items:
+            item.enabled = False
+        self.db.commit()
+        return len(items)
 
     def disconnect_telegram(self, user_id: uuid.UUID) -> UserAccount:
         user = self.get_user_by_id(user_id)

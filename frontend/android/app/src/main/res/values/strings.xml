@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Praina</string>
+    <string name="title_activity_main">Praina</string>
+    <string name="package_name">app.praina.mobile</string>
+    <string name="custom_url_scheme">app.praina.mobile</string>
+</resources>

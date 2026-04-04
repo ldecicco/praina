@@ -48,6 +48,13 @@ class TelegramPreferencesUpdateRequest(BaseModel):
     notifications_enabled: bool
 
 
+class PushDeviceUpsertRequest(BaseModel):
+    token: str = Field(min_length=16, max_length=1024)
+    platform: str = Field(min_length=2, max_length=32)
+    device_id: str | None = Field(default=None, max_length=255)
+    app_version: str | None = Field(default=None, max_length=64)
+
+
 class UserRead(BaseModel):
     id: str
     email: EmailStr

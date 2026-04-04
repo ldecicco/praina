@@ -42,6 +42,9 @@ Auth config:
 - `JWT_ALGORITHM`
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `REFRESH_TOKEN_EXPIRE_DAYS`
+Push config:
+- `FIREBASE_CREDENTIALS_PATH`
+- `FIREBASE_PROJECT_ID` (optional)
 Chat assistant model config:
 - `OLLAMA_BASE_URL`
 - `OLLAMA_MODEL`
@@ -59,6 +62,12 @@ The backend Python environment also needs the `ollama` client package (installed
 If your `.venv` was created before this dependency, run:
 ```bash
 pip install ollama
+```
+
+For Android push notifications, the backend also needs a Firebase service-account JSON and the path exported in `.env`, for example:
+```bash
+FIREBASE_CREDENTIALS_PATH=backend/firebase-service-account.json
+FIREBASE_PROJECT_ID=your-firebase-project-id
 ```
 
 Assistant mutation flow for project entities is propose-confirm-apply:

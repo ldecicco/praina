@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
+import { PushNotifications, Token, ActionPerformed, PushNotificationSchema } from "@capacitor/push-notifications";
 import { Toaster, toast } from "sonner";
 import { CommandPalette } from "./components/CommandPalette";
 import type { CommandItem } from "./components/CommandPalette";
@@ -203,6 +206,7 @@ export default function App() {
   const restoringNavigationRef = useRef(false);
   const restoreTargetSnapshotRef = useRef<string | null>(null);
   const [navigationHistoryIndex, setNavigationHistoryIndex] = useState(-1);
+  const pushRegistrationAttemptedRef = useRef(false);
 
   const currentNavigationSnapshot = useMemo<AppNavigationSnapshot>(() => ({
     view,
@@ -422,6 +426,45 @@ export default function App() {
     setNotifications((prev) => prev.map((n) => ({ ...n, status: "read" })));
   }
 
+  const refreshNotifications = useCallback(async (opts?: { includeList?: boolean }) => {
+    await pollUnreadCount();
+    if (opts?.includeList || notifDropdownOpen) {
+      await loadNotifications();
+    }
+  }, [notifDropdownOpen]);
+
+  const openNotification = useCallback((notification: AppNotification) => {
+    if (notification.project_id) {
+      handleSelectProject(notification.project_id);
+    }
+    const targetView = notification.link_type ? LINK_TYPE_VIEW_MAP[notification.link_type] : undefined;
+    if (targetView) {
+      handleNavigate(targetView, notification.link_id ?? undefined);
+    }
+    if (notification.status === "unread") {
+      void api.markNotificationRead(notification.id);
+      setNotifications((prev) => prev.map((item) => item.id === notification.id ? { ...item, status: "read" } : item));
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    }
+    setNotifDropdownOpen(false);
+  }, [handleNavigate, handleSelectProject]);
+
+  const openPushPayload = useCallback((payload: Record<string, unknown> | undefined) => {
+    const projectId = typeof payload?.project_id === "string" && payload.project_id ? payload.project_id : null;
+    const linkType = typeof payload?.link_type === "string" && payload.link_type ? payload.link_type : null;
+    const linkId = typeof payload?.link_id === "string" && payload.link_id ? payload.link_id : null;
+    if (projectId) {
+      handleSelectProject(projectId);
+    }
+    const targetView = linkType ? LINK_TYPE_VIEW_MAP[linkType] : undefined;
+    if (targetView) {
+      handleNavigate(targetView, linkId ?? undefined);
+      setNotifDropdownOpen(false);
+      return;
+    }
+    setNotifDropdownOpen(true);
+  }, [handleNavigate, handleSelectProject]);
+
   useEffect(() => {
     void bootstrapAuthSession();
   }, []);
@@ -454,7 +497,108 @@ export default function App() {
   }, [me?.user.id]);
 
   useEffect(() => {
+    if (!me || typeof window === "undefined") return;
+
+    function handleVisibility() {
+      if (document.visibilityState === "visible") {
+        void refreshNotifications();
+      }
+    }
+
+    function handleFocus() {
+      void refreshNotifications();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleFocus);
+
+    let removeCapListener: (() => void) | undefined;
+    if (Capacitor.isNativePlatform()) {
+      void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+        if (isActive) {
+          void refreshNotifications({ includeList: true });
+        }
+      }).then((listener) => {
+        removeCapListener = () => {
+          void listener.remove();
+        };
+      });
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleFocus);
+      removeCapListener?.();
+    };
+  }, [me, refreshNotifications]);
+
+  useEffect(() => {
+    if (!me || !authTokens?.access_token || !Capacitor.isNativePlatform() || pushRegistrationAttemptedRef.current) return;
+    pushRegistrationAttemptedRef.current = true;
+
+    let cancelled = false;
+    let registrationListener: { remove: () => Promise<void> } | null = null;
+    let registrationErrorListener: { remove: () => Promise<void> } | null = null;
+    let receivedListener: { remove: () => Promise<void> } | null = null;
+    let actionListener: { remove: () => Promise<void> } | null = null;
+
+    async function setupPush() {
+      try {
+        const permission = await PushNotifications.checkPermissions();
+        let receive = permission.receive;
+        if (receive === "prompt") {
+          const requested = await PushNotifications.requestPermissions();
+          receive = requested.receive;
+        }
+        if (receive !== "granted") return;
+
+        registrationListener = await PushNotifications.addListener("registration", async (token: Token) => {
+          if (cancelled) return;
+          try {
+            await api.registerMyPushDevice({
+              token: token.value,
+              platform: Capacitor.getPlatform(),
+              device_id: null,
+              app_version: "0.1.0",
+            });
+          } catch {
+            // keep registration best-effort for now
+          }
+        });
+
+        registrationErrorListener = await PushNotifications.addListener("registrationError", () => {
+          // keep best-effort for now
+        });
+
+        receivedListener = await PushNotifications.addListener("pushNotificationReceived", (_notification: PushNotificationSchema) => {
+          void refreshNotifications({ includeList: true });
+        });
+
+        actionListener = await PushNotifications.addListener("pushNotificationActionPerformed", (notification: ActionPerformed) => {
+          void refreshNotifications({ includeList: true });
+          openPushPayload(notification.notification.data);
+        });
+
+        await PushNotifications.register();
+      } catch {
+        // ignore until push delivery is fully wired
+      }
+    }
+
+    void setupPush();
+
+    return () => {
+      cancelled = true;
+      void registrationListener?.remove();
+      void registrationErrorListener?.remove();
+      void receivedListener?.remove();
+      void actionListener?.remove();
+    };
+  }, [authTokens?.access_token, me, openPushPayload, refreshNotifications]);
+
+  useEffect(() => {
     if (!me) {
+      pushRegistrationAttemptedRef.current = false;
       setProjects([]);
       setResearchSpaces([]);
       setSelectedProjectId("");
@@ -1559,7 +1703,7 @@ export default function App() {
                 title="Notifications"
                 onClick={() => {
                   setNotifDropdownOpen((prev) => !prev);
-                  if (!notifDropdownOpen) void loadNotifications();
+                  if (!notifDropdownOpen) void refreshNotifications({ includeList: true });
                 }}
               >
                 <FontAwesomeIcon icon={faBell} />
@@ -1582,21 +1726,7 @@ export default function App() {
                           key={n.id}
                           type="button"
                           className={`notif-item ${n.status === "unread" ? "unread" : ""}`}
-                          onClick={() => {
-                            if (n.project_id) {
-                              handleSelectProject(n.project_id);
-                            }
-                            const targetView = n.link_type ? LINK_TYPE_VIEW_MAP[n.link_type] : undefined;
-                            if (targetView) {
-                              handleNavigate(targetView, n.link_id ?? undefined);
-                            }
-                            if (n.status === "unread") {
-                              void api.markNotificationRead(n.id);
-                              setNotifications((prev) => prev.map((item) => item.id === n.id ? { ...item, status: "read" } : item));
-                              setUnreadCount((prev) => Math.max(0, prev - 1));
-                            }
-                            setNotifDropdownOpen(false);
-                          }}
+                          onClick={() => openNotification(n)}
                         >
                           <div className="notif-item-title">{n.title}</div>
                           {n.body ? <div className="notif-item-body">{n.body}</div> : null}

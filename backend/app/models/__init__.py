@@ -6,7 +6,7 @@ from app.models.health_snapshot import ProjectHealthSnapshot
 from app.models.action_item import ActionItemPriority, ActionItemSource, ActionItemStatus, MeetingActionItem
 from app.models.audit import AuditEvent
 from app.models.chat import ChatActionProposal, ChatConversation, ChatMessage
-from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount
+from app.models.auth import PlatformRole, ProjectMembership, ProjectRole, UserAccount, UserPushDevice
 from app.models.collaboration_chat import ProjectChatMessage, ProjectChatMessageReaction, ProjectChatRoom, ProjectChatRoomMember
 from app.models.document import DocumentChunk, DocumentScope, DocumentStatus, ProjectDocument
 from app.models.meeting import MeetingChunk, MeetingRecord, MeetingSourceType
@@ -143,6 +143,7 @@ __all__ = [
     "TodoStatus",
     "TeamMember",
     "UserAccount",
+    "UserPushDevice",
     "WorkExecutionStatus",
     "WorkPackage",
     "CollectionMemberRole",

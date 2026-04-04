@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = Field(default=None, validation_alias="TELEGRAM_BOT_TOKEN")
     telegram_bot_username: str | None = Field(default=None, validation_alias="TELEGRAM_BOT_USERNAME")
     telegram_webhook_secret: str | None = Field(default=None, validation_alias="TELEGRAM_WEBHOOK_SECRET")
+    firebase_credentials_path: str | None = Field(default=None, validation_alias="FIREBASE_CREDENTIALS_PATH")
+    firebase_project_id: str | None = Field(default=None, validation_alias="FIREBASE_PROJECT_ID")
 
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),

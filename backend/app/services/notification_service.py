@@ -9,9 +9,10 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.models.auth import ProjectMembership
+from app.models.auth import ProjectMembership, UserPushDevice
 from app.models.notification import Notification, NotificationChannel, NotificationStatus
 from app.models.auth import UserAccount
+from app.services.firebase_push_service import FirebasePushService
 from app.services.telegram_service import TelegramService
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class NotificationService:
         link_id: uuid.UUID | None = None,
         channel: str = NotificationChannel.in_app.value,
         forward_telegram: bool = True,
+        forward_push: bool = True,
     ) -> Notification:
         notification = Notification(
             user_id=user_id,
@@ -48,6 +50,8 @@ class NotificationService:
         self.db.refresh(notification)
         if forward_telegram:
             self._deliver_telegram(notification)
+        if forward_push:
+            self._deliver_push(notification)
         return notification
 
     def notify_project_members(
@@ -60,6 +64,7 @@ class NotificationService:
         link_id: uuid.UUID | None = None,
         exclude_user_id: uuid.UUID | None = None,
         forward_telegram: bool = True,
+        forward_push: bool = True,
     ) -> list[Notification]:
         member_user_ids = list(
             self.db.scalars(
@@ -89,6 +94,8 @@ class NotificationService:
             self.db.refresh(n)
             if forward_telegram:
                 self._deliver_telegram(n)
+            if forward_push:
+                self._deliver_push(n)
         return notifications
 
     def _deliver_telegram(self, notification: Notification) -> None:
@@ -100,6 +107,49 @@ class NotificationService:
             TelegramService().send_message(user.telegram_chat_id, text, parse_mode=parse_mode)
         except Exception:
             logger.warning("Failed to deliver Telegram notification %s", notification.id, exc_info=True)
+
+    def _deliver_push(self, notification: Notification) -> None:
+        try:
+            devices = list(
+                self.db.scalars(
+                    select(UserPushDevice).where(
+                        UserPushDevice.user_id == notification.user_id,
+                        UserPushDevice.enabled.is_(True),
+                    )
+                ).all()
+            )
+            if not devices:
+                return
+            service = FirebasePushService()
+            result = service.send_notification(
+                tokens=[device.token for device in devices],
+                title=notification.title,
+                body=notification.body,
+                data={
+                    "notification_id": str(notification.id),
+                    "project_id": str(notification.project_id) if notification.project_id else "",
+                    "link_type": notification.link_type or "",
+                    "link_id": str(notification.link_id) if notification.link_id else "",
+                },
+            )
+            invalid_tokens = [failure.token for failure in result.failures if failure.should_disable_token]
+            if invalid_tokens:
+                self._disable_push_tokens(invalid_tokens)
+        except Exception:
+            logger.warning("Failed to deliver push notification %s", notification.id, exc_info=True)
+
+    def _disable_push_tokens(self, tokens: list[str]) -> None:
+        cleaned_tokens = [token.strip() for token in tokens if token and token.strip()]
+        if not cleaned_tokens:
+            return
+        devices = list(
+            self.db.scalars(select(UserPushDevice).where(UserPushDevice.token.in_(cleaned_tokens))).all()
+        )
+        if not devices:
+            return
+        for device in devices:
+            device.enabled = False
+        self.db.commit()
 
     def _render_telegram_notification(self, notification: Notification) -> tuple[str, str | None]:
         title = notification.title.strip()

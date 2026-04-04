@@ -25,6 +25,7 @@ dependencies = [
   "weasyprint>=62.0",
   "markdown>=3.5",
   "pycrdt>=0.12",
+  "firebase-admin>=6.7.0",
 ]
 
 [project.optional-dependencies]

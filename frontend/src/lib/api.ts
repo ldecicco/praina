@@ -305,6 +305,15 @@ export const api = {
     return request("/auth/me/telegram", { method: "PATCH", body: JSON.stringify(payload) });
   },
 
+  registerMyPushDevice(payload: {
+    token: string;
+    platform: string;
+    device_id?: string | null;
+    app_version?: string | null;
+  }): Promise<{ ok: boolean }> {
+    return request("/auth/me/push-device", { method: "POST", body: JSON.stringify(payload) });
+  },
+
   disconnectMyTelegram(): Promise<TelegramLinkState> {
     return request("/auth/me/telegram", { method: "DELETE" });
   },

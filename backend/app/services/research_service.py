@@ -108,6 +108,8 @@ class ResearchService:
     def __init__(self, db: Session):
         self.db = db
         self.scoped = ScopedChatService(db)
+        self.actor_user_id: uuid.UUID | None = db.info.get("actor_user_id")
+        self.actor_is_super_admin: bool = bool(db.info.get("actor_is_super_admin"))
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -123,6 +125,33 @@ class ResearchService:
         except Exception:
             return False
         return True
+
+    def _accessible_collection_ids_subquery(self, user_id: uuid.UUID):
+        team_member_ids = select(TeamMember.id).where(
+            TeamMember.user_account_id == user_id,
+            TeamMember.is_active.is_(True),
+        )
+        return select(ResearchCollectionMember.collection_id).where(
+            (ResearchCollectionMember.user_account_id == user_id)
+            | (ResearchCollectionMember.member_id.in_(team_member_ids))
+        ).scalar_subquery()
+
+    def _can_access_collection_by_membership(self, collection_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        return bool(
+            self.db.scalar(
+                select(ResearchCollection.id).where(
+                    ResearchCollection.id == collection_id,
+                    ResearchCollection.id.in_(self._accessible_collection_ids_subquery(user_id)),
+                )
+            )
+        )
+
+    def _enforce_collection_access(self, item: ResearchCollection) -> ResearchCollection:
+        if not self.actor_user_id or self.actor_is_super_admin:
+            return item
+        if self._can_access_collection_by_membership(item.id, self.actor_user_id):
+            return item
+        raise NotFoundError("Collection not found.")
 
     def get_user_display_name(self, user_id: uuid.UUID) -> str:
         user = self.db.get(UserAccount, user_id)
@@ -850,7 +879,7 @@ class ResearchService:
         item = self.db.get(ResearchCollection, collection_id)
         if not item:
             raise NotFoundError("Collection not found.")
-        return item
+        return self._enforce_collection_access(item)
 
     def _study_files_root(self) -> Path:
         return Path(settings.documents_storage_path) / "research-study-files"
@@ -960,6 +989,8 @@ class ResearchService:
             )
             .where(research_collection_spaces.c.space_id == space_id)
         )
+        if self.actor_user_id and not self.actor_is_super_admin:
+            stmt = stmt.where(ResearchCollection.id.in_(self._accessible_collection_ids_subquery(self.actor_user_id)))
         if status_filter:
             stmt = stmt.where(ResearchCollection.status == status_filter)
         if member_id:
@@ -999,7 +1030,7 @@ class ResearchService:
         )
         if not item:
             raise NotFoundError("Collection not found.")
-        return item
+        return self._enforce_collection_access(item)
 
     def create_collection_for_space(
         self,
@@ -2299,6 +2330,8 @@ class ResearchService:
         if project_id and project_id != GLOBAL_RESEARCH_PROJECT_ID:
             self._get_project(project_id)
             stmt = stmt.where(ResearchCollection.project_id == project_id)
+        if self.actor_user_id and not self.actor_is_super_admin:
+            stmt = stmt.where(ResearchCollection.id.in_(self._accessible_collection_ids_subquery(self.actor_user_id)))
         if status_filter:
             stmt = stmt.where(ResearchCollection.status == status_filter)
         if member_id:
@@ -2335,7 +2368,7 @@ class ResearchService:
         )
         if not item:
             raise NotFoundError("Collection not found.")
-        return item
+        return self._enforce_collection_access(item)
 
     def create_collection(
         self,

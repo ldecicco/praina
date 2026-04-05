@@ -66,6 +66,7 @@ import { NewProjectModal } from "./components/NewProjectModal";
 import { ProjectSettingsModal } from "./components/ProjectSettingsModal";
 import { UserProfileModal } from "./components/UserProfileModal";
 import { api, AUTH_EXPIRED_EVENT, PROJECT_DATA_CHANGED_EVENT } from "./lib/api";
+import { FcmBridge } from "./lib/nativePush";
 import { currentProjectMonth } from "./lib/utils";
 import prainaLogoWhite from "./assets/praina-logo-white.svg";
 import { useAutoRefresh } from "./lib/useAutoRefresh";
@@ -145,6 +146,26 @@ export default function App() {
   const canAccessTeaching = currentUser?.can_access_teaching ?? false;
   const isSuperAdmin = currentUser?.platform_role === "super_admin";
   const isStudent = currentUser?.platform_role === "student";
+  const isNative = Capacitor.isNativePlatform();
+
+  // ── Native platform init: status bar, keyboard, overscroll ──
+  useEffect(() => {
+    if (!isNative) return;
+    document.documentElement.classList.add("native-app");
+    void (async () => {
+      try {
+        const { StatusBar, Style } = await import("@capacitor/status-bar");
+        void StatusBar.setBackgroundColor({ color: "#111113" });
+        void StatusBar.setStyle({ style: Style.Dark });
+      } catch { /* web fallback */ }
+      try {
+        const { Keyboard } = await import("@capacitor/keyboard");
+        void Keyboard.setAccessoryBarVisible({ isVisible: false });
+        void Keyboard.setScroll({ isDisabled: true });
+      } catch { /* web fallback */ }
+    })();
+  }, [isNative]);
+
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     () => (typeof window !== "undefined" ? window.sessionStorage.getItem(ACTIVE_PROJECT_KEY) || "" : "")
   );
@@ -158,6 +179,44 @@ export default function App() {
     () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // ── Swipe gestures: open sidebar from left edge, close by swiping left ──
+  const swipeRef = useRef<{ startX: number; startY: number; mode: "open" | "close" } | null>(null);
+  useEffect(() => {
+    if (!isNative) return;
+    function handleTouchStart(e: TouchEvent) {
+      const touch = e.touches[0];
+      if (!mobileSidebarOpen && touch.clientX < 20) {
+        swipeRef.current = { startX: touch.clientX, startY: touch.clientY, mode: "open" };
+      } else if (mobileSidebarOpen) {
+        swipeRef.current = { startX: touch.clientX, startY: touch.clientY, mode: "close" };
+      }
+    }
+    function handleTouchMove(e: TouchEvent) {
+      if (!swipeRef.current) return;
+      const touch = e.touches[0];
+      const dx = touch.clientX - swipeRef.current.startX;
+      const dy = Math.abs(touch.clientY - swipeRef.current.startY);
+      if (dy > 30) { swipeRef.current = null; return; }
+      if (swipeRef.current.mode === "open" && dx > 60) {
+        swipeRef.current = null;
+        setMobileSidebarOpen(true);
+      } else if (swipeRef.current.mode === "close" && dx < -60) {
+        swipeRef.current = null;
+        setMobileSidebarOpen(false);
+      }
+    }
+    function handleTouchEnd() { swipeRef.current = null; }
+    document.addEventListener("touchstart", handleTouchStart, { passive: true });
+    document.addEventListener("touchmove", handleTouchMove, { passive: true });
+    document.addEventListener("touchend", handleTouchEnd, { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("touchmove", handleTouchMove);
+      document.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [isNative, mobileSidebarOpen]);
+
   const [collapsedNavGroups, setCollapsedNavGroups] = useState<Record<string, boolean>>(
     () => {
       if (typeof window === "undefined") return {};
@@ -208,7 +267,7 @@ export default function App() {
   const restoreTargetSnapshotRef = useRef<string | null>(null);
   const [navigationHistoryIndex, setNavigationHistoryIndex] = useState(-1);
   const pushRegistrationAttemptedRef = useRef(false);
-  const nativeDebugToastShownRef = useRef(false);
+  const pushDeviceStoredRef = useRef(false);
 
   const currentNavigationSnapshot = useMemo<AppNavigationSnapshot>(() => ({
     view,
@@ -534,13 +593,28 @@ export default function App() {
     };
   }, [me, refreshNotifications]);
 
+  // ── Android hardware back button ──
   useEffect(() => {
-    if (!Capacitor.isNativePlatform() || nativeDebugToastShownRef.current) return;
-    nativeDebugToastShownRef.current = true;
-    toast.message("Native app bundle loaded", {
-      description: API_BASE,
+    if (!isNative) return;
+    let backListener: { remove: () => Promise<void> } | null = null;
+    void CapacitorApp.addListener("backButton", () => {
+      // Close sidebar first
+      if (mobileSidebarOpen) {
+        setMobileSidebarOpen(false);
+        return;
+      }
+      // Navigate back if possible
+      if (navigationHistoryIndex > 0) {
+        handleNavigateBack();
+        return;
+      }
+      // Minimize the app (don't exit)
+      void CapacitorApp.minimizeApp();
+    }).then((listener) => {
+      backListener = listener;
     });
-  }, []);
+    return () => { void backListener?.remove(); };
+  }, [isNative, mobileSidebarOpen, navigationHistoryIndex]);
 
   useEffect(() => {
     if (!me || !authTokens?.access_token || !Capacitor.isNativePlatform() || pushRegistrationAttemptedRef.current) return;
@@ -554,75 +628,71 @@ export default function App() {
 
     async function setupPush() {
       try {
-        toast.message("Push setup start", {
-          description: `platform: ${Capacitor.getPlatform()} · api: ${API_BASE}`,
-        });
         const permission = await PushNotifications.checkPermissions();
         let receive = permission.receive;
-        toast.message("Push permission", {
-          description: `status: ${String(receive)}`,
-        });
         if (receive === "prompt") {
           const requested = await PushNotifications.requestPermissions();
           receive = requested.receive;
-          toast.message("Push permission requested", {
-            description: `status: ${String(receive)}`,
-          });
         }
         if (receive !== "granted") {
-          toast.error("Push permission not granted", {
-            description: String(receive),
-          });
           return;
         }
 
-        registrationListener = await PushNotifications.addListener("registration", async (token: Token) => {
-          if (cancelled) return;
-          toast.message("Push token received", {
-            description: `${token.value.slice(0, 16)}…`,
-          });
+        const registerTokenOnBackend = async (tokenValue: string) => {
+          if (pushDeviceStoredRef.current) return;
+          pushDeviceStoredRef.current = true;
+          const authHeader = api.getAuthToken();
           try {
-            await api.registerMyPushDevice({
-              token: token.value,
+            if (!authHeader) {
+              throw new Error("Missing auth token for push registration.");
+            }
+            await FcmBridge.registerPushDevice({
+              apiBase: API_BASE,
+              accessToken: authHeader,
+              token: tokenValue,
               platform: Capacitor.getPlatform(),
-              device_id: null,
-              app_version: "0.1.0",
+              deviceId: null,
+              appVersion: "0.1.0",
             });
-            toast.success("Push registered on backend");
           } catch (error) {
-            toast.error("Push backend registration failed", {
-              description: error instanceof Error ? error.message : "Unknown error",
-            });
+            pushDeviceStoredRef.current = false;
+            console.error("Push backend registration failed", error);
           }
+        };
+
+        registrationListener = await PushNotifications.addListener("registration", async (_token: Token) => {
+          if (cancelled) return;
         });
 
         registrationErrorListener = await PushNotifications.addListener("registrationError", (error) => {
-          toast.error("Push registration error", {
-            description: typeof error?.error === "string" ? error.error : "Unknown error",
-          });
+          console.error("Push registration error", error);
         });
 
-        receivedListener = await PushNotifications.addListener("pushNotificationReceived", (notification: PushNotificationSchema) => {
-          toast.message("Push received", {
-            description: notification.title || notification.body || "Notification received",
-          });
+        receivedListener = await PushNotifications.addListener("pushNotificationReceived", (_notification: PushNotificationSchema) => {
           void refreshNotifications({ includeList: true });
         });
 
         actionListener = await PushNotifications.addListener("pushNotificationActionPerformed", (notification: ActionPerformed) => {
-          toast.message("Push opened", {
-            description: notification.notification.title || notification.notification.body || "Notification opened",
-          });
           void refreshNotifications({ includeList: true });
           openPushPayload(notification.notification.data);
         });
 
-        toast.message("Push register call");
-        await PushNotifications.register();
-      } catch (error) {
-        toast.error("Push setup failed", {
-          description: error instanceof Error ? error.message : "Unknown error",
+        void PushNotifications.register().catch((error) => {
+          console.error("Push register call failed", error);
         });
+        try {
+          const nativeToken = await Promise.race([
+            FcmBridge.getFcmToken(),
+            new Promise<never>((_, reject) => {
+              window.setTimeout(() => reject(new Error("Timed out waiting for native FCM token.")), 10000);
+            }),
+          ]);
+          await registerTokenOnBackend(nativeToken.token);
+        } catch (error) {
+          console.error("Push native token unavailable", error);
+        }
+      } catch (error) {
+        console.error("Push setup failed", error);
       }
     }
 
@@ -640,6 +710,7 @@ export default function App() {
   useEffect(() => {
     if (!me) {
       pushRegistrationAttemptedRef.current = false;
+      pushDeviceStoredRef.current = false;
       setProjects([]);
       setResearchSpaces([]);
       setSelectedProjectId("");
@@ -1581,8 +1652,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app-frame ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      {mobileSidebarOpen ? <div className="mobile-overlay" onClick={() => setMobileSidebarOpen(false)} /> : null}
+    <div className={`app-frame ${sidebarCollapsed ? "sidebar-collapsed" : ""}${isNative ? " native-app" : ""}`}>
       <aside className={`app-sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`}>
         <div className="sidebar-header">
           <button type="button" className="icon-button" onClick={toggleSidebar} aria-label="Toggle sidebar">
@@ -1687,6 +1757,7 @@ export default function App() {
           </button>
         </div>
       </aside>
+      {mobileSidebarOpen ? <div className="mobile-overlay" onClick={() => setMobileSidebarOpen(false)} /> : null}
 
       <div className="app-main">
         <header className="topbar">
@@ -2165,8 +2236,43 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {/* ── Mobile bottom tab bar ── */}
+      {isNative ? (
+        <nav className="mobile-bottom-tabs">
+          {canAccessResearch && !isStudent ? (
+            <button
+              type="button"
+              className={`mobile-tab ${workspaceFamily === "projects" ? "active" : ""}`}
+              onClick={() => switchWorkspaceFamily("projects")}
+            >
+              <FontAwesomeIcon icon={faSitemap} />
+              <span>Projects</span>
+            </button>
+          ) : null}
+          {canAccessResearch ? (
+            <button
+              type="button"
+              className={`mobile-tab ${workspaceFamily === "research" ? "active" : ""}`}
+              onClick={() => switchWorkspaceFamily("research")}
+            >
+              <FontAwesomeIcon icon={faFlask} />
+              <span>Research</span>
+            </button>
+          ) : null}
+          {canAccessTeaching ? (
+            <button
+              type="button"
+              className={`mobile-tab ${workspaceFamily === "teaching" ? "active" : ""}`}
+              onClick={() => switchWorkspaceFamily("teaching")}
+            >
+              <FontAwesomeIcon icon={faGraduationCap} />
+              <span>Teaching</span>
+            </button>
+          ) : null}
+        </nav>
+      ) : null}
       <Toaster
-        position="bottom-right"
+        position={isNative ? "top-center" : "bottom-right"}
         toastOptions={{
           style: {
             background: "var(--bg-elevated)",

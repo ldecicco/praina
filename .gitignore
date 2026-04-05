@@ -21,6 +21,17 @@ backend/.venv/
 .env.*.local
 backend/.env
 
+# Firebase / mobile secrets
+backend/firebase-service-account.json
+backend/firebase-service-account*.json
+frontend/android/app/google-services.json
+frontend/ios/App/App/GoogleService-Info.plist
+
+# Native local config
+frontend/android/local.properties
+*.jks
+*.keystore
+
 # Local uploaded files
 backend/storage/
 storage/

@@ -111,14 +111,24 @@ from app.services.onboarding_service import NotFoundError, ValidationError
 from app.services.research_service import DuplicateBibliographyError, GLOBAL_RESEARCH_PROJECT_ID, ResearchService
 
 
-def require_research_access(current_user: UserAccount = Depends(get_current_user)) -> None:
+def require_research_access(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
     if not current_user.can_access_research:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot access Research.")
+    db.info["actor_user_id"] = current_user.id
+    db.info["actor_is_super_admin"] = current_user.platform_role == "super_admin"
 
 
-def require_bibliography_access(current_user: UserAccount = Depends(get_current_user)) -> None:
+def require_bibliography_access(
+    current_user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
     if not (current_user.can_access_research or current_user.can_access_teaching):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot access Bibliography.")
+    db.info["actor_user_id"] = current_user.id
+    db.info["actor_is_super_admin"] = current_user.platform_role == "super_admin"
 
 
 def _reject_student(current_user: UserAccount) -> None:

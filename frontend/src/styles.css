@@ -16419,3 +16419,141 @@ button.danger:hover:not(:disabled) {
   font-size: 11px;
   padding: 2px 8px;
 }
+
+/* ══════════════════════════════════════════════════════
+   NATIVE APP — Capacitor / Mobile enhancements
+   ══════════════════════════════════════════════════════ */
+
+/* ── Overscroll: kill rubber-band bounce ── */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* ── Native safe areas ── */
+.native-app {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ── Bottom tab bar ── */
+.mobile-bottom-tabs {
+  display: none;
+}
+
+.native-app .mobile-bottom-tabs {
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 190;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--line);
+  align-items: center;
+  padding: 0 0 env(safe-area-inset-bottom, 0px) 0;
+  box-sizing: border-box;
+}
+
+.mobile-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  font-family: var(--font);
+  font-weight: 500;
+  cursor: pointer;
+  height: 60px;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s;
+  overflow: visible;
+}
+
+.mobile-tab svg {
+  font-size: 20px;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.mobile-tab.active {
+  color: var(--brand);
+}
+
+.mobile-tab:active {
+  opacity: 0.7;
+}
+
+/* ── Native app: adjust main content for bottom tabs ── */
+.native-app .app-main {
+  padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ── Native app: hide sidebar workspace switcher on mobile (replaced by bottom tabs) ── */
+@media (max-width: 768px) {
+  .native-app .sidebar-workspace-switch {
+    display: none;
+  }
+}
+
+/* ── Native sidebar drawer improvements ── */
+@media (max-width: 768px) {
+  .native-app .app-sidebar {
+    width: 300px;
+    max-width: 85vw;
+    transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+  }
+
+  .native-app .app-sidebar.mobile-open {
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+  }
+
+  .native-app .mobile-overlay {
+    transition: opacity 0.25s ease;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .native-app .app-sidebar.mobile-open ~ .mobile-overlay,
+  .native-app .mobile-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Larger tap targets for nav items */
+  .native-app .app-nav-item {
+    height: 44px;
+    font-size: 14.5px;
+    border-radius: 10px;
+  }
+
+  .native-app .app-nav-icon {
+    width: 24px;
+    font-size: 15px;
+  }
+
+  /* Topbar adjustments for native */
+  .native-app .topbar {
+    height: 44px;
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .native-app .topbar h2 {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  /* Toaster position above bottom tabs */
+  .native-app [data-sonner-toaster] {
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}

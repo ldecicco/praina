@@ -16494,6 +16494,9 @@ html, body {
 /* ── Native app: adjust main content for bottom tabs ── */
 .native-app .app-main {
   padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  height: 100dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ── Native app: hide sidebar workspace switcher on mobile (replaced by bottom tabs) ── */
@@ -16542,6 +16545,9 @@ html, body {
 
   /* Topbar adjustments for native */
   .native-app .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
     height: 44px;
     padding: 0 12px;
     gap: 8px;
@@ -16550,6 +16556,31 @@ html, body {
   .native-app .topbar h2 {
     font-size: 16px;
     font-weight: 600;
+  }
+
+  /* Hide back/forward arrows on native mobile */
+  .native-app .topbar-history-controls {
+    display: none;
+  }
+
+  /* Notification dropdown: fit viewport, leave room to tap-to-close */
+  .native-app .notif-dropdown {
+    position: fixed;
+    top: 44px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: min(400px, calc(100dvh - 44px - 80px - env(safe-area-inset-bottom, 0px)));
+    border-radius: 12px;
+  }
+
+  /* Sidebar: respect Android status bar */
+  .native-app .app-sidebar {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .native-app .sidebar-header {
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
   }
 
   /* Toaster position above bottom tabs */

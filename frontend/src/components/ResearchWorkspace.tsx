@@ -5321,11 +5321,12 @@ function newStudyResult(): ResearchStudyResult {
                 )}
               </div>
             )}
-            {!isStudent ? (
-              <div className="study-header-actions">
-                <button type="button" className="ghost docs-action-btn" title="Chat" onClick={() => setTab("chat")}>
-                  <FontAwesomeIcon icon={faComment} />
-                </button>
+            <div className="study-header-actions">
+              <button type="button" className="ghost docs-action-btn" title="Chat" onClick={() => setTab("chat")}>
+                <FontAwesomeIcon icon={faComment} />
+              </button>
+              {!isStudent ? (
+                <>
                 <button type="button" className="ghost docs-action-btn" title="Edit Study" onClick={openEditCollectionModal}>
                   <FontAwesomeIcon icon={faPen} />
                 </button>
@@ -5343,8 +5344,9 @@ function newStudyResult(): ResearchStudyResult {
                 >
                   {confirmingDeleteId === selectedCollection.id ? <span className="confirm-label">Sure?</span> : <FontAwesomeIcon icon={faTrash} />}
                 </button>
-              </div>
-            ) : null}
+                </>
+              ) : null}
+            </div>
           </div>
           <div className="study-header-meta">
             <span className={`chip small ${collectionDetail.status === "active" ? "status-ok" : ""}`}>{collectionDetail.status}</span>
